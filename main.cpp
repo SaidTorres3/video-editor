@@ -38,6 +38,8 @@ void OnAudioTrackSelectionChanged();
 void OnMuteTrackClicked();
 void OnTrackVolumeChanged();
 void OnMasterVolumeChanged();
+void RepositionControls(HWND hwnd);
+
 
 // Window procedure
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -120,35 +122,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
     case WM_SIZE:
     {
-        if (g_videoPlayer)
-        {
-            RECT clientRect;
-            GetClientRect(hwnd, &clientRect);
-
-            // Resize video area
-            g_videoPlayer->SetPosition(
-                10, 50,
-                clientRect.right - 20,
-                clientRect.bottom - 150);
-
-            // Reposition slider
-            MoveWindow(
-                g_hSliderSeek,
-                10,
-                clientRect.bottom - 80,
-                clientRect.right - 20,
-                30,
-                TRUE);
-
-            // Reposition status text
-            MoveWindow(
-                g_hStatusText,
-                10,
-                clientRect.bottom - 40,
-                clientRect.right - 20,
-                20,
-                TRUE);
-        }
+        RepositionControls(hwnd);
     }
     break;
 
@@ -208,15 +182,11 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_STOP,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
-    RECT clientRect;
-    GetClientRect(hwnd, &clientRect);
-
     // Seek slider
     g_hSliderSeek = CreateWindow(
         TRACKBAR_CLASS, L"Seek",
         WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        10, clientRect.bottom - 80,
-        clientRect.right - 20, 30,
+        10, 370, 600, 30, // Placeholder position
         hwnd, (HMENU)ID_SLIDER_SEEK,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     SendMessage(g_hSliderSeek, TBM_SETRANGE, TRUE, MAKELONG(0, 100));
@@ -226,19 +196,16 @@ void CreateControls(HWND hwnd)
     g_hStatusText = CreateWindow(
         L"STATIC", L"No video loaded",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
-        10, clientRect.bottom - 40,
-        clientRect.right - 20, 20,
+        10, 410, 600, 20, // Placeholder position
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
     // Audio controls section
-    int audioControlsX = clientRect.right - 250;
-    
     // Audio tracks label
     g_hLabelAudioTracks = CreateWindow(
         L"STATIC", L"Audio Tracks:",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
-        audioControlsX, 50, 100, 20,
+        340, 50, 100, 20, // Placeholder position
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
@@ -246,7 +213,7 @@ void CreateControls(HWND hwnd)
     g_hListBoxAudioTracks = CreateWindow(
         L"LISTBOX", nullptr,
         WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-        audioControlsX, 75, 200, 100,
+        340, 75, 200, 100, // Placeholder position
         hwnd, (HMENU)ID_LISTBOX_AUDIO_TRACKS,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
@@ -254,7 +221,7 @@ void CreateControls(HWND hwnd)
     g_hButtonMuteTrack = CreateWindow(
         L"BUTTON", L"Mute/Unmute",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        audioControlsX, 185, 100, 25,
+        340, 185, 100, 25, // Placeholder position
         hwnd, (HMENU)ID_BUTTON_MUTE_TRACK,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
@@ -262,7 +229,7 @@ void CreateControls(HWND hwnd)
     g_hLabelTrackVolume = CreateWindow(
         L"STATIC", L"Track Volume:",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
-        audioControlsX, 220, 100, 20,
+        340, 220, 100, 20, // Placeholder position
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
@@ -270,7 +237,7 @@ void CreateControls(HWND hwnd)
     g_hSliderTrackVolume = CreateWindow(
         TRACKBAR_CLASS, L"Track Volume",
         WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        audioControlsX, 245, 200, 30,
+        340, 245, 200, 30, // Placeholder position
         hwnd, (HMENU)ID_SLIDER_TRACK_VOLUME,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     SendMessage(g_hSliderTrackVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 200)); // 0-200% volume
@@ -280,7 +247,7 @@ void CreateControls(HWND hwnd)
     g_hLabelMasterVolume = CreateWindow(
         L"STATIC", L"Master Volume:",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
-        audioControlsX, 285, 100, 20,
+        340, 285, 100, 20, // Placeholder position
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
@@ -288,7 +255,7 @@ void CreateControls(HWND hwnd)
     g_hSliderMasterVolume = CreateWindow(
         TRACKBAR_CLASS, L"Master Volume",
         WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        audioControlsX, 310, 200, 30,
+        340, 310, 200, 30, // Placeholder position
         hwnd, (HMENU)ID_SLIDER_MASTER_VOLUME,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 200)); // 0-200% volume
@@ -364,6 +331,12 @@ void UpdateControls()
     EnableWindow(g_hButtonPause, isLoaded && isPlaying);
     EnableWindow(g_hButtonStop, isLoaded);
     EnableWindow(g_hSliderSeek, isLoaded);
+
+    // Ensure audio controls remain enabled if a video is loaded
+    EnableWindow(g_hListBoxAudioTracks, isLoaded && g_videoPlayer->GetAudioTrackCount() > 0);
+    EnableWindow(g_hButtonMuteTrack, isLoaded && g_videoPlayer->GetAudioTrackCount() > 0);
+    EnableWindow(g_hSliderTrackVolume, isLoaded && g_videoPlayer->GetAudioTrackCount() > 0);
+    EnableWindow(g_hSliderMasterVolume, isLoaded);
 
     if (isLoaded)
     {
@@ -483,6 +456,54 @@ void OnMasterVolumeChanged()
     }
 }
 
+void RepositionControls(HWND hwnd)
+{
+    if (!g_videoPlayer) return;
+
+    RECT clientRect;
+    GetClientRect(hwnd, &clientRect);
+
+    // Main controls
+    int mainControlsY = 10;
+    int mainControlsHeight = 30;
+    MoveWindow(g_hButtonOpen, 10, mainControlsY, 100, mainControlsHeight, TRUE);
+    MoveWindow(g_hButtonPlay, 120, mainControlsY, 60, mainControlsHeight, TRUE);
+    MoveWindow(g_hButtonPause, 190, mainControlsY, 60, mainControlsHeight, TRUE);
+    MoveWindow(g_hButtonStop, 260, mainControlsY, 60, mainControlsHeight, TRUE);
+
+    // Audio controls (aligned to the right)
+    int audioControlsWidth = 220;
+    int audioControlsX = clientRect.right - audioControlsWidth - 10;
+    int audioControlsY = 50;
+
+    MoveWindow(g_hLabelAudioTracks, audioControlsX, audioControlsY, 200, 20, TRUE);
+    MoveWindow(g_hListBoxAudioTracks, audioControlsX, audioControlsY + 25, 200, 100, TRUE);
+    MoveWindow(g_hButtonMuteTrack, audioControlsX, audioControlsY + 135, 100, 25, TRUE);
+
+    MoveWindow(g_hLabelTrackVolume, audioControlsX, audioControlsY + 170, 200, 20, TRUE);
+    MoveWindow(g_hSliderTrackVolume, audioControlsX, audioControlsY + 195, 200, 30, TRUE);
+
+    MoveWindow(g_hLabelMasterVolume, audioControlsX, audioControlsY + 235, 200, 20, TRUE);
+    MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 260, 200, 30, TRUE);
+
+    // Video area (takes up remaining space)
+    int videoSectionWidth = clientRect.right - audioControlsWidth - 30;
+    int bottomControlsHeight = 100;
+    g_videoPlayer->SetPosition(
+        10,
+        mainControlsY + mainControlsHeight + 10,
+        videoSectionWidth,
+        clientRect.bottom - (mainControlsY + mainControlsHeight + 10) - bottomControlsHeight
+    );
+
+    // Bottom controls
+    int bottomControlsY = clientRect.bottom - 90;
+    MoveWindow(g_hSliderSeek, 10, bottomControlsY, videoSectionWidth, 30, TRUE);
+    MoveWindow(g_hStatusText, 10, bottomControlsY + 40, videoSectionWidth, 20, TRUE);
+
+    // Redraw all controls
+    InvalidateRect(hwnd, NULL, TRUE);
+}
 // Entry point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
