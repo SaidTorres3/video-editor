@@ -50,6 +50,7 @@ void UpdateCutInfoLabel(HWND hwnd);
 void OnSetStartClicked(HWND hwnd);
 void OnSetEndClicked(HWND hwnd);
 void OnCutClicked(HWND hwnd);
+std::wstring FormatTime(double totalSeconds, bool showMilliseconds = false);
 void RepositionControls(HWND hwnd);
 
 
@@ -415,10 +416,12 @@ void UpdateControls()
     {
         double currentTime = g_videoPlayer->GetCurrentTime();
         double duration = g_videoPlayer->GetDuration();
+        std::wstring currentTimeStr = FormatTime(currentTime);
+        std::wstring durationStr = FormatTime(duration);
         wchar_t statusText[256];
         swprintf_s(statusText, _countof(statusText),
-                   L"Time: %.2fs / %.2fs | Frame: %lld / %lld | %s",
-                   currentTime, duration,
+                   L"Time: %s / %s | Frame: %lld / %lld | %s",
+                   currentTimeStr.c_str(), durationStr.c_str(),
                    g_videoPlayer->GetCurrentFrame(), g_videoPlayer->GetTotalFrames(),
                    isPlaying ? L"Playing" : L"Paused");
         SetWindowTextW(g_hStatusText, statusText);
@@ -529,6 +532,32 @@ void OnMasterVolumeChanged()
     }
 }
 
+std::wstring FormatTime(double totalSeconds, bool showMilliseconds)
+{
+    if (totalSeconds < 0) totalSeconds = 0;
+    int hours = static_cast<int>(totalSeconds) / 3600;
+    int minutes = (static_cast<int>(totalSeconds) % 3600) / 60;
+    int seconds = static_cast<int>(totalSeconds) % 60;
+
+    wchar_t buffer[64];
+    if (showMilliseconds)
+    {
+        int milliseconds = static_cast<int>((totalSeconds - static_cast<int>(totalSeconds)) * 100);
+        if (hours > 0)
+            swprintf_s(buffer, _countof(buffer), L"%d:%02d:%02d.%02d", hours, minutes, seconds, milliseconds);
+        else
+            swprintf_s(buffer, _countof(buffer), L"%02d:%02d.%02d", minutes, seconds, milliseconds);
+    }
+    else
+    {
+        if (hours > 0)
+            swprintf_s(buffer, _countof(buffer), L"%d:%02d:%02d", hours, minutes, seconds);
+        else
+            swprintf_s(buffer, _countof(buffer), L"%02d:%02d", minutes, seconds);
+    }
+    return std::wstring(buffer);
+}
+
 void UpdateCutInfoLabel(HWND hwnd)
 {
     wchar_t buffer[128];
@@ -539,15 +568,19 @@ void UpdateCutInfoLabel(HWND hwnd)
     else
     {
         wchar_t startStr[64], endStr[64];
-        if (g_cutStartTime >= 0)
-            swprintf_s(startStr, _countof(startStr), L"Start: %.2fs", g_cutStartTime);
-        else
+        if (g_cutStartTime >= 0) {
+            std::wstring timeStr = FormatTime(g_cutStartTime, true);
+            swprintf_s(startStr, _countof(startStr), L"Start: %s", timeStr.c_str());
+        } else {
             swprintf_s(startStr, _countof(startStr), L"Start: Not set");
+        }
 
-        if (g_cutEndTime >= 0)
-            swprintf_s(endStr, _countof(endStr), L"End: %.2fs", g_cutEndTime);
-        else
+        if (g_cutEndTime >= 0) {
+            std::wstring timeStr = FormatTime(g_cutEndTime, true);
+            swprintf_s(endStr, _countof(endStr), L"End: %s", timeStr.c_str());
+        } else {
             swprintf_s(endStr, _countof(endStr), L"End: Not set");
+        }
 
         swprintf_s(buffer, _countof(buffer), L"%s\n%s", startStr, endStr);
     }
