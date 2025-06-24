@@ -791,3 +791,115 @@ void VideoPlayer::MixAudioTracks(uint8_t *outputBuffer, int frameCount)
     }
   }
 }
+
+bool VideoPlayer::CutVideo(const std::wstring& outputFilename, double startTime, double endTime)
+{
+    if (!isLoaded) return false;
+
+    // Convert filename to UTF-8
+    int bufSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string utf8OutputFilename(bufSize, 0);
+    WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8OutputFilename[0], bufSize, nullptr, nullptr);
+
+    AVFormatContext* outFormatContext = nullptr;
+    int ret = avformat_alloc_output_context2(&outFormatContext, nullptr, nullptr, utf8OutputFilename.c_str());
+    if (ret < 0 || !outFormatContext) {
+        std::cerr << "Could not create output context" << std::endl;
+        return false;
+    }
+
+    std::vector<int64_t> start_ts(formatContext->nb_streams, AV_NOPTS_VALUE);
+
+    // Copy streams from input to output
+    for (unsigned int i = 0; i < formatContext->nb_streams; i++) {
+        AVStream* outStream = avformat_new_stream(outFormatContext, nullptr);
+        if (!outStream) {
+            std::cerr << "Failed allocating output stream" << std::endl;
+            avformat_free_context(outFormatContext);
+            return false;
+        }
+        AVStream* inStream = formatContext->streams[i];
+        ret = avcodec_parameters_copy(outStream->codecpar, inStream->codecpar);
+        if (ret < 0) {
+            std::cerr << "Failed to copy codec parameters" << std::endl;
+            avformat_free_context(outFormatContext);
+            return false;
+        }
+        outStream->codecpar->codec_tag = 0;
+    }
+
+    // Open output file
+    if (!(outFormatContext->oformat->flags & AVFMT_NOFILE)) {
+        ret = avio_open(&outFormatContext->pb, utf8OutputFilename.c_str(), AVIO_FLAG_WRITE);
+        if (ret < 0) {
+            std::cerr << "Could not open output file" << std::endl;
+            avformat_free_context(outFormatContext);
+            return false;
+        }
+    }
+
+    // Write header
+    ret = avformat_write_header(outFormatContext, nullptr);
+    if (ret < 0) {
+        std::cerr << "Error while writing header" << std::endl;
+        avio_closep(&outFormatContext->pb);
+        avformat_free_context(outFormatContext);
+        return false;
+    }
+
+    // Seek to start time
+    ret = av_seek_frame(formatContext, -1, startTime * AV_TIME_BASE, AVSEEK_FLAG_BACKWARD);
+    if (ret < 0) {
+        std::cerr << "Error seeking" << std::endl;
+        av_write_trailer(outFormatContext);
+        avio_closep(&outFormatContext->pb);
+        avformat_free_context(outFormatContext);
+        return false;
+    }
+
+    AVPacket pkt;
+    while (av_read_frame(formatContext, &pkt) >= 0) {
+        AVStream* inStream = formatContext->streams[pkt.stream_index];
+        AVStream* outStream = outFormatContext->streams[pkt.stream_index];
+
+        double ts_seconds = pkt.pts * av_q2d(inStream->time_base);
+        if (ts_seconds > endTime) {
+            av_packet_unref(&pkt);
+            break;
+        }
+
+        if (ts_seconds >= startTime) {
+            if (start_ts[pkt.stream_index] == AV_NOPTS_VALUE) {
+                start_ts[pkt.stream_index] = pkt.pts;
+            }
+
+            int64_t offset = start_ts[pkt.stream_index];
+            pkt.pts = av_rescale_q(pkt.pts - offset, inStream->time_base, outStream->time_base);
+            if (pkt.dts != AV_NOPTS_VALUE) {
+                pkt.dts = av_rescale_q(pkt.dts - offset, inStream->time_base, outStream->time_base);
+            }
+            if (pkt.pts < 0) pkt.pts = 0;
+            if (pkt.dts < 0) pkt.dts = 0;
+            pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
+            pkt.pos = -1;
+
+            ret = av_interleaved_write_frame(outFormatContext, &pkt);
+            if (ret < 0) {
+                std::cerr << "Error muxing packet" << std::endl;
+                av_packet_unref(&pkt);
+                break;
+            }
+        }
+        av_packet_unref(&pkt);
+    }
+
+    av_write_trailer(outFormatContext);
+    if (!(outFormatContext->oformat->flags & AVFMT_NOFILE)) {
+        avio_closep(&outFormatContext->pb);
+    }
+    avformat_free_context(outFormatContext);
+
+    av_seek_frame(formatContext, -1, 0, AVSEEK_FLAG_BACKWARD);
+
+    return true;
+}

@@ -18,6 +18,10 @@
 #define ID_SLIDER_TRACK_VOLUME 1009
 #define ID_SLIDER_MASTER_VOLUME 1010
 
+// Editing Control IDs
+#define ID_BUTTON_SET_START 1011
+#define ID_BUTTON_SET_END 1012
+#define ID_BUTTON_CUT 1013
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
@@ -25,7 +29,11 @@ HWND g_hSliderSeek;
 HWND g_hStatusText;
 HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
 HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
-HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume;
+HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
+HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut;
+HWND g_hLabelCutInfo;
+double g_cutStartTime = -1.0;
+double g_cutEndTime = -1.0;
 
 // Function declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -38,6 +46,10 @@ void OnAudioTrackSelectionChanged();
 void OnMuteTrackClicked();
 void OnTrackVolumeChanged();
 void OnMasterVolumeChanged();
+void UpdateCutInfoLabel(HWND hwnd);
+void OnSetStartClicked(HWND hwnd);
+void OnSetEndClicked(HWND hwnd);
+void OnCutClicked(HWND hwnd);
 void RepositionControls(HWND hwnd);
 
 
@@ -83,6 +95,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case ID_BUTTON_MUTE_TRACK:
             OnMuteTrackClicked();
+            break;
+        case ID_BUTTON_SET_START:
+            OnSetStartClicked(hwnd);
+            break;
+        case ID_BUTTON_SET_END:
+            OnSetEndClicked(hwnd);
+            break;
+        case ID_BUTTON_CUT:
+            OnCutClicked(hwnd);
             break;
         }
         
@@ -261,6 +282,42 @@ void CreateControls(HWND hwnd)
     SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 200)); // 0-200% volume
     SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, 100); // Default 100%
 
+    // Editing controls section
+    g_hLabelEditing = CreateWindow(
+        L"STATIC", L"Editing:",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        340, 350, 100, 20, // Placeholder
+        hwnd, nullptr,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    g_hButtonSetStart = CreateWindow(
+        L"BUTTON", L"Set Start",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        340, 375, 95, 25, // Placeholder
+        hwnd, (HMENU)ID_BUTTON_SET_START,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    g_hButtonSetEnd = CreateWindow(
+        L"BUTTON", L"Set End",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        445, 375, 95, 25, // Placeholder
+        hwnd, (HMENU)ID_BUTTON_SET_END,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    g_hLabelCutInfo = CreateWindow(
+        L"STATIC", L"Cut points not set.",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        340, 405, 200, 40, // Placeholder
+        hwnd, nullptr,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    g_hButtonCut = CreateWindow(
+        L"BUTTON", L"Cut & Save",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        340, 450, 200, 30, // Placeholder
+        hwnd, (HMENU)ID_BUTTON_CUT,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
     // Disable controls until video is loaded
     EnableWindow(g_hButtonPlay, FALSE);
     EnableWindow(g_hButtonPause, FALSE);
@@ -270,6 +327,9 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hButtonMuteTrack, FALSE);
     EnableWindow(g_hSliderTrackVolume, FALSE);
     EnableWindow(g_hSliderMasterVolume, FALSE);
+    EnableWindow(g_hButtonSetStart, FALSE);
+    EnableWindow(g_hButtonSetEnd, FALSE);
+    EnableWindow(g_hButtonCut, FALSE);
 }
 
 void OpenVideoFile(HWND hwnd)
@@ -307,6 +367,14 @@ void OpenVideoFile(HWND hwnd)
                 SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, 0, 0); // Select first track
                 OnAudioTrackSelectionChanged();
             }
+
+            // Enable editing controls and reset points
+            EnableWindow(g_hButtonSetStart, TRUE);
+            EnableWindow(g_hButtonSetEnd, TRUE);
+            EnableWindow(g_hButtonCut, TRUE);
+            g_cutStartTime = -1.0;
+            g_cutEndTime = -1.0;
+            UpdateCutInfoLabel(hwnd);
             
             UpdateControls();
             UpdateSeekBar();
@@ -337,6 +405,11 @@ void UpdateControls()
     EnableWindow(g_hButtonMuteTrack, isLoaded && g_videoPlayer->GetAudioTrackCount() > 0);
     EnableWindow(g_hSliderTrackVolume, isLoaded && g_videoPlayer->GetAudioTrackCount() > 0);
     EnableWindow(g_hSliderMasterVolume, isLoaded);
+
+    // Update editing controls
+    EnableWindow(g_hButtonSetStart, isLoaded);
+    EnableWindow(g_hButtonSetEnd, isLoaded);
+    EnableWindow(g_hButtonCut, isLoaded && g_cutStartTime >= 0 && g_cutEndTime > g_cutStartTime);
 
     if (isLoaded)
     {
@@ -456,6 +529,93 @@ void OnMasterVolumeChanged()
     }
 }
 
+void UpdateCutInfoLabel(HWND hwnd)
+{
+    wchar_t buffer[128];
+    if (g_cutStartTime < 0 && g_cutEndTime < 0)
+    {
+        swprintf_s(buffer, L"Cut points not set.");
+    }
+    else
+    {
+        wchar_t startStr[64], endStr[64];
+        if (g_cutStartTime >= 0)
+            swprintf_s(startStr, _countof(startStr), L"Start: %.2fs", g_cutStartTime);
+        else
+            swprintf_s(startStr, _countof(startStr), L"Start: Not set");
+
+        if (g_cutEndTime >= 0)
+            swprintf_s(endStr, _countof(endStr), L"End: %.2fs", g_cutEndTime);
+        else
+            swprintf_s(endStr, _countof(endStr), L"End: Not set");
+
+        swprintf_s(buffer, _countof(buffer), L"%s\n%s", startStr, endStr);
+    }
+    SetWindowTextW(g_hLabelCutInfo, buffer);
+    // Also update the cut button state
+    UpdateControls();
+}
+
+void OnSetStartClicked(HWND hwnd)
+{
+    if (!g_videoPlayer || !g_videoPlayer->IsLoaded()) return;
+    g_cutStartTime = g_videoPlayer->GetCurrentTime();
+    if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
+    {
+        g_cutEndTime = -1.0; // Invalidate end time if it's before new start time
+    }
+    UpdateCutInfoLabel(hwnd);
+}
+
+void OnSetEndClicked(HWND hwnd)
+{
+    if (!g_videoPlayer || !g_videoPlayer->IsLoaded()) return;
+    double currentTime = g_videoPlayer->GetCurrentTime();
+    if (g_cutStartTime >= 0 && currentTime <= g_cutStartTime)
+    {
+        MessageBoxW(hwnd, L"End point must be after the start point.", L"Invalid Time", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    g_cutEndTime = currentTime;
+    UpdateCutInfoLabel(hwnd);
+}
+
+void OnCutClicked(HWND hwnd)
+{
+    if (!g_videoPlayer || g_cutStartTime < 0 || g_cutEndTime <= g_cutStartTime)
+    {
+        MessageBoxW(hwnd, L"Please set valid start and end points for the cut.", L"Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    OPENFILENAMEW ofn;
+    wchar_t szFile[260] = { 0 };
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
+    ofn.lpstrFilter = L"MP4 Video\0*.mp4\0All Files\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    ofn.lpstrDefExt = L"mp4";
+
+    if (GetSaveFileNameW(&ofn))
+    {
+        SetWindowTextW(g_hStatusText, L"Cutting video... Please wait.");
+        EnableWindow(hwnd, FALSE); // Disable UI during cut
+
+        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime);
+
+        EnableWindow(hwnd, TRUE); // Re-enable UI
+
+        MessageBoxW(hwnd, success ? L"Video successfully cut and saved." : L"Failed to cut the video.",
+                    success ? L"Success" : L"Error", MB_OK | (success ? MB_ICONINFORMATION : MB_ICONERROR));
+        UpdateControls();
+    }
+}
+
 void RepositionControls(HWND hwnd)
 {
     if (!g_videoPlayer) return;
@@ -485,6 +645,14 @@ void RepositionControls(HWND hwnd)
 
     MoveWindow(g_hLabelMasterVolume, audioControlsX, audioControlsY + 235, 200, 20, TRUE);
     MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 260, 200, 30, TRUE);
+
+    // Editing controls (below audio)
+    int editingControlsY = audioControlsY + 260 + 40;
+    MoveWindow(g_hLabelEditing, audioControlsX, editingControlsY, 200, 20, TRUE);
+    MoveWindow(g_hButtonSetStart, audioControlsX, editingControlsY + 25, 95, 25, TRUE);
+    MoveWindow(g_hButtonSetEnd, audioControlsX + 105, editingControlsY + 25, 95, 25, TRUE);
+    MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 55, 200, 40, TRUE);
+    MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 100, 200, 30, TRUE);
 
     // Video area (takes up remaining space)
     int videoSectionWidth = clientRect.right - audioControlsWidth - 30;
