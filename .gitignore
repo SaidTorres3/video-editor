@@ -1,0 +1,21 @@
+# CMake build files
+/build/
+*.exe
+*.dll
+*.lib
+*.obj
+*.ilk
+*.pdb
+*.exp
+*.log
+
+# Visual Studio files
+.vs/
+*.suo
+*.user
+*.vcxproj.filters
+*.vcxproj.user
+
+# Other
+*.swp
+*~
