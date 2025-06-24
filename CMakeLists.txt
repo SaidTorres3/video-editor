@@ -56,11 +56,13 @@ if(FFMPEG_INCLUDE_DIR)
 endif()
 
 # Link libraries
-target_link_libraries(VideoEditor PRIVATE 
-    user32 
-    gdi32 
+target_link_libraries(VideoEditor PRIVATE
+    user32
+    gdi32
     comctl32
     comdlg32
+    ole32
+    winmm
     ${AVCODEC_LIBRARY}
     ${AVFORMAT_LIBRARY}
     ${AVUTIL_LIBRARY}

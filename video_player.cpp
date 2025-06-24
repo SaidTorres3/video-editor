@@ -1,6 +1,12 @@
 // video_player.cpp
 #include "video_player.h"
 #include <iostream>
+#include <algorithm>
+#include <cstring>
+
+// Link with Windows Audio libraries
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "winmm.lib")
 
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
@@ -8,14 +14,20 @@ VideoPlayer::VideoPlayer(HWND parent)
       buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), videoWindow(nullptr), videoDC(nullptr),
-      videoBitmap(nullptr), playbackTimer(0)
+      videoBitmap(nullptr), playbackTimer(0),
+      deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
+      renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
+      audioInitialized(false), audioThreadRunning(false),
+      audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16)
 {
   CreateVideoWindow();
+  InitializeAudio();
 }
 
 VideoPlayer::~VideoPlayer()
 {
   UnloadVideo();
+  CleanupAudio();
   if (videoWindow)
     DestroyWindow(videoWindow);
 }
@@ -69,6 +81,12 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
   {
     UnloadVideo();
     return false;
+  }
+
+  // Initialize audio tracks
+  if (!InitializeAudioTracks())
+  {
+    std::cout << "Warning: Failed to initialize audio tracks" << std::endl;
   }
 
   isLoaded = true;
@@ -163,6 +181,7 @@ void VideoPlayer::CleanupDecoder()
 void VideoPlayer::UnloadVideo()
 {
   Stop();
+  CleanupAudioTracks();
   CleanupDecoder();
   if (formatContext)
   {
@@ -180,6 +199,20 @@ bool VideoPlayer::Play()
   if (!isLoaded || isPlaying)
     return false;
   isPlaying = true;
+  
+  // Start audio thread if we have audio tracks
+  if (!audioTracks.empty() && audioInitialized)
+  {
+    HRESULT hr = audioClient->Start();
+    if (FAILED(hr))
+    {
+      std::cerr << "Failed to start audio client: " << std::hex << hr << std::endl;
+      // Continue without audio or handle error appropriately
+    }
+    audioThreadRunning = true;
+    audioThread = std::thread(&VideoPlayer::AudioThreadFunction, this);
+  }
+  
   int interval = (int)(1000.0 / (frameRate > 0 ? frameRate : 30.0));
   playbackTimer = SetTimer(parentWindow, 1, interval, TimerProc);
   return true;
@@ -190,6 +223,16 @@ void VideoPlayer::Pause()
   if (isPlaying)
   {
     isPlaying = false;
+    
+    // Stop audio thread
+    if (audioThreadRunning)
+    {
+      audioThreadRunning = false;
+      audioCondition.notify_all();
+      if (audioThread.joinable())
+        audioThread.join();
+    }
+    
     if (playbackTimer)
     {
       KillTimer(parentWindow, playbackTimer);
@@ -206,6 +249,18 @@ void VideoPlayer::Stop()
   {
     av_seek_frame(formatContext, videoStreamIndex, 0, AVSEEK_FLAG_FRAME);
     avcodec_flush_buffers(codecContext);
+    
+    // Flush audio codec buffers
+    for (auto& track : audioTracks)
+    {
+      if (track->codecContext)
+        avcodec_flush_buffers(track->codecContext);
+    }
+    
+    // Clear audio queue
+    std::lock_guard<std::mutex> lock(audioMutex);
+    while (!audioQueue.empty())
+      audioQueue.pop();
   }
 }
 
@@ -238,6 +293,19 @@ bool VideoPlayer::DecodeNextFrame()
       UpdateDisplay();
       return true;
     }
+  }
+  else
+  {
+    // Check if this is an audio packet
+    for (auto& track : audioTracks)
+    {
+      if (packet->stream_index == track->streamIndex)
+      {
+        ProcessAudioFrame(packet);
+        break;
+      }
+    }
+    av_packet_unref(packet);
   }
   return false;
 }
@@ -297,9 +365,6 @@ double VideoPlayer::GetCurrentTime() const
   return frameRate > 0 ? (currentFrame / frameRate) : 0.0;
 }
 
-// — Nota: NO incluimos aquí GetCurrentFrame() ni GetTotalFrames()
-//    porque ya están definidas inline en video_player.h
-
 void VideoPlayer::SetPosition(int x, int y, int width, int height)
 {
   if (!videoWindow)
@@ -326,4 +391,403 @@ void VideoPlayer::OnTimer()
 {
   if (isPlaying)
     DecodeNextFrame();
+}
+
+// Audio track management methods
+std::string VideoPlayer::GetAudioTrackName(int trackIndex) const
+{
+  if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+    return "";
+  return audioTracks[trackIndex]->name;
+}
+
+bool VideoPlayer::IsAudioTrackMuted(int trackIndex) const
+{
+  if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+    return false;
+  return audioTracks[trackIndex]->isMuted;
+}
+
+void VideoPlayer::SetAudioTrackMuted(int trackIndex, bool muted)
+{
+  if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+    return;
+  audioTracks[trackIndex]->isMuted = muted;
+}
+
+float VideoPlayer::GetAudioTrackVolume(int trackIndex) const
+{
+  if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+    return 0.0f;
+  return audioTracks[trackIndex]->volume;
+}
+
+void VideoPlayer::SetAudioTrackVolume(int trackIndex, float volume)
+{
+  if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+    return;
+  float clampedVolume = volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume);
+  audioTracks[trackIndex]->volume = clampedVolume;
+}
+
+void VideoPlayer::SetMasterVolume(float volume)
+{
+  float clampedVolume = volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume);
+  for (auto& track : audioTracks)
+  {
+    track->volume = clampedVolume;
+  }
+}
+
+// Audio initialization and cleanup
+bool VideoPlayer::InitializeAudio()
+{
+  HRESULT hr = CoInitialize(nullptr);
+  if (FAILED(hr))
+    return false;
+
+  hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                        __uuidof(IMMDeviceEnumerator), (void**)&deviceEnumerator);
+  if (FAILED(hr))
+    return false;
+
+  hr = deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &audioDevice);
+  if (FAILED(hr))
+    return false;
+
+  hr = audioDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&audioClient);
+  if (FAILED(hr))
+    return false;
+
+  // Get the default audio format
+  WAVEFORMATEX *deviceFormat = nullptr;
+  hr = audioClient->GetMixFormat(&deviceFormat);
+  if (FAILED(hr))
+    return false;
+
+  // Set up our desired format (16-bit stereo at 44.1kHz)
+  audioFormat = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
+  audioFormat->wFormatTag = WAVE_FORMAT_PCM;
+  audioFormat->nChannels = 2;
+  audioFormat->nSamplesPerSec = 44100;
+  audioFormat->wBitsPerSample = 16;
+  audioFormat->nBlockAlign = (audioFormat->nChannels * audioFormat->wBitsPerSample) / 8;
+  audioFormat->nAvgBytesPerSec = audioFormat->nSamplesPerSec * audioFormat->nBlockAlign;
+  audioFormat->cbSize = 0;
+
+  hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, audioFormat, nullptr);
+  if (FAILED(hr))
+  {
+    // Try with device format if our format fails
+    CoTaskMemFree(audioFormat);
+    audioFormat = deviceFormat;
+    hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, audioFormat, nullptr);
+    if (FAILED(hr))
+      return false;
+  }
+  else
+  {
+    CoTaskMemFree(deviceFormat);
+  }
+
+  hr = audioClient->GetBufferSize(&bufferFrameCount);
+  if (FAILED(hr))
+    return false;
+
+  hr = audioClient->GetService(__uuidof(IAudioRenderClient), (void**)&renderClient);
+  if (FAILED(hr))
+    return false;
+
+  audioInitialized = true;
+  return true;
+}
+
+void VideoPlayer::CleanupAudio()
+{
+  if (audioThreadRunning)
+  {
+    audioThreadRunning = false;
+    audioCondition.notify_all();
+    if (audioThread.joinable())
+      audioThread.join();
+  }
+
+  if (renderClient)
+  {
+    renderClient->Release();
+    renderClient = nullptr;
+  }
+  if (audioClient)
+  {
+    audioClient->Release();
+    audioClient = nullptr;
+  }
+  if (audioDevice)
+  {
+    audioDevice->Release();
+    audioDevice = nullptr;
+  }
+  if (deviceEnumerator)
+  {
+    deviceEnumerator->Release();
+    deviceEnumerator = nullptr;
+  }
+  if (audioFormat)
+  {
+    CoTaskMemFree(audioFormat);
+    audioFormat = nullptr;
+  }
+  
+  audioInitialized = false;
+  CoUninitialize();
+}
+
+bool VideoPlayer::InitializeAudioTracks()
+{
+  if (!formatContext)
+    return false;
+
+  // Find all audio streams
+  for (unsigned i = 0; i < formatContext->nb_streams; i++)
+  {
+    if (formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+    {
+      auto track = std::make_unique<AudioTrack>();
+      track->streamIndex = i;
+      
+      // Get codec and create context
+      AVCodecParameters *codecpar = formatContext->streams[i]->codecpar;
+      const AVCodec *codec = avcodec_find_decoder(codecpar->codec_id);
+      if (!codec)
+        continue;
+
+      track->codecContext = avcodec_alloc_context3(codec);
+      if (!track->codecContext)
+        continue;
+
+      if (avcodec_parameters_to_context(track->codecContext, codecpar) < 0)
+      {
+        avcodec_free_context(&track->codecContext);
+        continue;
+      }
+
+      if (avcodec_open2(track->codecContext, codec, nullptr) < 0)
+      {
+        avcodec_free_context(&track->codecContext);
+        continue;
+      }
+
+      // Allocate frame
+      track->frame = av_frame_alloc();
+      if (!track->frame)
+      {
+        avcodec_free_context(&track->codecContext);
+        continue;
+      }
+
+      // Set up resampler
+      track->swrContext = swr_alloc();
+      if (!track->swrContext)
+      {
+        av_frame_free(&track->frame);
+        avcodec_free_context(&track->codecContext);
+        continue;
+      }
+
+      // Configure resampler to convert to our output format
+      AVChannelLayout in_ch_layout, out_ch_layout;
+      av_channel_layout_from_mask(&in_ch_layout, track->codecContext->ch_layout.nb_channels == 1 ? AV_CH_LAYOUT_MONO : AV_CH_LAYOUT_STEREO);
+      av_channel_layout_from_mask(&out_ch_layout, AV_CH_LAYOUT_STEREO);
+      
+      av_opt_set_chlayout(track->swrContext, "in_chlayout", &in_ch_layout, 0);
+      av_opt_set_chlayout(track->swrContext, "out_chlayout", &out_ch_layout, 0);
+      av_opt_set_int(track->swrContext, "in_sample_rate", track->codecContext->sample_rate, 0);
+      av_opt_set_int(track->swrContext, "out_sample_rate", audioSampleRate, 0);
+      av_opt_set_sample_fmt(track->swrContext, "in_sample_fmt", track->codecContext->sample_fmt, 0);
+      av_opt_set_sample_fmt(track->swrContext, "out_sample_fmt", audioSampleFormat, 0);
+
+      if (swr_init(track->swrContext) < 0)
+      {
+        swr_free(&track->swrContext);
+        av_frame_free(&track->frame);
+        avcodec_free_context(&track->codecContext);
+        continue;
+      }
+
+      // Set track name
+      AVDictionaryEntry *title = av_dict_get(formatContext->streams[i]->metadata, "title", nullptr, 0);
+      if (title)
+        track->name = title->value;
+      else
+        track->name = "Audio Track " + std::to_string(audioTracks.size() + 1);
+
+      audioTracks.push_back(std::move(track));
+    }
+  }
+
+  return !audioTracks.empty();
+}
+
+void VideoPlayer::CleanupAudioTracks()
+{
+  for (auto& track : audioTracks)
+  {
+    if (track->swrContext)
+      swr_free(&track->swrContext);
+    if (track->frame)
+      av_frame_free(&track->frame);
+    if (track->codecContext)
+      avcodec_free_context(&track->codecContext);
+  }
+  audioTracks.clear();
+}
+
+bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
+{
+  if (!audioInitialized || audioTracks.empty())
+    return false;
+
+  // Find the corresponding audio track
+  AudioTrack *track = nullptr;
+  for (auto& t : audioTracks)
+  {
+    if (t->streamIndex == audioPacket->stream_index)
+    {
+      track = t.get();
+      break;
+    }
+  }
+
+  if (!track || track->isMuted)
+    return false;
+
+  // Decode audio frame
+  int ret = avcodec_send_packet(track->codecContext, audioPacket);
+  if (ret < 0)
+    return false;
+
+  ret = avcodec_receive_frame(track->codecContext, track->frame);
+  if (ret < 0)
+    return false;
+
+  // Resample audio
+  int outSamples = swr_get_out_samples(track->swrContext, track->frame->nb_samples);
+  std::vector<uint8_t> resampledData(outSamples * audioChannels * sizeof(int16_t));
+  uint8_t *outPtr = resampledData.data();
+  
+  int convertedSamples = swr_convert(track->swrContext, &outPtr, outSamples,
+                                    (const uint8_t**)track->frame->data, track->frame->nb_samples);
+  if (convertedSamples < 0)
+    return false;
+
+  // Apply volume
+  if (track->volume != 1.0f)
+  {
+    int16_t *samples = (int16_t*)resampledData.data();
+    int sampleCount = convertedSamples * audioChannels;
+    for (int i = 0; i < sampleCount; i++)
+    {
+      samples[i] = (int16_t)(samples[i] * track->volume);
+    }
+  }
+
+  // Add to audio queue
+  resampledData.resize(convertedSamples * audioChannels * sizeof(int16_t));
+  {
+    std::lock_guard<std::mutex> lock(audioMutex);
+    audioQueue.push(std::move(resampledData));
+  }
+  audioCondition.notify_one();
+
+  return true;
+}
+
+void VideoPlayer::AudioThreadFunction()
+{
+  if (!audioClient || !renderClient)
+    return;
+
+  HRESULT hr; // Declare hr here
+
+  while (audioThreadRunning)
+  {
+    std::unique_lock<std::mutex> lock(audioMutex);
+    audioCondition.wait(lock, [this] { return !audioQueue.empty() || !audioThreadRunning; });
+
+    if (!audioThreadRunning)
+      break;
+
+    if (audioQueue.empty())
+      continue;
+
+    // Get available buffer space
+    UINT32 numFramesPadding;
+    hr = audioClient->GetCurrentPadding(&numFramesPadding);
+    if (FAILED(hr))
+      continue;
+
+    UINT32 numFramesAvailable = bufferFrameCount - numFramesPadding;
+    if (numFramesAvailable == 0)
+    {
+      lock.unlock();
+      Sleep(1);
+      continue;
+    }
+
+    // Get render buffer
+    BYTE *pData;
+    hr = renderClient->GetBuffer(numFramesAvailable, &pData);
+    if (FAILED(hr))
+      continue;
+
+    // Mix audio from all tracks
+    MixAudioTracks(pData, numFramesAvailable);
+
+    hr = renderClient->ReleaseBuffer(numFramesAvailable, 0);
+    if (FAILED(hr))
+      continue;
+
+    lock.unlock();
+  }
+
+  audioClient->Stop();
+}
+
+void VideoPlayer::MixAudioTracks(uint8_t *outputBuffer, int frameCount)
+{
+  memset(outputBuffer, 0, frameCount * audioChannels * sizeof(int16_t));
+  int16_t *output = (int16_t*)outputBuffer;
+  
+  int samplesNeeded = frameCount * audioChannels;
+  int samplesWritten = 0;
+
+  while (samplesWritten < samplesNeeded && !audioQueue.empty())
+  {
+    auto& audioData = audioQueue.front();
+    int16_t *input = (int16_t*)audioData.data();
+    int inputSamples = audioData.size() / sizeof(int16_t);
+    int remainingSamples = samplesNeeded - samplesWritten;
+    int samplesToCopy = (remainingSamples < inputSamples) ? remainingSamples : inputSamples;
+
+    // Mix the audio (simple addition with clipping)
+    for (int i = 0; i < samplesToCopy; i++)
+    {
+      int32_t mixed = output[samplesWritten + i] + input[i];
+      if (mixed > 32767) mixed = 32767;
+      if (mixed < -32768) mixed = -32768;
+      output[samplesWritten + i] = (int16_t)mixed;
+    }
+
+    samplesWritten += samplesToCopy;
+
+    if (samplesToCopy == inputSamples)
+    {
+      audioQueue.pop();
+    }
+    else
+    {
+      // Remove consumed samples from the front of the buffer
+      audioData.erase(audioData.begin(), audioData.begin() + samplesToCopy * sizeof(int16_t));
+    }
+  }
 }

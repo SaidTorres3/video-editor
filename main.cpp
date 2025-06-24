@@ -13,12 +13,19 @@
 #define ID_BUTTON_STOP 1004
 #define ID_SLIDER_SEEK 1005
 #define ID_TIMER_UPDATE 1006
+#define ID_LISTBOX_AUDIO_TRACKS 1007
+#define ID_BUTTON_MUTE_TRACK 1008
+#define ID_SLIDER_TRACK_VOLUME 1009
+#define ID_SLIDER_MASTER_VOLUME 1010
 
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
 HWND g_hSliderSeek;
 HWND g_hStatusText;
+HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
+HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
+HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume;
 
 // Function declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -26,6 +33,11 @@ void CreateControls(HWND hwnd);
 void OpenVideoFile(HWND hwnd);
 void UpdateControls();
 void UpdateSeekBar();
+void UpdateAudioTrackList();
+void OnAudioTrackSelectionChanged();
+void OnMuteTrackClicked();
+void OnTrackVolumeChanged();
+void OnMasterVolumeChanged();
 
 // Window procedure
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -67,6 +79,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 UpdateSeekBar();
             }
             break;
+        case ID_BUTTON_MUTE_TRACK:
+            OnMuteTrackClicked();
+            break;
+        }
+        
+        // Handle listbox selection changes
+        if (HIWORD(wParam) == LBN_SELCHANGE && (HWND)lParam == g_hListBoxAudioTracks)
+        {
+            OnAudioTrackSelectionChanged();
         }
         break;
 
@@ -78,6 +99,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             double seekTime = (pos / 100.0) * duration;
             g_videoPlayer->SeekToTime(seekTime);
             UpdateControls();
+        }
+        else if ((HWND)lParam == g_hSliderTrackVolume)
+        {
+            OnTrackVolumeChanged();
+        }
+        else if ((HWND)lParam == g_hSliderMasterVolume)
+        {
+            OnMasterVolumeChanged();
         }
         break;
 
@@ -202,11 +231,78 @@ void CreateControls(HWND hwnd)
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
+    // Audio controls section
+    int audioControlsX = clientRect.right - 250;
+    
+    // Audio tracks label
+    g_hLabelAudioTracks = CreateWindow(
+        L"STATIC", L"Audio Tracks:",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        audioControlsX, 50, 100, 20,
+        hwnd, nullptr,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    // Audio tracks listbox
+    g_hListBoxAudioTracks = CreateWindow(
+        L"LISTBOX", nullptr,
+        WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
+        audioControlsX, 75, 200, 100,
+        hwnd, (HMENU)ID_LISTBOX_AUDIO_TRACKS,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    // Mute track button
+    g_hButtonMuteTrack = CreateWindow(
+        L"BUTTON", L"Mute/Unmute",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        audioControlsX, 185, 100, 25,
+        hwnd, (HMENU)ID_BUTTON_MUTE_TRACK,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    // Track volume label
+    g_hLabelTrackVolume = CreateWindow(
+        L"STATIC", L"Track Volume:",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        audioControlsX, 220, 100, 20,
+        hwnd, nullptr,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    // Track volume slider
+    g_hSliderTrackVolume = CreateWindow(
+        TRACKBAR_CLASS, L"Track Volume",
+        WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
+        audioControlsX, 245, 200, 30,
+        hwnd, (HMENU)ID_SLIDER_TRACK_VOLUME,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    SendMessage(g_hSliderTrackVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 200)); // 0-200% volume
+    SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, 100); // Default 100%
+
+    // Master volume label
+    g_hLabelMasterVolume = CreateWindow(
+        L"STATIC", L"Master Volume:",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        audioControlsX, 285, 100, 20,
+        hwnd, nullptr,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+
+    // Master volume slider
+    g_hSliderMasterVolume = CreateWindow(
+        TRACKBAR_CLASS, L"Master Volume",
+        WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
+        audioControlsX, 310, 200, 30,
+        hwnd, (HMENU)ID_SLIDER_MASTER_VOLUME,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 200)); // 0-200% volume
+    SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, 100); // Default 100%
+
     // Disable controls until video is loaded
     EnableWindow(g_hButtonPlay, FALSE);
     EnableWindow(g_hButtonPause, FALSE);
     EnableWindow(g_hButtonStop, FALSE);
     EnableWindow(g_hSliderSeek, FALSE);
+    EnableWindow(g_hListBoxAudioTracks, FALSE);
+    EnableWindow(g_hButtonMuteTrack, FALSE);
+    EnableWindow(g_hSliderTrackVolume, FALSE);
+    EnableWindow(g_hSliderMasterVolume, FALSE);
 }
 
 void OpenVideoFile(HWND hwnd)
@@ -232,6 +328,19 @@ void OpenVideoFile(HWND hwnd)
             EnableWindow(g_hButtonPause, TRUE);
             EnableWindow(g_hButtonStop, TRUE);
             EnableWindow(g_hSliderSeek, TRUE);
+            
+            // Enable audio controls and populate audio tracks
+            UpdateAudioTrackList();
+            EnableWindow(g_hListBoxAudioTracks, TRUE);
+            EnableWindow(g_hSliderMasterVolume, TRUE);
+            if (g_videoPlayer->GetAudioTrackCount() > 0)
+            {
+                EnableWindow(g_hButtonMuteTrack, TRUE);
+                EnableWindow(g_hSliderTrackVolume, TRUE);
+                SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, 0, 0); // Select first track
+                OnAudioTrackSelectionChanged();
+            }
+            
             UpdateControls();
             UpdateSeekBar();
         }
@@ -280,6 +389,97 @@ void UpdateSeekBar()
     {
         int percentage = (int)((currentTime / duration) * 100);
         SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, percentage);
+    }
+}
+
+void UpdateAudioTrackList()
+{
+    if (!g_videoPlayer)
+        return;
+    
+    // Clear existing items
+    SendMessage(g_hListBoxAudioTracks, LB_RESETCONTENT, 0, 0);
+    
+    // Add audio tracks
+    int trackCount = g_videoPlayer->GetAudioTrackCount();
+    for (int i = 0; i < trackCount; i++)
+    {
+        std::string trackName = g_videoPlayer->GetAudioTrackName(i);
+        std::wstring wTrackName(trackName.begin(), trackName.end());
+        
+        // Add mute status to the display name
+        if (g_videoPlayer->IsAudioTrackMuted(i))
+            wTrackName += L" (MUTED)";
+        
+        SendMessage(g_hListBoxAudioTracks, LB_ADDSTRING, 0, (LPARAM)wTrackName.c_str());
+    }
+}
+
+void OnAudioTrackSelectionChanged()
+{
+    if (!g_videoPlayer)
+        return;
+    
+    int selectedIndex = SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+    if (selectedIndex != LB_ERR)
+    {
+        // Update track volume slider
+        float volume = g_videoPlayer->GetAudioTrackVolume(selectedIndex);
+        int sliderPos = (int)(volume * 100); // Convert to 0-200 range
+        SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, sliderPos);
+        
+        // Update mute button text
+        bool isMuted = g_videoPlayer->IsAudioTrackMuted(selectedIndex);
+        SetWindowTextW(g_hButtonMuteTrack, isMuted ? L"Unmute" : L"Mute");
+    }
+}
+
+void OnMuteTrackClicked()
+{
+    if (!g_videoPlayer)
+        return;
+    
+    int selectedIndex = SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+    if (selectedIndex != LB_ERR)
+    {
+        bool currentlyMuted = g_videoPlayer->IsAudioTrackMuted(selectedIndex);
+        g_videoPlayer->SetAudioTrackMuted(selectedIndex, !currentlyMuted);
+        
+        // Update the display
+        UpdateAudioTrackList();
+        SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, selectedIndex, 0);
+        OnAudioTrackSelectionChanged();
+    }
+}
+
+void OnTrackVolumeChanged()
+{
+    if (!g_videoPlayer)
+        return;
+    
+    int selectedIndex = SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+    if (selectedIndex != LB_ERR)
+    {
+        int sliderPos = SendMessage(g_hSliderTrackVolume, TBM_GETPOS, 0, 0);
+        float volume = sliderPos / 100.0f; // Convert from 0-200 to 0.0-2.0
+        g_videoPlayer->SetAudioTrackVolume(selectedIndex, volume);
+    }
+}
+
+void OnMasterVolumeChanged()
+{
+    if (!g_videoPlayer)
+        return;
+    
+    int sliderPos = SendMessage(g_hSliderMasterVolume, TBM_GETPOS, 0, 0);
+    float volume = sliderPos / 100.0f; // Convert from 0-200 to 0.0-2.0
+    g_videoPlayer->SetMasterVolume(volume);
+    
+    // Update the track volume slider if a track is selected
+    int selectedIndex = SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+    if (selectedIndex != LB_ERR)
+    {
+        OnAudioTrackSelectionChanged();
     }
 }
 
