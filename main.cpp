@@ -1,3 +1,4 @@
+// main.cpp
 #include <windows.h>
 #include <commdlg.h>  // For file dialog
 #include <commctrl.h> // For common controls
@@ -35,8 +36,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         CreateControls(hwnd);
         g_videoPlayer = new VideoPlayer(hwnd);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)g_videoPlayer);
-
-        // Set up timer for UI updates
         SetTimer(hwnd, ID_TIMER_UPDATE, 100, nullptr); // Update every 100ms
         break;
 
@@ -91,14 +90,38 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_SIZE:
+    {
         if (g_videoPlayer)
         {
             RECT clientRect;
             GetClientRect(hwnd, &clientRect);
-            // Position video player in the upper area, leaving space for controls
-            g_videoPlayer->SetPosition(10, 50, clientRect.right - 20, clientRect.bottom - 150);
+
+            // Resize video area
+            g_videoPlayer->SetPosition(
+                10, 50,
+                clientRect.right - 20,
+                clientRect.bottom - 150);
+
+            // Reposition slider
+            MoveWindow(
+                g_hSliderSeek,
+                10,
+                clientRect.bottom - 80,
+                clientRect.right - 20,
+                30,
+                TRUE);
+
+            // Reposition status text
+            MoveWindow(
+                g_hStatusText,
+                10,
+                clientRect.bottom - 40,
+                clientRect.right - 20,
+                20,
+                TRUE);
         }
-        break;
+    }
+    break;
 
     case WM_CLOSE:
         DestroyWindow(hwnd);
@@ -122,10 +145,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 void CreateControls(HWND hwnd)
 {
-    // Initialize common controls
     InitCommonControls();
 
-    // Create buttons
+    // Open button
     g_hButtonOpen = CreateWindow(
         L"BUTTON", L"Open Video",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
@@ -133,6 +155,7 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_OPEN,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
+    // Play button
     g_hButtonPlay = CreateWindow(
         L"BUTTON", L"Play",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
@@ -140,6 +163,7 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_PLAY,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
+    // Pause button
     g_hButtonPause = CreateWindow(
         L"BUTTON", L"Pause",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
@@ -147,6 +171,7 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_PAUSE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
+    // Stop button
     g_hButtonStop = CreateWindow(
         L"BUTTON", L"Stop",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
@@ -154,30 +179,30 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_STOP,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
-    // Create seek slider
     RECT clientRect;
     GetClientRect(hwnd, &clientRect);
 
+    // Seek slider
     g_hSliderSeek = CreateWindow(
         TRACKBAR_CLASS, L"Seek",
         WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        10, clientRect.bottom - 80, clientRect.right - 20, 30,
+        10, clientRect.bottom - 80,
+        clientRect.right - 20, 30,
         hwnd, (HMENU)ID_SLIDER_SEEK,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-
-    // Set slider range (0-100 for percentage)
     SendMessage(g_hSliderSeek, TBM_SETRANGE, TRUE, MAKELONG(0, 100));
     SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, 0);
 
-    // Create status text
+    // Status text
     g_hStatusText = CreateWindow(
         L"STATIC", L"No video loaded",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
-        10, clientRect.bottom - 40, clientRect.right - 20, 20,
+        10, clientRect.bottom - 40,
+        clientRect.right - 20, 20,
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
-    // Initially disable play controls
+    // Disable controls until video is loaded
     EnableWindow(g_hButtonPlay, FALSE);
     EnableWindow(g_hButtonPause, FALSE);
     EnableWindow(g_hButtonStop, FALSE);
@@ -193,34 +218,27 @@ void OpenVideoFile(HWND hwnd)
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t); // Correct size for wchar_t array
+    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
     ofn.lpstrFilter = L"Video Files\0*.mp4;*.avi;*.mov;*.mkv;*.wmv;*.flv;*.webm;*.m4v;*.3gp\0All Files\0*.*\0";
     ofn.nFilterIndex = 1;
-    ofn.lpstrFileTitle = nullptr;
-    ofn.nMaxFileTitle = 0;
-    ofn.lpstrInitialDir = nullptr;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileNameW(&ofn))
     {
         if (g_videoPlayer && g_videoPlayer->LoadVideo(std::wstring(szFile)))
         {
-            // Video loaded successfully
             SetWindowTextW(g_hStatusText, (L"Loaded: " + std::wstring(szFile)).c_str());
-
-            // Enable controls
             EnableWindow(g_hButtonPlay, TRUE);
             EnableWindow(g_hButtonPause, TRUE);
             EnableWindow(g_hButtonStop, TRUE);
             EnableWindow(g_hSliderSeek, TRUE);
-
             UpdateControls();
             UpdateSeekBar();
         }
         else
         {
             SetWindowTextW(g_hStatusText, L"Failed to load video file");
-            MessageBoxW(hwnd, L"Failed to load the video file. Please check if the file is a valid video and FFmpeg libraries are properly installed.", L"Error", MB_OK | MB_ICONERROR);
+            MessageBoxW(hwnd, L"Failed to load the video file. Please check FFmpeg setup.", L"Error", MB_OK | MB_ICONERROR);
         }
     }
 }
@@ -242,14 +260,12 @@ void UpdateControls()
     {
         double currentTime = g_videoPlayer->GetCurrentTime();
         double duration = g_videoPlayer->GetDuration();
-
         wchar_t statusText[256];
-        swprintf_s(statusText, sizeof(statusText) / sizeof(wchar_t),
+        swprintf_s(statusText, _countof(statusText),
                    L"Time: %.2fs / %.2fs | Frame: %lld / %lld | %s",
                    currentTime, duration,
                    g_videoPlayer->GetCurrentFrame(), g_videoPlayer->GetTotalFrames(),
                    isPlaying ? L"Playing" : L"Paused");
-
         SetWindowTextW(g_hStatusText, statusText);
     }
 }
@@ -258,10 +274,8 @@ void UpdateSeekBar()
 {
     if (!g_videoPlayer || !g_videoPlayer->IsLoaded())
         return;
-
     double currentTime = g_videoPlayer->GetCurrentTime();
     double duration = g_videoPlayer->GetDuration();
-
     if (duration > 0)
     {
         int percentage = (int)((currentTime / duration) * 100);
@@ -270,33 +284,26 @@ void UpdateSeekBar()
 }
 
 // Entry point
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
     const wchar_t CLASS_NAME[] = L"VideoEditorClass";
-
     WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszMenuName = nullptr;
 
     RegisterClass(&wc);
 
     HWND hwnd = CreateWindowEx(
-        0,
-        CLASS_NAME,
-        L"Video Editor - Preview",
+        0, CLASS_NAME, L"Video Editor - Preview",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 1000, 700,
         nullptr, nullptr, hInstance, nullptr);
 
-    if (hwnd == nullptr)
-    {
+    if (!hwnd)
         return 0;
-    }
-
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
@@ -306,6 +313,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
-
     return 0;
 }
