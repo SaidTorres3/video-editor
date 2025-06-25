@@ -72,6 +72,9 @@ private:
 
   // Timer for playback
   UINT_PTR playbackTimer;
+  // Threaded playback
+  std::thread playbackThread;
+  std::atomic<bool> playbackThreadRunning;
 
   // Audio components
   std::vector<std::unique_ptr<AudioTrack>> audioTracks;
@@ -145,6 +148,7 @@ private:
   bool InitializeAudioTracks();
   void CleanupAudioTracks();
   void AudioThreadFunction();
+  void PlaybackThreadFunction();
   bool ProcessAudioFrame(AVPacket *audioPacket);
   void MixAudioTracks(uint8_t *outputBuffer, int frameCount);
 };
