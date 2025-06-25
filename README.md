@@ -7,6 +7,8 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 ### Video Playback
 - Load and play various video formats (MP4, AVI, MOV, MKV, WMV, FLV, WebM, M4V, 3GP)
 - Play, pause, stop controls
+- **Spacebar toggles play/pause** for quick control
+- **Drag and drop** a video onto the window to load it
 - Seek bar for navigation
 - Frame-by-frame playback control
 - Hardware-accelerated rendering using Direct2D

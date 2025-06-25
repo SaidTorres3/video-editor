@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <commdlg.h>  // For file dialog
 #include <commctrl.h> // For common controls
+#include <shellapi.h> // For drag-and-drop
 #include "video_player.h"
 #include <string>
 #include <cstdio> // For swprintf_s
@@ -43,6 +44,7 @@ double g_cutEndTime = -1.0;
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 void CreateControls(HWND hwnd);
 void OpenVideoFile(HWND hwnd);
+void LoadVideoFile(HWND hwnd, const std::wstring& filename);
 void UpdateControls();
 void UpdateSeekBar();
 void UpdateAudioTrackList();
@@ -68,6 +70,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         g_videoPlayer = new VideoPlayer(hwnd);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)g_videoPlayer);
         SetTimer(hwnd, ID_TIMER_UPDATE, 100, nullptr); // Update every 100ms
+        DragAcceptFiles(hwnd, TRUE);
         break;
 
     case WM_COMMAND:
@@ -154,6 +157,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             UpdateControls();
         }
         break;
+
+    case WM_DROPFILES:
+    {
+        HDROP hDrop = (HDROP)wParam;
+        wchar_t filePath[MAX_PATH];
+        if (DragQueryFileW(hDrop, 0, filePath, MAX_PATH))
+        {
+            LoadVideoFile(hwnd, std::wstring(filePath));
+        }
+        DragFinish(hDrop);
+    }
+    break;
 
     case WM_SIZE:
     {
@@ -372,43 +387,48 @@ void OpenVideoFile(HWND hwnd)
 
     if (GetOpenFileNameW(&ofn))
     {
-        if (g_videoPlayer && g_videoPlayer->LoadVideo(std::wstring(szFile)))
-        {
-            SetWindowTextW(g_hStatusText, (L"Loaded: " + std::wstring(szFile)).c_str());
-            EnableWindow(g_hButtonPlay, TRUE);
-            EnableWindow(g_hButtonPause, TRUE);
-            EnableWindow(g_hButtonStop, TRUE);
-            EnableWindow(g_hSliderSeek, TRUE);
-            
-            // Enable audio controls and populate audio tracks
-            UpdateAudioTrackList();
-            EnableWindow(g_hListBoxAudioTracks, TRUE);
-            EnableWindow(g_hSliderMasterVolume, TRUE);
-            if (g_videoPlayer->GetAudioTrackCount() > 0)
-            {
-                EnableWindow(g_hButtonMuteTrack, TRUE);
-                EnableWindow(g_hSliderTrackVolume, TRUE);
-                SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, 0, 0); // Select first track
-                OnAudioTrackSelectionChanged();
-            }
+        LoadVideoFile(hwnd, std::wstring(szFile));
+    }
+}
 
-            // Enable editing controls and reset points
-            EnableWindow(g_hButtonSetStart, TRUE);
-            EnableWindow(g_hButtonSetEnd, TRUE);
-            EnableWindow(g_hButtonCut, TRUE);
-           EnableWindow(g_hCheckboxMergeAudio, TRUE);
-            g_cutStartTime = -1.0;
-            g_cutEndTime = -1.0;
-            UpdateCutInfoLabel(hwnd);
-            
-            UpdateControls();
-            UpdateSeekBar();
-        }
-        else
+void LoadVideoFile(HWND hwnd, const std::wstring& filename)
+{
+    if (g_videoPlayer && g_videoPlayer->LoadVideo(filename))
+    {
+        SetWindowTextW(g_hStatusText, (L"Loaded: " + filename).c_str());
+        EnableWindow(g_hButtonPlay, TRUE);
+        EnableWindow(g_hButtonPause, TRUE);
+        EnableWindow(g_hButtonStop, TRUE);
+        EnableWindow(g_hSliderSeek, TRUE);
+
+        // Enable audio controls and populate audio tracks
+        UpdateAudioTrackList();
+        EnableWindow(g_hListBoxAudioTracks, TRUE);
+        EnableWindow(g_hSliderMasterVolume, TRUE);
+        if (g_videoPlayer->GetAudioTrackCount() > 0)
         {
-            SetWindowTextW(g_hStatusText, L"Failed to load video file");
-            MessageBoxW(hwnd, L"Failed to load the video file. Please check FFmpeg setup.", L"Error", MB_OK | MB_ICONERROR);
+            EnableWindow(g_hButtonMuteTrack, TRUE);
+            EnableWindow(g_hSliderTrackVolume, TRUE);
+            SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, 0, 0); // Select first track
+            OnAudioTrackSelectionChanged();
         }
+
+        // Enable editing controls and reset points
+        EnableWindow(g_hButtonSetStart, TRUE);
+        EnableWindow(g_hButtonSetEnd, TRUE);
+        EnableWindow(g_hButtonCut, TRUE);
+        EnableWindow(g_hCheckboxMergeAudio, TRUE);
+        g_cutStartTime = -1.0;
+        g_cutEndTime = -1.0;
+        UpdateCutInfoLabel(hwnd);
+
+        UpdateControls();
+        UpdateSeekBar();
+    }
+    else
+    {
+        SetWindowTextW(g_hStatusText, L"Failed to load video file");
+        MessageBoxW(hwnd, L"Failed to load the video file. Please check FFmpeg setup.", L"Error", MB_OK | MB_ICONERROR);
     }
 }
 
@@ -762,6 +782,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     MSG msg = {};
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_SPACE)
+        {
+            if (g_videoPlayer && g_videoPlayer->IsLoaded())
+            {
+                if (g_videoPlayer->IsPlaying())
+                    g_videoPlayer->Pause();
+                else
+                    g_videoPlayer->Play();
+                UpdateControls();
+            }
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
