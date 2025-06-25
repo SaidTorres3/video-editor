@@ -7,6 +7,54 @@ param(
 Write-Host "Video Editor Build Script" -ForegroundColor Green
 Write-Host "=========================" -ForegroundColor Green
 
+# ////////////////////// EXPERIMENTAL CODE //////////////////////
+# Check CMake
+if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+    Write-Host "`n❌ CMake no está instalado." -ForegroundColor Red
+    Write-Host "¿Quieres que lo descargue con winget? (Requiere permisos de administrador)" -ForegroundColor Yellow
+    $resp = Read-Host "[s/n]"
+    if ($resp -eq "s") {
+        Start-Process "powershell" "-Command winget install Kitware.CMake" -Verb RunAs
+        return
+    } else {
+        Write-Host "Por favor instala CMake manualmente desde https://cmake.org/download/" -ForegroundColor Cyan
+        exit 1
+    }
+}
+
+# Check if MSBuild is available (Visual Studio or Build Tools)
+function Find-MSBuild {
+    $vsPath = "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
+    if (Test-Path $vsPath) {
+        return $vsPath
+    }
+
+    # Buscar en el registro si hay más instalaciones
+    $paths = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\" -Recurse -Filter "MSBuild.exe" -ErrorAction SilentlyContinue
+    if ($paths.Count -gt 0) {
+        return $paths[0].FullName
+    }
+
+    return $null
+}
+
+$msbuildPath = Find-MSBuild
+if (-not $msbuildPath) {
+    Write-Host "`n❌ MSBuild (Visual Studio o Build Tools) no encontrado." -ForegroundColor Red
+    Write-Host "¿Quieres que descargue los Build Tools de Visual Studio? (Requiere permisos de administrador)" -ForegroundColor Yellow
+    $resp = Read-Host "[s/n]"
+    if ($resp -eq "s") {
+        Start-Process "powershell" "-Command winget install Microsoft.VisualStudio.2022.BuildTools" -Verb RunAs
+        return
+    } else {
+        Write-Host "Descarga desde: https://visualstudio.microsoft.com/visual-cpp-build-tools/" -ForegroundColor Cyan
+        exit 1
+    }
+} else {
+    Write-Host "`n✅ MSBuild encontrado en: $msbuildPath" -ForegroundColor Green
+}
+# ////////////////////// END OF EXPERIMENTAL CODE //////////////////////
+
 # Define default FFmpeg path
 if (-not $FFmpegPath) {
     $FFmpegPath = "$PSScriptRoot\third_party\ffmpeg"
