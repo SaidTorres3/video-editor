@@ -264,7 +264,12 @@ void VideoPlayer::Pause()
     {
       playbackThreadRunning = false;
       if (playbackThread.joinable())
-        playbackThread.join();
+      {
+        if (std::this_thread::get_id() == playbackThread.get_id())
+          playbackThread.detach();
+        else
+          playbackThread.join();
+      }
     }
   }
 }
@@ -573,6 +578,10 @@ bool VideoPlayer::InitializeAudio()
   {
     CoTaskMemFree(deviceFormat);
   }
+
+  // Update audio configuration to match the initialized format
+  audioSampleRate = audioFormat->nSamplesPerSec;
+  audioChannels = audioFormat->nChannels;
 
   hr = audioClient->GetBufferSize(&bufferFrameCount);
   if (FAILED(hr))
