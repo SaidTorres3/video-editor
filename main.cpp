@@ -125,7 +125,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             int pos = (int)SendMessage(g_hSliderSeek, TBM_GETPOS, 0, 0);
             double duration = g_videoPlayer->GetDuration();
             double seekTime = (pos / (double)SEEK_SLIDER_MAX) * duration;
+
+            bool wasPlaying = g_videoPlayer->IsPlaying();
+            if (wasPlaying)
+                g_videoPlayer->Pause();
+
             g_videoPlayer->SeekToTime(seekTime);
+
+            if (wasPlaying)
+                g_videoPlayer->Play();
+
             UpdateControls();
         }
         else if ((HWND)lParam == g_hSliderTrackVolume)
