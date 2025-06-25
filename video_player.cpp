@@ -13,7 +13,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       frame(nullptr), frameRGB(nullptr), packet(nullptr), swsContext(nullptr),
       buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
-      totalFrames(0), videoWindow(nullptr), videoDC(nullptr),
+      totalFrames(0), currentPts(0.0), duration(0.0), videoWindow(nullptr), videoDC(nullptr),
       videoBitmap(nullptr), playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
@@ -92,7 +92,10 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
   isLoaded = true;
   currentFrame = 0;
   AVStream *vs = formatContext->streams[videoStreamIndex];
-  frameRate = av_q2d(vs->avg_frame_rate);
+  AVRational guessed = av_guess_frame_rate(formatContext, vs, nullptr);
+  frameRate = guessed.num && guessed.den ? av_q2d(guessed) : 0.0;
+  if (frameRate <= 0.0)
+    frameRate = av_q2d(vs->avg_frame_rate);
   if (frameRate <= 0.0)
     frameRate = av_q2d(vs->r_frame_rate);
   if (frameRate <= 0.0 && vs->time_base.den)
@@ -105,6 +108,16 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
                     : (vs->duration != AV_NOPTS_VALUE
                            ? (int64_t)(av_q2d(vs->time_base) * vs->duration * frameRate)
                            : 0);
+
+  if (formatContext->duration != AV_NOPTS_VALUE)
+    duration = formatContext->duration / (double)AV_TIME_BASE;
+  else if (vs->duration != AV_NOPTS_VALUE)
+    duration = av_q2d(vs->time_base) * vs->duration;
+  else if (totalFrames > 0 && frameRate > 0)
+    duration = totalFrames / frameRate;
+  else
+    duration = 0.0;
+  currentPts = 0.0;
   return true;
 }
 
@@ -198,7 +211,9 @@ void VideoPlayer::UnloadVideo()
   isLoaded = false;
   videoStreamIndex = -1;
   currentFrame = 0;
+  currentPts = 0.0;
   totalFrames = 0;
+  duration = 0.0;
 }
 
 bool VideoPlayer::Play()
@@ -305,6 +320,13 @@ bool VideoPlayer::DecodeNextFrame()
             (uint8_t const *const *)frame->data, frame->linesize,
             0, frameHeight,
             frameRGB->data, frameRGB->linesize);
+        AVStream *vs = formatContext->streams[videoStreamIndex];
+        if (frame->best_effort_timestamp != AV_NOPTS_VALUE)
+          currentPts = frame->best_effort_timestamp * av_q2d(vs->time_base);
+        else if (frame->pts != AV_NOPTS_VALUE)
+          currentPts = frame->pts * av_q2d(vs->time_base);
+        else
+          currentPts += (frameRate > 0 ? 1.0 / frameRate : 0.0);
         currentFrame++;
         UpdateDisplay();
         return true;
@@ -367,6 +389,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
       audioQueue.pop();
   }
   currentFrame = frameNumber;
+  currentPts = frameNumber / frameRate;
   DecodeNextFrame();
 }
 
@@ -389,24 +412,18 @@ void VideoPlayer::SeekToTime(double seconds)
       audioQueue.pop();
   }
   currentFrame = (int64_t)(seconds * frameRate);
+  currentPts = seconds;
   DecodeNextFrame();
 }
 
 double VideoPlayer::GetDuration() const
 {
-  if (!isLoaded)
-    return 0.0;
-  AVStream *vs = formatContext->streams[videoStreamIndex];
-  if (vs->duration != AV_NOPTS_VALUE)
-    return av_q2d(vs->time_base) * vs->duration;
-  if (totalFrames > 0 && frameRate > 0)
-    return totalFrames / frameRate;
-  return 0.0;
+  return isLoaded ? duration : 0.0;
 }
 
 double VideoPlayer::GetCurrentTime() const
 {
-  return frameRate > 0 ? (currentFrame / frameRate) : 0.0;
+  return currentPts;
 }
 
 void VideoPlayer::SetPosition(int x, int y, int width, int height)
