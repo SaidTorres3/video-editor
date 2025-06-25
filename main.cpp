@@ -3,6 +3,13 @@
 #include <commdlg.h>  // For file dialog
 #include <commctrl.h> // For common controls
 #include <shellapi.h> // For drag-and-drop
+#include <dwmapi.h>
+#include <uxtheme.h>
+#pragma comment(lib, "dwmapi.lib")
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
 #include "video_player.h"
 #include <string>
 #include <cstdio> // For swprintf_s
@@ -40,6 +47,11 @@ HWND g_hLabelCutInfo;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
 
+// Dark mode UI resources
+HFONT g_hFont = nullptr;
+HBRUSH g_hbrBackground = nullptr;
+COLORREF g_textColor = RGB(240, 240, 240);
+
 // Function declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 void CreateControls(HWND hwnd);
@@ -58,6 +70,7 @@ void OnSetEndClicked(HWND hwnd);
 void OnCutClicked(HWND hwnd);
 std::wstring FormatTime(double totalSeconds, bool showMilliseconds = false);
 void RepositionControls(HWND hwnd);
+void ApplyDarkTheme(HWND hwnd);
 
 
 // Window procedure
@@ -66,11 +79,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     switch (uMsg)
     {
     case WM_CREATE:
+        // Initialize dark theme resources
+        g_hbrBackground = CreateSolidBrush(RGB(45, 45, 48));
+        g_hFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
         CreateControls(hwnd);
         g_videoPlayer = new VideoPlayer(hwnd);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)g_videoPlayer);
         SetTimer(hwnd, ID_TIMER_UPDATE, 100, nullptr); // Update every 100ms
         DragAcceptFiles(hwnd, TRUE);
+
+        // Apply dark theme to window itself
+        ApplyDarkTheme(hwnd);
         break;
 
     case WM_COMMAND:
@@ -170,6 +193,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
     break;
 
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORLISTBOX:
+    {
+        HDC hdc = (HDC)wParam;
+        SetTextColor(hdc, g_textColor);
+        SetBkColor(hdc, RGB(45,45,48));
+        return (INT_PTR)g_hbrBackground;
+    }
+    break;
+
+    case WM_ERASEBKGND:
+    {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect((HDC)wParam, &rc, g_hbrBackground);
+        return 1;
+    }
+    break;
+
     case WM_SIZE:
     {
         RepositionControls(hwnd);
@@ -185,6 +228,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             delete g_videoPlayer;
             g_videoPlayer = nullptr;
+        }
+        if (g_hFont)
+        {
+            DeleteObject(g_hFont);
+            g_hFont = nullptr;
+        }
+        if (g_hbrBackground)
+        {
+            DeleteObject(g_hbrBackground);
+            g_hbrBackground = nullptr;
         }
         KillTimer(hwnd, ID_TIMER_UPDATE);
         PostQuitMessage(0);
@@ -207,6 +260,7 @@ void CreateControls(HWND hwnd)
         10, 10, 100, 30,
         hwnd, (HMENU)ID_BUTTON_OPEN,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonOpen);
 
     // Play button
     g_hButtonPlay = CreateWindow(
@@ -215,6 +269,7 @@ void CreateControls(HWND hwnd)
         120, 10, 60, 30,
         hwnd, (HMENU)ID_BUTTON_PLAY,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonPlay);
 
     // Pause button
     g_hButtonPause = CreateWindow(
@@ -223,6 +278,7 @@ void CreateControls(HWND hwnd)
         190, 10, 60, 30,
         hwnd, (HMENU)ID_BUTTON_PAUSE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonPause);
 
     // Stop button
     g_hButtonStop = CreateWindow(
@@ -231,6 +287,7 @@ void CreateControls(HWND hwnd)
         260, 10, 60, 30,
         hwnd, (HMENU)ID_BUTTON_STOP,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonStop);
 
     // Seek slider
     g_hSliderSeek = CreateWindow(
@@ -241,6 +298,7 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     SendMessage(g_hSliderSeek, TBM_SETRANGE, TRUE, MAKELONG(0, SEEK_SLIDER_MAX));
     SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, 0);
+    ApplyDarkTheme(g_hSliderSeek);
 
     // Status text
     g_hStatusText = CreateWindow(
@@ -249,6 +307,7 @@ void CreateControls(HWND hwnd)
         10, 410, 600, 20, // Placeholder position
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hStatusText);
 
     // Audio controls section
     // Audio tracks label
@@ -258,6 +317,7 @@ void CreateControls(HWND hwnd)
         340, 50, 100, 20, // Placeholder position
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelAudioTracks);
 
     // Audio tracks listbox
     g_hListBoxAudioTracks = CreateWindow(
@@ -266,6 +326,7 @@ void CreateControls(HWND hwnd)
         340, 75, 200, 100, // Placeholder position
         hwnd, (HMENU)ID_LISTBOX_AUDIO_TRACKS,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hListBoxAudioTracks);
 
     // Mute track button
     g_hButtonMuteTrack = CreateWindow(
@@ -274,6 +335,7 @@ void CreateControls(HWND hwnd)
         340, 185, 100, 25, // Placeholder position
         hwnd, (HMENU)ID_BUTTON_MUTE_TRACK,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonMuteTrack);
 
     // Track volume label
     g_hLabelTrackVolume = CreateWindow(
@@ -282,6 +344,7 @@ void CreateControls(HWND hwnd)
         340, 220, 100, 20, // Placeholder position
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelTrackVolume);
 
     // Track volume slider
     g_hSliderTrackVolume = CreateWindow(
@@ -292,6 +355,7 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     SendMessage(g_hSliderTrackVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 200)); // 0-200% volume
     SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, 100); // Default 100%
+    ApplyDarkTheme(g_hSliderTrackVolume);
 
     // Master volume label
     g_hLabelMasterVolume = CreateWindow(
@@ -300,6 +364,7 @@ void CreateControls(HWND hwnd)
         340, 285, 100, 20, // Placeholder position
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelMasterVolume);
 
     // Master volume slider
     g_hSliderMasterVolume = CreateWindow(
@@ -310,6 +375,7 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 200)); // 0-200% volume
     SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, 100); // Default 100%
+    ApplyDarkTheme(g_hSliderMasterVolume);
 
     // Editing controls section
     g_hLabelEditing = CreateWindow(
@@ -318,6 +384,7 @@ void CreateControls(HWND hwnd)
         340, 350, 100, 20, // Placeholder
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelEditing);
 
     g_hButtonSetStart = CreateWindow(
         L"BUTTON", L"Set Start",
@@ -325,6 +392,7 @@ void CreateControls(HWND hwnd)
         340, 375, 95, 25, // Placeholder
         hwnd, (HMENU)ID_BUTTON_SET_START,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonSetStart);
 
     g_hButtonSetEnd = CreateWindow(
         L"BUTTON", L"Set End",
@@ -332,6 +400,7 @@ void CreateControls(HWND hwnd)
         445, 375, 95, 25, // Placeholder
         hwnd, (HMENU)ID_BUTTON_SET_END,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonSetEnd);
 
     g_hLabelCutInfo = CreateWindow(
         L"STATIC", L"Cut points not set.",
@@ -339,6 +408,7 @@ void CreateControls(HWND hwnd)
         340, 405, 200, 40, // Placeholder
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelCutInfo);
 
     g_hButtonCut = CreateWindow(
         L"BUTTON", L"Cut & Save",
@@ -346,6 +416,7 @@ void CreateControls(HWND hwnd)
         340, 450, 200, 30, // Placeholder
         hwnd, (HMENU)ID_BUTTON_CUT,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonCut);
 
    g_hCheckboxMergeAudio = CreateWindow(
        L"BUTTON", L"Merge Audios",
@@ -354,6 +425,7 @@ void CreateControls(HWND hwnd)
        hwnd, (HMENU)ID_CHECKBOX_MERGE_AUDIO,
        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
    SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, BST_CHECKED, 0);
+    ApplyDarkTheme(g_hCheckboxMergeAudio);
 
 
     // Disable controls until video is loaded
@@ -755,6 +827,13 @@ void RepositionControls(HWND hwnd)
     // Redraw all controls
     InvalidateRect(hwnd, NULL, TRUE);
 }
+
+void ApplyDarkTheme(HWND hwnd)
+{
+    if (g_hFont)
+        SendMessage(hwnd, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+    SetWindowTheme(hwnd, L"DarkMode_Explorer", nullptr);
+}
 // Entry point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
@@ -764,7 +843,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
 
     RegisterClass(&wc);
 
@@ -776,6 +855,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 
     if (!hwnd)
         return 0;
+
+    // Enable immersive dark mode for the window
+    BOOL useDark = TRUE;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(useDark));
+    ApplyDarkTheme(hwnd);
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 

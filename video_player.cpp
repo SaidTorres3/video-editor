@@ -5,6 +5,7 @@
 #include <d2d1helper.h>
 #include <dxgiformat.h>
 #pragma comment(lib, "d2d1.lib")
+#include <uxtheme.h>
 #include <algorithm>
 #include <cstring>
 #include <chrono>
@@ -57,6 +58,7 @@ void VideoPlayer::CreateVideoWindow()
       nullptr);
   if (videoWindow)
   {
+    SetWindowTheme(videoWindow, L"DarkMode_Explorer", nullptr);
     CreateRenderTarget();
   }
 }

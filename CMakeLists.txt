@@ -64,6 +64,8 @@ target_link_libraries(VideoEditor PRIVATE
     comdlg32
     ole32
     winmm
+    dwmapi
+    uxtheme
     shell32
     ${AVCODEC_LIBRARY}
     ${AVFORMAT_LIBRARY}
