@@ -18,6 +18,9 @@
 #define ID_SLIDER_TRACK_VOLUME 1009
 #define ID_SLIDER_MASTER_VOLUME 1010
 
+// Range for the seek slider (higher value = finer granularity)
+#define SEEK_SLIDER_MAX 1000
+
 // Editing Control IDs
 #define ID_BUTTON_SET_START 1011
 #define ID_BUTTON_SET_END 1012
@@ -121,7 +124,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             int pos = (int)SendMessage(g_hSliderSeek, TBM_GETPOS, 0, 0);
             double duration = g_videoPlayer->GetDuration();
-            double seekTime = (pos / 100.0) * duration;
+            double seekTime = (pos / (double)SEEK_SLIDER_MAX) * duration;
             g_videoPlayer->SeekToTime(seekTime);
             UpdateControls();
         }
@@ -212,7 +215,7 @@ void CreateControls(HWND hwnd)
         10, 370, 600, 30, // Placeholder position
         hwnd, (HMENU)ID_SLIDER_SEEK,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderSeek, TBM_SETRANGE, TRUE, MAKELONG(0, 100));
+    SendMessage(g_hSliderSeek, TBM_SETRANGE, TRUE, MAKELONG(0, SEEK_SLIDER_MAX));
     SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, 0);
 
     // Status text
@@ -452,8 +455,8 @@ void UpdateSeekBar()
     double duration = g_videoPlayer->GetDuration();
     if (duration > 0)
     {
-        int percentage = (int)((currentTime / duration) * 100);
-        SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, percentage);
+        int pos = (int)((currentTime / duration) * SEEK_SLIDER_MAX);
+        SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, pos);
     }
 }
 

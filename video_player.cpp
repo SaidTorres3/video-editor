@@ -92,7 +92,14 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
   isLoaded = true;
   currentFrame = 0;
   AVStream *vs = formatContext->streams[videoStreamIndex];
-  frameRate = av_q2d(vs->r_frame_rate);
+  frameRate = av_q2d(vs->avg_frame_rate);
+  if (frameRate <= 0.0)
+    frameRate = av_q2d(vs->r_frame_rate);
+  if (frameRate <= 0.0 && vs->time_base.den)
+    frameRate = (double)vs->time_base.den / vs->time_base.num;
+  if (frameRate <= 0.0)
+    frameRate = 30.0; // Fallback
+
   totalFrames = vs->nb_frames
                     ? vs->nb_frames
                     : (vs->duration != AV_NOPTS_VALUE
@@ -335,17 +342,44 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
   if (!isLoaded || frameNumber < 0 || frameNumber >= totalFrames)
     return;
   AVStream *vs = formatContext->streams[videoStreamIndex];
-  int64_t ts = av_rescale_q(frameNumber, av_inv_q(vs->r_frame_rate), vs->time_base);
-  av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_FRAME);
+  AVRational fps = av_d2q(frameRate, 100000);
+  int64_t ts = av_rescale_q(frameNumber, av_inv_q(fps), vs->time_base);
+  av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
   avcodec_flush_buffers(codecContext);
+  for (auto &track : audioTracks)
+  {
+    if (track->codecContext)
+      avcodec_flush_buffers(track->codecContext);
+  }
+  {
+    std::lock_guard<std::mutex> lock(audioMutex);
+    while (!audioQueue.empty())
+      audioQueue.pop();
+  }
   currentFrame = frameNumber;
   DecodeNextFrame();
 }
 
 void VideoPlayer::SeekToTime(double seconds)
 {
-  if (frameRate > 0)
-    SeekToFrame((int64_t)(seconds * frameRate));
+  if (!isLoaded)
+    return;
+  AVStream *vs = formatContext->streams[videoStreamIndex];
+  int64_t ts = (int64_t)(seconds / av_q2d(vs->time_base));
+  av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
+  avcodec_flush_buffers(codecContext);
+  for (auto &track : audioTracks)
+  {
+    if (track->codecContext)
+      avcodec_flush_buffers(track->codecContext);
+  }
+  {
+    std::lock_guard<std::mutex> lock(audioMutex);
+    while (!audioQueue.empty())
+      audioQueue.pop();
+  }
+  currentFrame = (int64_t)(seconds * frameRate);
+  DecodeNextFrame();
 }
 
 double VideoPlayer::GetDuration() const
