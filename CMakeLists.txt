@@ -59,6 +59,7 @@ endif()
 target_link_libraries(VideoEditor PRIVATE
     user32
     gdi32
+    d2d1
     comctl32
     comdlg32
     ole32
