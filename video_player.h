@@ -14,6 +14,7 @@ extern "C"
 #include <libavutil/opt.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/rational.h>
+#include <libavutil/avutil.h>
 }
 
 #include <vector>
@@ -60,6 +61,8 @@ private:
   double frameRate;
   int64_t currentFrame;
   int64_t totalFrames;
+  double currentPts;
+  double duration;
 
   HWND parentWindow;
   HWND videoWindow;
