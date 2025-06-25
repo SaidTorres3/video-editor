@@ -118,7 +118,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_HSCROLL:
         if ((HWND)lParam == g_hSliderSeek && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
-            int pos = SendMessage(g_hSliderSeek, TBM_GETPOS, 0, 0);
+            int pos = (int)SendMessage(g_hSliderSeek, TBM_GETPOS, 0, 0);
             double duration = g_videoPlayer->GetDuration();
             double seekTime = (pos / 100.0) * duration;
             g_videoPlayer->SeekToTime(seekTime);
@@ -469,7 +469,7 @@ void OnAudioTrackSelectionChanged()
     if (!g_videoPlayer)
         return;
     
-    int selectedIndex = SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+    int selectedIndex = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
     if (selectedIndex != LB_ERR)
     {
         // Update track volume slider
@@ -488,7 +488,7 @@ void OnMuteTrackClicked()
     if (!g_videoPlayer)
         return;
     
-    int selectedIndex = SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+    int selectedIndex = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
     if (selectedIndex != LB_ERR)
     {
         bool currentlyMuted = g_videoPlayer->IsAudioTrackMuted(selectedIndex);
@@ -506,10 +506,10 @@ void OnTrackVolumeChanged()
     if (!g_videoPlayer)
         return;
     
-    int selectedIndex = SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+    int selectedIndex = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
     if (selectedIndex != LB_ERR)
     {
-        int sliderPos = SendMessage(g_hSliderTrackVolume, TBM_GETPOS, 0, 0);
+        int sliderPos = (int)SendMessage(g_hSliderTrackVolume, TBM_GETPOS, 0, 0);
         float volume = sliderPos / 100.0f; // Convert from 0-200 to 0.0-2.0
         g_videoPlayer->SetAudioTrackVolume(selectedIndex, volume);
     }
@@ -520,12 +520,12 @@ void OnMasterVolumeChanged()
     if (!g_videoPlayer)
         return;
     
-    int sliderPos = SendMessage(g_hSliderMasterVolume, TBM_GETPOS, 0, 0);
+    int sliderPos = (int)SendMessage(g_hSliderMasterVolume, TBM_GETPOS, 0, 0);
     float volume = sliderPos / 100.0f; // Convert from 0-200 to 0.0-2.0
     g_videoPlayer->SetMasterVolume(volume);
     
     // Update the track volume slider if a track is selected
-    int selectedIndex = SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+    int selectedIndex = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
     if (selectedIndex != LB_ERR)
     {
         OnAudioTrackSelectionChanged();
