@@ -275,46 +275,56 @@ bool VideoPlayer::DecodeNextFrame()
 {
   if (!isLoaded)
     return false;
-  int ret = av_read_frame(formatContext, packet);
-  if (ret < 0)
-  {
-    Stop();
-    return false;
-  }
 
-  if (packet->stream_index == videoStreamIndex)
+  while (true)
   {
-    ret = avcodec_send_packet(codecContext, packet);
-    av_packet_unref(packet);
+    int ret = av_read_frame(formatContext, packet);
     if (ret < 0)
+    {
+      Stop();
       return false;
-    ret = avcodec_receive_frame(codecContext, frame);
-    if (ret == 0)
-    {
-      sws_scale(
-          swsContext,
-          (uint8_t const *const *)frame->data, frame->linesize,
-          0, frameHeight,
-          frameRGB->data, frameRGB->linesize);
-      currentFrame++;
-      UpdateDisplay();
-      return true;
     }
-  }
-  else
-  {
-    // Check if this is an audio packet
-    for (auto& track : audioTracks)
+
+    if (packet->stream_index == videoStreamIndex)
     {
-      if (packet->stream_index == track->streamIndex)
+      ret = avcodec_send_packet(codecContext, packet);
+      av_packet_unref(packet);
+      if (ret < 0)
+        continue;
+
+      while (true)
       {
-        ProcessAudioFrame(packet);
-        break;
+        ret = avcodec_receive_frame(codecContext, frame);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+          break;
+        if (ret < 0)
+          return false;
+
+        sws_scale(
+            swsContext,
+            (uint8_t const *const *)frame->data, frame->linesize,
+            0, frameHeight,
+            frameRGB->data, frameRGB->linesize);
+        currentFrame++;
+        UpdateDisplay();
+        return true;
       }
     }
-    av_packet_unref(packet);
+    else
+    {
+      // Check if this is an audio packet
+      for (auto& track : audioTracks)
+      {
+        if (packet->stream_index == track->streamIndex)
+        {
+          ProcessAudioFrame(packet);
+          break;
+        }
+      }
+      av_packet_unref(packet);
+    }
   }
-  return false;
+  return false; // Should never reach here
 }
 
 void VideoPlayer::UpdateDisplay()
