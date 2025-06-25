@@ -13,8 +13,8 @@ if (-not (Test-Path -Path $FFmpegPath)) {
     Write-Host "ERROR: FFmpeg not found at: $FFmpegPath" -ForegroundColor Red
     Write-Host ""
     Write-Host "Please download FFmpeg and update the path:" -ForegroundColor Yellow
-    Write-Host "1. Download FFmpeg 'dev' package from: https://www.gyan.dev/ffmpeg/builds/" -ForegroundColor Cyan
-    Write-Host "2. Extract it to C:\Program Files\ffmpeg (or update the path in this script)" -ForegroundColor Cyan
+    Write-Host "1. Download FFmpeg 'shared' package from: https://github.com/btbn/ffmpeg-builds/releases" -ForegroundColor Cyan
+    Write-Host "2. Extract the contents of the folder to C:\Program Files\ffmpeg (or update the path in this script)" -ForegroundColor Cyan
     Write-Host "3. Make sure you have both 'include' and 'lib' folders in the FFmpeg directory" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "You can also run this script with a custom path:" -ForegroundColor Yellow
