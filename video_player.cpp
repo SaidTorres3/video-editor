@@ -3,6 +3,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cstring>
+#include <chrono>
 
 // Link with Windows Audio libraries
 #pragma comment(lib, "ole32.lib")
@@ -18,6 +19,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioThreadRunning(false),
+      playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16)
 {
   CreateVideoWindow();
@@ -28,6 +30,12 @@ VideoPlayer::~VideoPlayer()
 {
   UnloadVideo();
   CleanupAudio();
+  if (playbackThreadRunning)
+  {
+    playbackThreadRunning = false;
+    if (playbackThread.joinable())
+      playbackThread.join();
+  }
   if (videoWindow)
     DestroyWindow(videoWindow);
 }
@@ -234,9 +242,8 @@ bool VideoPlayer::Play()
     audioThreadRunning = true;
     audioThread = std::thread(&VideoPlayer::AudioThreadFunction, this);
   }
-  
-  int interval = (int)(1000.0 / (frameRate > 0 ? frameRate : 30.0));
-  playbackTimer = SetTimer(parentWindow, 1, interval, TimerProc);
+  playbackThreadRunning = true;
+  playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
   return true;
 }
 
@@ -255,10 +262,11 @@ void VideoPlayer::Pause()
         audioThread.join();
     }
     
-    if (playbackTimer)
+    if (playbackThreadRunning)
     {
-      KillTimer(parentWindow, playbackTimer);
-      playbackTimer = 0;
+      playbackThreadRunning = false;
+      if (playbackThread.joinable())
+        playbackThread.join();
     }
   }
 }
@@ -851,6 +859,24 @@ void VideoPlayer::MixAudioTracks(uint8_t *outputBuffer, int frameCount)
       audioData.erase(audioData.begin(), audioData.begin() + samplesToCopy * sizeof(int16_t));
     }
   }
+}
+
+void VideoPlayer::PlaybackThreadFunction()
+{
+  auto startTime = std::chrono::high_resolution_clock::now();
+  double startPts = currentPts;
+  while (playbackThreadRunning)
+  {
+    if (!DecodeNextFrame())
+      break;
+
+    double target = currentPts - startPts;
+    double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
+    double delay = target - elapsed;
+    if (delay > 0)
+      std::this_thread::sleep_for(std::chrono::duration<double>(delay));
+  }
+  isPlaying = false;
 }
 
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime, double endTime, bool mergeAudio)
