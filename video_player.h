@@ -2,7 +2,10 @@
 #define VIDEO_PLAYER_H
 
 #include <windows.h>
+
 #include <string>
+#include <d2d1.h>
+#pragma comment(lib, "d2d1.lib")
 
 extern "C"
 {
@@ -66,9 +69,11 @@ private:
 
   HWND parentWindow;
   HWND videoWindow;
-  HDC videoDC;
-  HBITMAP videoBitmap;
-  BITMAPINFO bitmapInfo;
+
+  // Direct2D rendering components
+  ID2D1Factory* d2dFactory;
+  ID2D1HwndRenderTarget* d2dRenderTarget;
+  ID2D1Bitmap* d2dBitmap;
 
   // Timer for playback
   UINT_PTR playbackTimer;
@@ -151,5 +156,10 @@ private:
   void PlaybackThreadFunction();
   bool ProcessAudioFrame(AVPacket *audioPacket);
   void MixAudioTracks(uint8_t *outputBuffer, int frameCount);
+
+  // Direct2D helpers
+  bool InitializeD2D();
+  void CleanupD2D();
+  bool CreateRenderTarget();
 };
 #endif // VIDEO_PLAYER_H

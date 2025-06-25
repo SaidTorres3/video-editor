@@ -1,6 +1,10 @@
 // video_player.cpp
 #include "video_player.h"
 #include <iostream>
+#include <d2d1.h>
+#include <d2d1helper.h>
+#include <dxgiformat.h>
+#pragma comment(lib, "d2d1.lib")
 #include <algorithm>
 #include <cstring>
 #include <chrono>
@@ -14,14 +18,15 @@ VideoPlayer::VideoPlayer(HWND parent)
       frame(nullptr), frameRGB(nullptr), packet(nullptr), swsContext(nullptr),
       buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
-      totalFrames(0), currentPts(0.0), duration(0.0), videoWindow(nullptr), videoDC(nullptr),
-      videoBitmap(nullptr), playbackTimer(0),
+      totalFrames(0), currentPts(0.0), duration(0.0), videoWindow(nullptr),
+      d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16)
 {
+  InitializeD2D();
   CreateVideoWindow();
   InitializeAudio();
 }
@@ -30,6 +35,7 @@ VideoPlayer::~VideoPlayer()
 {
   UnloadVideo();
   CleanupAudio();
+  CleanupD2D();
   if (playbackThreadRunning)
   {
     playbackThreadRunning = false;
@@ -50,7 +56,9 @@ void VideoPlayer::CreateVideoWindow()
       (HINSTANCE)GetWindowLongPtr(parentWindow, GWLP_HINSTANCE),
       nullptr);
   if (videoWindow)
-    videoDC = GetDC(videoWindow);
+  {
+    CreateRenderTarget();
+  }
 }
 
 bool VideoPlayer::LoadVideo(const std::wstring &filename)
@@ -162,28 +170,20 @@ bool VideoPlayer::InitializeDecoder()
     return false;
   }
 
-  int numBytes = av_image_get_buffer_size(AV_PIX_FMT_BGR24, frameWidth, frameHeight, 32);
+  int numBytes = av_image_get_buffer_size(AV_PIX_FMT_BGRA, frameWidth, frameHeight, 32);
   buffer = (uint8_t *)av_malloc(numBytes);
   av_image_fill_arrays(frameRGB->data, frameRGB->linesize, buffer,
-                       AV_PIX_FMT_BGR24, frameWidth, frameHeight, 32);
+                       AV_PIX_FMT_BGRA, frameWidth, frameHeight, 32);
 
   swsContext = sws_getContext(
       frameWidth, frameHeight, codecContext->pix_fmt,
-      frameWidth, frameHeight, AV_PIX_FMT_BGR24,
+      frameWidth, frameHeight, AV_PIX_FMT_BGRA,
       SWS_BILINEAR, nullptr, nullptr, nullptr);
   if (!swsContext)
   {
     CleanupDecoder();
     return false;
   }
-
-  ZeroMemory(&bitmapInfo, sizeof(bitmapInfo));
-  bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  bitmapInfo.bmiHeader.biWidth = frameWidth;
-  bitmapInfo.bmiHeader.biHeight = -frameHeight; // top-down
-  bitmapInfo.bmiHeader.biPlanes = 1;
-  bitmapInfo.bmiHeader.biBitCount = 24;
-  bitmapInfo.bmiHeader.biCompression = BI_RGB;
 
   return true;
 }
@@ -202,8 +202,6 @@ void VideoPlayer::CleanupDecoder()
     av_frame_free(&frame), frame = nullptr;
   if (codecContext)
     avcodec_free_context(&codecContext), codecContext = nullptr;
-  if (videoBitmap)
-    DeleteObject(videoBitmap), videoBitmap = nullptr;
 }
 
 void VideoPlayer::UnloadVideo()
@@ -359,22 +357,35 @@ bool VideoPlayer::DecodeNextFrame()
 
 void VideoPlayer::UpdateDisplay()
 {
-  if (!videoDC || !frameRGB->data[0])
+  if (!d2dRenderTarget || !frameRGB->data[0])
     return;
 
-  RECT rect;
-  GetClientRect(videoWindow, &rect);
-  int winW = rect.right - rect.left;
-  int winH = rect.bottom - rect.top;
+  if (!d2dBitmap)
+  {
+    D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
+    d2dRenderTarget->CreateBitmap(
+        D2D1::SizeU(frameWidth, frameHeight),
+        frameRGB->data[0],
+        frameRGB->linesize[0],
+        props,
+        &d2dBitmap);
+  }
+  else
+  {
+    D2D1_RECT_U rect = {0, 0, (UINT32)frameWidth, (UINT32)frameHeight};
+    d2dBitmap->CopyFromMemory(&rect, frameRGB->data[0], frameRGB->linesize[0]);
+  }
 
-  StretchDIBits(
-      videoDC,
-      0, 0, winW, winH,
-      0, 0, frameWidth, frameHeight,
-      frameRGB->data[0],
-      &bitmapInfo,
-      DIB_RGB_COLORS,
-      SRCCOPY);
+  d2dRenderTarget->BeginDraw();
+  d2dRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+  D2D1_SIZE_F size = d2dRenderTarget->GetSize();
+  d2dRenderTarget->DrawBitmap(
+      d2dBitmap,
+      D2D1::RectF(0, 0, size.width, size.height),
+      1.0f,
+      D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+  d2dRenderTarget->EndDraw();
 }
 
 void VideoPlayer::SeekToFrame(int64_t frameNumber)
@@ -439,6 +450,10 @@ void VideoPlayer::SetPosition(int x, int y, int width, int height)
   if (!videoWindow)
     return;
   SetWindowPos(videoWindow, nullptr, x, y, width, height, SWP_NOZORDER);
+  if (d2dRenderTarget)
+  {
+    d2dRenderTarget->Resize(D2D1::SizeU(width, height));
+  }
   InvalidateRect(videoWindow, nullptr, TRUE);
   UpdateWindow(videoWindow);
 }
@@ -1043,4 +1058,42 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     av_seek_frame(formatContext, -1, 0, AVSEEK_FLAG_BACKWARD);
 
     return true;
+}
+
+bool VideoPlayer::InitializeD2D()
+{
+  return SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2dFactory));
+}
+
+bool VideoPlayer::CreateRenderTarget()
+{
+  if (!d2dFactory || !videoWindow)
+    return false;
+  RECT rc;
+  GetClientRect(videoWindow, &rc);
+  D2D1_SIZE_U size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
+  HRESULT hr = d2dFactory->CreateHwndRenderTarget(
+      D2D1::RenderTargetProperties(),
+      D2D1::HwndRenderTargetProperties(videoWindow, size),
+      &d2dRenderTarget);
+  return SUCCEEDED(hr);
+}
+
+void VideoPlayer::CleanupD2D()
+{
+  if (d2dBitmap)
+  {
+    d2dBitmap->Release();
+    d2dBitmap = nullptr;
+  }
+  if (d2dRenderTarget)
+  {
+    d2dRenderTarget->Release();
+    d2dRenderTarget = nullptr;
+  }
+  if (d2dFactory)
+  {
+    d2dFactory->Release();
+    d2dFactory = nullptr;
+  }
 }

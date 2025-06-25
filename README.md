@@ -9,6 +9,7 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - Play, pause, stop controls
 - Seek bar for navigation
 - Frame-by-frame playback control
+- Hardware-accelerated rendering using Direct2D
 
 ### Audio Playback (NEW!)
 - **Multitrack Audio Support**: Automatically detects and loads all audio tracks from video files
@@ -26,6 +27,10 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - **Master Volume Slider**: Control overall volume for all audio tracks
 
 ## Technical Implementation
+
+### Video Rendering Architecture
+- FFmpeg for video decoding
+- Direct2D for rendering frames to the window
 
 ### Audio Architecture
 - Uses Windows Audio Session API (WASAPI) for low-latency audio output
