@@ -7,19 +7,38 @@ param(
 Write-Host "Video Editor Build Script" -ForegroundColor Green
 Write-Host "=========================" -ForegroundColor Green
 
-# Check if FFmpeg path exists
-if (-not (Test-Path -Path $FFmpegPath)) {
-    Write-Host ""
-    Write-Host "ERROR: FFmpeg not found at: $FFmpegPath" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Please download FFmpeg and update the path:" -ForegroundColor Yellow
-    Write-Host "1. Download FFmpeg 'shared' package from: https://github.com/btbn/ffmpeg-builds/releases" -ForegroundColor Cyan
-    Write-Host "2. Extract the contents of the folder to C:\Program Files\ffmpeg (or update the path in this script)" -ForegroundColor Cyan
-    Write-Host "3. Make sure you have both 'include' and 'lib' folders in the FFmpeg directory" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "You can also run this script with a custom path:" -ForegroundColor Yellow
-    Write-Host ".\run.ps1 -FFmpegPath 'C:\path\to\your\ffmpeg'" -ForegroundColor Cyan
-    exit 1
+# Define default FFmpeg path
+if (-not $FFmpegPath) {
+    $FFmpegPath = "$PSScriptRoot\third_party\ffmpeg"
+}
+
+# Auto-download FFmpeg if not found (ONLY WORKS FOR WINDOWS)
+if (-not (Test-Path "$FFmpegPath\bin\ffmpeg.exe")) {
+    Write-Host "FFmpeg not found. Downloading automatically..." -ForegroundColor Yellow
+
+    $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+    $zipPath = "$env:TEMP\ffmpeg.zip"
+    $extractPath = "$PSScriptRoot\third_party"
+
+    # Download FFmpeg ZIP
+    Write-Host "Downloading FFmpeg from $ffmpegUrl..." -ForegroundColor Cyan
+    Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath
+
+    # Extract ZIP
+    Write-Host "Extracting FFmpeg..." -ForegroundColor Yellow
+    Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+
+    # Find the folder inside and move it to $FFmpegPath
+    $extracted = Get-ChildItem -Directory -Path $extractPath | Where-Object { $_.Name -like "ffmpeg*" } | Select-Object -First 1
+    if ($extracted) {
+        Move-Item "$extractPath\$($extracted.Name)" "$FFmpegPath" -Force
+    } else {
+        Write-Host "ERROR: Failed to extract FFmpeg." -ForegroundColor Red
+        exit 1
+    }
+
+    Remove-Item $zipPath -Force
+    Write-Host "✅ FFmpeg downloaded and extracted successfully to $FFmpegPath" -ForegroundColor Green
 }
 
 # Verify FFmpeg structure

@@ -1,5 +1,6 @@
 # CMake build files
 /build/
+/third_party
 *.exe
 *.dll
 *.lib
