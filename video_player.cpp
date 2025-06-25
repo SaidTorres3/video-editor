@@ -290,10 +290,10 @@ void VideoPlayer::Stop()
         avcodec_flush_buffers(track->codecContext);
     }
     
-    // Clear audio queue
+    // Clear audio buffers
     std::lock_guard<std::mutex> lock(audioMutex);
-    while (!audioQueue.empty())
-      audioQueue.pop();
+    for (auto& tr : audioTracks)
+      tr->buffer.clear();
   }
 }
 
@@ -409,8 +409,8 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
   }
   {
     std::lock_guard<std::mutex> lock(audioMutex);
-    while (!audioQueue.empty())
-      audioQueue.pop();
+    for (auto& tr : audioTracks)
+      tr->buffer.clear();
   }
   currentFrame = frameNumber;
   currentPts = frameNumber / frameRate;
@@ -432,8 +432,8 @@ void VideoPlayer::SeekToTime(double seconds)
   }
   {
     std::lock_guard<std::mutex> lock(audioMutex);
-    while (!audioQueue.empty())
-      audioQueue.pop();
+    for (auto& tr : audioTracks)
+      tr->buffer.clear();
   }
   currentFrame = (int64_t)(seconds * frameRate);
   currentPts = seconds;
@@ -773,22 +773,14 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
   if (convertedSamples < 0)
     return false;
 
-  // Apply volume
-  if (track->volume != 1.0f)
-  {
-    int16_t *samples = (int16_t*)resampledData.data();
-    int sampleCount = convertedSamples * audioChannels;
-    for (int i = 0; i < sampleCount; i++)
-    {
-      samples[i] = (int16_t)(samples[i] * track->volume);
-    }
-  }
-
-  // Add to audio queue
+  // Store raw samples in track buffer
   resampledData.resize(convertedSamples * audioChannels * sizeof(int16_t));
   {
     std::lock_guard<std::mutex> lock(audioMutex);
-    audioQueue.push(std::move(resampledData));
+    int16_t* samples = reinterpret_cast<int16_t*>(resampledData.data());
+    track->buffer.insert(track->buffer.end(),
+                         samples,
+                         samples + convertedSamples * audioChannels);
   }
   audioCondition.notify_one();
 
@@ -805,12 +797,12 @@ void VideoPlayer::AudioThreadFunction()
   while (audioThreadRunning)
   {
     std::unique_lock<std::mutex> lock(audioMutex);
-    audioCondition.wait(lock, [this] { return !audioQueue.empty() || !audioThreadRunning; });
+    audioCondition.wait(lock, [this] { return HasBufferedAudio() || !audioThreadRunning; });
 
     if (!audioThreadRunning)
       break;
 
-    if (audioQueue.empty())
+    if (!HasBufferedAudio())
       continue;
 
     // Get available buffer space
@@ -849,40 +841,44 @@ void VideoPlayer::AudioThreadFunction()
 void VideoPlayer::MixAudioTracks(uint8_t *outputBuffer, int frameCount)
 {
   memset(outputBuffer, 0, frameCount * audioChannels * sizeof(int16_t));
-  int16_t *output = (int16_t*)outputBuffer;
-  
-  int samplesNeeded = frameCount * audioChannels;
-  int samplesWritten = 0;
+  int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
+  int totalSamples = frameCount * audioChannels;
 
-  while (samplesWritten < samplesNeeded && !audioQueue.empty())
+  for (int frame = 0; frame < frameCount; ++frame)
   {
-    auto& audioData = audioQueue.front();
-    int16_t *input = (int16_t*)audioData.data();
-    int inputSamples = audioData.size() / sizeof(int16_t);
-    int remainingSamples = samplesNeeded - samplesWritten;
-    int samplesToCopy = (remainingSamples < inputSamples) ? remainingSamples : inputSamples;
-
-    // Mix the audio (simple addition with clipping)
-    for (int i = 0; i < samplesToCopy; i++)
+    std::vector<int32_t> mix(audioChannels, 0);
+    for (auto& track : audioTracks)
     {
-      int32_t mixed = output[samplesWritten + i] + input[i];
-      if (mixed > 32767) mixed = 32767;
-      if (mixed < -32768) mixed = -32768;
-      output[samplesWritten + i] = (int16_t)mixed;
+      if (track->isMuted)
+        continue;
+      if (track->buffer.size() >= static_cast<size_t>(audioChannels))
+      {
+        for (int ch = 0; ch < audioChannels; ++ch)
+        {
+          int16_t val = track->buffer.front();
+          track->buffer.pop_front();
+          mix[ch] += static_cast<int32_t>(val * track->volume);
+        }
+      }
     }
-
-    samplesWritten += samplesToCopy;
-
-    if (samplesToCopy == inputSamples)
+    for (int ch = 0; ch < audioChannels; ++ch)
     {
-      audioQueue.pop();
-    }
-    else
-    {
-      // Remove consumed samples from the front of the buffer
-      audioData.erase(audioData.begin(), audioData.begin() + samplesToCopy * sizeof(int16_t));
+      int32_t v = mix[ch];
+      if (v > 32767) v = 32767;
+      if (v < -32768) v = -32768;
+      out[frame * audioChannels + ch] = static_cast<int16_t>(v);
     }
   }
+}
+
+bool VideoPlayer::HasBufferedAudio() const
+{
+  for (const auto& track : audioTracks)
+  {
+    if (!track->buffer.empty())
+      return true;
+  }
+  return false;
 }
 
 void VideoPlayer::PlaybackThreadFunction()

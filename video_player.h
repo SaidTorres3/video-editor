@@ -25,7 +25,7 @@ extern "C"
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <queue>
+#include <deque>
 #include <atomic>
 
 // Audio output using Windows Audio Session API (WASAPI)
@@ -42,6 +42,7 @@ struct AudioTrack {
     bool isMuted;
     float volume;
     std::string name;
+    std::deque<int16_t> buffer;
     
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
                    frame(nullptr), isMuted(false), volume(1.0f) {}
@@ -96,7 +97,6 @@ private:
   std::atomic<bool> audioThreadRunning;
   std::mutex audioMutex;
   std::condition_variable audioCondition;
-  std::queue<std::vector<uint8_t>> audioQueue;
   
   // Audio settings
   int audioSampleRate;
@@ -156,6 +156,7 @@ private:
   void PlaybackThreadFunction();
   bool ProcessAudioFrame(AVPacket *audioPacket);
   void MixAudioTracks(uint8_t *outputBuffer, int frameCount);
+  bool HasBufferedAudio() const;
 
   // Direct2D helpers
   bool InitializeD2D();
