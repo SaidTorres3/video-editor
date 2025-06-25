@@ -385,9 +385,28 @@ void VideoPlayer::UpdateDisplay()
   d2dRenderTarget->BeginDraw();
   d2dRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::Black));
   D2D1_SIZE_F size = d2dRenderTarget->GetSize();
+  float targetAspect = size.width / size.height;
+  float videoAspect = static_cast<float>(frameWidth) / frameHeight;
+  float drawWidth = size.width;
+  float drawHeight = size.height;
+  float offsetX = 0.0f;
+  float offsetY = 0.0f;
+  if (targetAspect > videoAspect)
+  {
+    drawHeight = size.height;
+    drawWidth = drawHeight * videoAspect;
+    offsetX = (size.width - drawWidth) / 2.0f;
+  }
+  else
+  {
+    drawWidth = size.width;
+    drawHeight = drawWidth / videoAspect;
+    offsetY = (size.height - drawHeight) / 2.0f;
+  }
+
   d2dRenderTarget->DrawBitmap(
       d2dBitmap,
-      D2D1::RectF(0, 0, size.width, size.height),
+      D2D1::RectF(offsetX, offsetY, offsetX + drawWidth, offsetY + drawHeight),
       1.0f,
       D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
   d2dRenderTarget->EndDraw();
