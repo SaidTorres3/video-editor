@@ -37,6 +37,8 @@
 #define ID_RADIO_COPY_CODEC 1015
 #define ID_RADIO_H264 1016
 #define ID_EDIT_BITRATE 1017
+#define ID_EDIT_START_TIME 1018
+#define ID_EDIT_END_TIME 1019
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
@@ -47,12 +49,15 @@ HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
 HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
+HWND g_hEditStartTime, g_hEditEndTime;
 HWND g_hLabelCutInfo;
 HWND g_hProgressWnd, g_hProgressBar;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
 bool g_isTimelineDragging = false;
 bool g_wasPlayingBeforeDrag = false;
+enum class DragMode { None, Cursor, StartMarker, EndMarker };
+DragMode g_timelineDragMode = DragMode::None;
 
 // Dark mode UI resources
 HFONT g_hFont = nullptr;
@@ -76,6 +81,8 @@ void OnSetStartClicked(HWND hwnd);
 void OnSetEndClicked(HWND hwnd);
 void OnCutClicked(HWND hwnd);
 std::wstring FormatTime(double totalSeconds, bool showMilliseconds = false);
+double ParseTimeString(const std::wstring& str);
+void UpdateCutTimeEdits();
 void RepositionControls(HWND hwnd);
 void ApplyDarkTheme(HWND hwnd);
 void ShowProgressWindow(HWND parent);
@@ -152,7 +159,38 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             EnableWindow(g_hEditBitrate, SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED);
             break;
         }
-        
+
+        if ((HWND)lParam == g_hEditStartTime && HIWORD(wParam) == EN_KILLFOCUS)
+        {
+            wchar_t buf[64];
+            GetWindowTextW(g_hEditStartTime, buf, 64);
+            double t = ParseTimeString(buf);
+            if (t >= 0)
+            {
+                g_cutStartTime = t;
+                if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
+                    g_cutEndTime = -1.0;
+            }
+            UpdateCutInfoLabel(hwnd);
+            UpdateCutTimeEdits();
+            UpdateTimeline();
+        }
+        else if ((HWND)lParam == g_hEditEndTime && HIWORD(wParam) == EN_KILLFOCUS)
+        {
+            wchar_t buf[64];
+            GetWindowTextW(g_hEditEndTime, buf, 64);
+            double t = ParseTimeString(buf);
+            if (t >= 0)
+            {
+                g_cutEndTime = t;
+                if (g_cutStartTime >= 0 && g_cutEndTime <= g_cutStartTime)
+                    g_cutEndTime = -1.0;
+            }
+            UpdateCutInfoLabel(hwnd);
+            UpdateCutTimeEdits();
+            UpdateTimeline();
+        }
+
         // Handle listbox selection changes
         if (HIWORD(wParam) == LBN_SELCHANGE && (HWND)lParam == g_hListBoxAudioTracks)
         {
@@ -170,6 +208,34 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             OnMasterVolumeChanged();
         }
         break;
+
+    case WM_MOUSEWHEEL:
+    {
+        HWND focused = GetFocus();
+        int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        double step = 0.1 * (delta / WHEEL_DELTA);
+        if (focused == g_hEditStartTime && g_cutStartTime >= 0)
+        {
+            g_cutStartTime -= step;
+            if (g_cutStartTime < 0) g_cutStartTime = 0;
+            if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
+                g_cutStartTime = g_cutEndTime - 0.01;
+            UpdateCutInfoLabel(hwnd);
+            UpdateCutTimeEdits();
+            UpdateTimeline();
+        }
+        else if (focused == g_hEditEndTime && g_cutEndTime >= 0)
+        {
+            g_cutEndTime -= step;
+            if (g_cutEndTime < 0) g_cutEndTime = 0;
+            if (g_cutStartTime >= 0 && g_cutEndTime <= g_cutStartTime)
+                g_cutEndTime = g_cutStartTime + 0.01;
+            UpdateCutInfoLabel(hwnd);
+            UpdateCutTimeEdits();
+            UpdateTimeline();
+        }
+    }
+    break;
 
     case WM_TIMER:
         if (wParam == ID_TIMER_UPDATE)
@@ -398,10 +464,26 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonSetEnd);
 
+    g_hEditStartTime = CreateWindow(
+        L"EDIT", L"",
+        WS_VISIBLE | WS_CHILD | WS_BORDER,
+        340, 405, 95, 20,
+        hwnd, (HMENU)ID_EDIT_START_TIME,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hEditStartTime);
+
+    g_hEditEndTime = CreateWindow(
+        L"EDIT", L"",
+        WS_VISIBLE | WS_CHILD | WS_BORDER,
+        445, 405, 95, 20,
+        hwnd, (HMENU)ID_EDIT_END_TIME,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hEditEndTime);
+
     g_hLabelCutInfo = CreateWindow(
         L"STATIC", L"Cut points not set.",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 405, 200, 40, // Placeholder
+        340, 430, 200, 40, // Placeholder
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hLabelCutInfo);
@@ -459,9 +541,11 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hSliderTrackVolume, FALSE);
     EnableWindow(g_hSliderMasterVolume, FALSE);
     EnableWindow(g_hButtonSetStart, FALSE);
-   EnableWindow(g_hButtonSetEnd, FALSE);
-   EnableWindow(g_hButtonCut, FALSE);
-   EnableWindow(g_hCheckboxMergeAudio, FALSE);
+    EnableWindow(g_hButtonSetEnd, FALSE);
+    EnableWindow(g_hEditStartTime, FALSE);
+    EnableWindow(g_hEditEndTime, FALSE);
+    EnableWindow(g_hButtonCut, FALSE);
+    EnableWindow(g_hCheckboxMergeAudio, FALSE);
     EnableWindow(g_hRadioCopyCodec, FALSE);
     EnableWindow(g_hRadioH264, FALSE);
     EnableWindow(g_hEditBitrate, FALSE);
@@ -512,6 +596,8 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         // Enable editing controls and reset points
         EnableWindow(g_hButtonSetStart, TRUE);
         EnableWindow(g_hButtonSetEnd, TRUE);
+        EnableWindow(g_hEditStartTime, TRUE);
+        EnableWindow(g_hEditEndTime, TRUE);
         EnableWindow(g_hButtonCut, TRUE);
         EnableWindow(g_hCheckboxMergeAudio, TRUE);
         EnableWindow(g_hRadioCopyCodec, TRUE);
@@ -520,6 +606,7 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
         UpdateCutInfoLabel(hwnd);
+        UpdateCutTimeEdits();
 
         UpdateControls();
         UpdateTimeline();
@@ -553,6 +640,8 @@ void UpdateControls()
     // Update editing controls
     EnableWindow(g_hButtonSetStart, isLoaded);
     EnableWindow(g_hButtonSetEnd, isLoaded);
+    EnableWindow(g_hEditStartTime, isLoaded);
+    EnableWindow(g_hEditEndTime, isLoaded);
     EnableWindow(g_hButtonCut, isLoaded && g_cutStartTime >= 0 && g_cutEndTime > g_cutStartTime);
 
    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
@@ -707,6 +796,35 @@ std::wstring FormatTime(double totalSeconds, bool showMilliseconds)
     return std::wstring(buffer);
 }
 
+double ParseTimeString(const std::wstring& str)
+{
+    int h = 0, m = 0;
+    double s = 0.0;
+    if (swscanf(str.c_str(), L"%d:%d:%lf", &h, &m, &s) == 3)
+        return h * 3600 + m * 60 + s;
+    if (swscanf(str.c_str(), L"%d:%lf", &m, &s) == 2)
+        return m * 60 + s;
+    return -1.0;
+}
+
+void UpdateCutTimeEdits()
+{
+    if (g_hEditStartTime)
+    {
+        if (g_cutStartTime >= 0)
+            SetWindowTextW(g_hEditStartTime, FormatTime(g_cutStartTime, true).c_str());
+        else
+            SetWindowTextW(g_hEditStartTime, L"");
+    }
+    if (g_hEditEndTime)
+    {
+        if (g_cutEndTime >= 0)
+            SetWindowTextW(g_hEditEndTime, FormatTime(g_cutEndTime, true).c_str());
+        else
+            SetWindowTextW(g_hEditEndTime, L"");
+    }
+}
+
 void UpdateCutInfoLabel(HWND hwnd)
 {
     wchar_t buffer[128];
@@ -736,6 +854,7 @@ void UpdateCutInfoLabel(HWND hwnd)
     SetWindowTextW(g_hLabelCutInfo, buffer);
     // Also update the cut button state
     UpdateControls();
+    UpdateCutTimeEdits();
 }
 
 void OnSetStartClicked(HWND hwnd)
@@ -747,6 +866,7 @@ void OnSetStartClicked(HWND hwnd)
         g_cutEndTime = -1.0; // Invalidate end time if it's before new start time
     }
     UpdateCutInfoLabel(hwnd);
+    UpdateCutTimeEdits();
 }
 
 void OnSetEndClicked(HWND hwnd)
@@ -760,6 +880,7 @@ void OnSetEndClicked(HWND hwnd)
     }
     g_cutEndTime = currentTime;
     UpdateCutInfoLabel(hwnd);
+    UpdateCutTimeEdits();
 }
 
 void OnCutClicked(HWND hwnd)
@@ -842,12 +963,14 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hLabelEditing, audioControlsX, editingControlsY, 200, 20, TRUE);
     MoveWindow(g_hButtonSetStart, audioControlsX, editingControlsY + 25, 95, 25, TRUE);
     MoveWindow(g_hButtonSetEnd, audioControlsX + 105, editingControlsY + 25, 95, 25, TRUE);
-    MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 55, 200, 40, TRUE);
-    MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 100, 200, 30, TRUE);
-    MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 135, 200, 25, TRUE);
-    MoveWindow(g_hRadioCopyCodec, audioControlsX, editingControlsY + 165, 100, 20, TRUE);
-    MoveWindow(g_hRadioH264, audioControlsX + 105, editingControlsY + 165, 100, 20, TRUE);
-    MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 190, 200, 20, TRUE);
+    MoveWindow(g_hEditStartTime, audioControlsX, editingControlsY + 55, 95, 20, TRUE);
+    MoveWindow(g_hEditEndTime, audioControlsX + 105, editingControlsY + 55, 95, 20, TRUE);
+    MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 80, 200, 40, TRUE);
+    MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 125, 200, 30, TRUE);
+    MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 160, 200, 25, TRUE);
+    MoveWindow(g_hRadioCopyCodec, audioControlsX, editingControlsY + 190, 100, 20, TRUE);
+    MoveWindow(g_hRadioH264, audioControlsX + 105, editingControlsY + 190, 100, 20, TRUE);
+    MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 215, 200, 20, TRUE);
 
     // Video area (takes up remaining space)
     int videoSectionWidth = clientRect.right - audioControlsWidth - 30;
@@ -914,12 +1037,28 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             double dur = g_videoPlayer->GetDuration();
             double seekTime = ratio * dur;
 
-            g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
-            if (g_wasPlayingBeforeDrag)
-                g_videoPlayer->Pause();
+            int startX = (g_cutStartTime >= 0 && dur > 0) ? (int)((g_cutStartTime / dur) * rc.right) : -1000;
+            int endX = (g_cutEndTime >= 0 && dur > 0) ? (int)((g_cutEndTime / dur) * rc.right) : -1000;
+            int margin = 5;
+            if (abs(x - startX) <= margin)
+            {
+                g_timelineDragMode = DragMode::StartMarker;
+            }
+            else if (abs(x - endX) <= margin)
+            {
+                g_timelineDragMode = DragMode::EndMarker;
+            }
+            else
+            {
+                g_timelineDragMode = DragMode::Cursor;
+                g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
+                if (g_wasPlayingBeforeDrag)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToTime(seekTime);
+            }
+
             g_isTimelineDragging = true;
             SetCapture(hwnd);
-            g_videoPlayer->SeekToTime(seekTime);
             InvalidateRect(hwnd, NULL, FALSE);
             UpdateControls();
             return 0;
@@ -934,7 +1073,28 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
             double dur = g_videoPlayer->GetDuration();
             double seekTime = ratio * dur;
-            g_videoPlayer->SeekToTime(seekTime);
+
+            if (g_timelineDragMode == DragMode::Cursor)
+            {
+                g_videoPlayer->SeekToTime(seekTime);
+            }
+            else if (g_timelineDragMode == DragMode::StartMarker)
+            {
+                if (g_cutEndTime >= 0 && seekTime >= g_cutEndTime)
+                    seekTime = g_cutEndTime - 0.01;
+                if (seekTime < 0) seekTime = 0;
+                g_cutStartTime = seekTime;
+                UpdateCutInfoLabel(GetParent(hwnd));
+            }
+            else if (g_timelineDragMode == DragMode::EndMarker)
+            {
+                if (g_cutStartTime >= 0 && seekTime <= g_cutStartTime)
+                    seekTime = g_cutStartTime + 0.01;
+                g_cutEndTime = seekTime;
+                UpdateCutInfoLabel(GetParent(hwnd));
+            }
+
+            UpdateCutTimeEdits();
             InvalidateRect(hwnd, NULL, FALSE);
             UpdateControls();
             return 0;
@@ -951,9 +1111,31 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
             double dur = g_videoPlayer->GetDuration();
             double seekTime = ratio * dur;
-            g_videoPlayer->SeekToTime(seekTime);
-            if (g_wasPlayingBeforeDrag)
-                g_videoPlayer->Play();
+
+            if (g_timelineDragMode == DragMode::Cursor)
+            {
+                g_videoPlayer->SeekToTime(seekTime);
+                if (g_wasPlayingBeforeDrag)
+                    g_videoPlayer->Play();
+            }
+            else if (g_timelineDragMode == DragMode::StartMarker)
+            {
+                if (g_cutEndTime >= 0 && seekTime >= g_cutEndTime)
+                    seekTime = g_cutEndTime - 0.01;
+                if (seekTime < 0) seekTime = 0;
+                g_cutStartTime = seekTime;
+                UpdateCutInfoLabel(GetParent(hwnd));
+            }
+            else if (g_timelineDragMode == DragMode::EndMarker)
+            {
+                if (g_cutStartTime >= 0 && seekTime <= g_cutStartTime)
+                    seekTime = g_cutStartTime + 0.01;
+                g_cutEndTime = seekTime;
+                UpdateCutInfoLabel(GetParent(hwnd));
+            }
+
+            g_timelineDragMode = DragMode::None;
+            UpdateCutTimeEdits();
             InvalidateRect(hwnd, NULL, FALSE);
             UpdateControls();
             return 0;
@@ -972,13 +1154,35 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             double dur = g_videoPlayer->GetDuration();
             double cur = g_videoPlayer->GetCurrentTime();
-            int x = (dur > 0) ? (int)((cur / dur) * rc.right) : 0;
+            int width = rc.right;
+            int x = (dur > 0) ? (int)((cur / dur) * width) : 0;
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(200,0,0));
             HGDIOBJ old = SelectObject(hdc, pen);
             MoveToEx(hdc, x, 0, NULL);
             LineTo(hdc, x, rc.bottom);
             SelectObject(hdc, old);
             DeleteObject(pen);
+
+            if (g_cutStartTime >= 0)
+            {
+                int sx = (int)((g_cutStartTime / dur) * width);
+                pen = CreatePen(PS_SOLID, 1, RGB(0,200,0));
+                old = SelectObject(hdc, pen);
+                MoveToEx(hdc, sx, 0, NULL);
+                LineTo(hdc, sx, rc.bottom);
+                SelectObject(hdc, old);
+                DeleteObject(pen);
+            }
+            if (g_cutEndTime >= 0)
+            {
+                int ex = (int)((g_cutEndTime / dur) * width);
+                pen = CreatePen(PS_SOLID, 1, RGB(0,0,200));
+                old = SelectObject(hdc, pen);
+                MoveToEx(hdc, ex, 0, NULL);
+                LineTo(hdc, ex, rc.bottom);
+                SelectObject(hdc, old);
+                DeleteObject(pen);
+            }
         }
         EndPaint(hwnd, &ps);
         return 0;
