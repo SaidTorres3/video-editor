@@ -28,6 +28,13 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - **Track Volume Slider**: Adjust volume for the currently selected track (0-200%)
 - **Master Volume Slider**: Control overall volume for all audio tracks
 
+### Cutting and Exporting Clips
+- **Set Start/End Points**: Mark the portion of the video to export
+- **Merge Audio Tracks**: Combine all unmuted tracks into one output stream
+- **Codec Options**: Copy video/audio codecs for a fast cut or convert to H.264
+- **Bitrate Limit**: Specify a max bitrate when converting to H.264
+- **Progress Window**: A small window shows export progress in real time
+
 ## Technical Implementation
 
 ### Video Rendering Architecture
@@ -116,6 +123,11 @@ The application supports all audio formats that FFmpeg can decode, including:
 - Try adjusting the audio buffer size in the code
 - Check system audio latency settings
 - Ensure sufficient CPU resources for real-time processing
+
+### Debug Logs
+All diagnostic output from the application is written to `debug.log` in the
+working directory. Critical errors will also be shown in popup windows during
+export operations.
 
 ## Future Enhancements
 - Audio effects and filters
