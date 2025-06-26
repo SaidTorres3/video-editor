@@ -947,6 +947,24 @@ LRESULT CALLBACK SeekBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, 
             UpdateControls();
         }
         break;
+    case WM_KEYDOWN:
+        // Prevent the trackbar from handling navigation keys when focused
+        switch (wParam)
+        {
+        case VK_LEFT:
+        case VK_RIGHT:
+        case 'J':
+        case 'j':
+        case 'L':
+        case 'l':
+        case 'K':
+        case 'k':
+        case VK_SPACE:
+        case VK_OEM_COMMA:
+        case VK_OEM_PERIOD:
+            return 0;
+        }
+        break;
     }
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
