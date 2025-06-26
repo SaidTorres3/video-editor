@@ -37,7 +37,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       frame(nullptr), frameRGB(nullptr), packet(nullptr), swsContext(nullptr),
       buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
-      totalFrames(0), currentPts(0.0), duration(0.0), videoWindow(nullptr),
+      totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0), videoWindow(nullptr),
       d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
@@ -119,6 +119,22 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
     UnloadVideo();
     return false;
   }
+
+  // Determine the earliest stream start time for synchronization
+  startTimeOffset = 0.0;
+  double minStart = std::numeric_limits<double>::max();
+  for (unsigned i = 0; i < formatContext->nb_streams; ++i)
+  {
+    AVStream *s = formatContext->streams[i];
+    if (s->start_time != AV_NOPTS_VALUE)
+    {
+      double t = s->start_time * av_q2d(s->time_base);
+      if (t < minStart)
+        minStart = t;
+    }
+  }
+  if (minStart != std::numeric_limits<double>::max())
+    startTimeOffset = minStart;
 
   // Initialize audio tracks
   if (!InitializeAudioTracks())
@@ -353,12 +369,16 @@ bool VideoPlayer::DecodeNextFrame()
             0, frameHeight,
             frameRGB->data, frameRGB->linesize);
         AVStream *vs = formatContext->streams[videoStreamIndex];
+        double pts = 0.0;
         if (frame->best_effort_timestamp != AV_NOPTS_VALUE)
-          currentPts = frame->best_effort_timestamp * av_q2d(vs->time_base);
+          pts = frame->best_effort_timestamp * av_q2d(vs->time_base);
         else if (frame->pts != AV_NOPTS_VALUE)
-          currentPts = frame->pts * av_q2d(vs->time_base);
+          pts = frame->pts * av_q2d(vs->time_base);
         else
-          currentPts += (frameRate > 0 ? 1.0 / frameRate : 0.0);
+          pts = currentPts + (frameRate > 0 ? 1.0 / frameRate : 0.0);
+        currentPts = pts - startTimeOffset;
+        if (currentPts < 0.0)
+          currentPts = 0.0;
         currentFrame++;
         UpdateDisplay();
         return true;
@@ -440,6 +460,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
   AVStream *vs = formatContext->streams[videoStreamIndex];
   AVRational fps = av_d2q(frameRate, 100000);
   int64_t ts = av_rescale_q(frameNumber, av_inv_q(fps), vs->time_base);
+  ts += (int64_t)(startTimeOffset / av_q2d(vs->time_base));
   av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
   avcodec_flush_buffers(codecContext);
   for (auto &track : audioTracks)
@@ -462,7 +483,7 @@ void VideoPlayer::SeekToTime(double seconds)
   if (!isLoaded)
     return;
   AVStream *vs = formatContext->streams[videoStreamIndex];
-  int64_t ts = (int64_t)(seconds / av_q2d(vs->time_base));
+  int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));
   av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
   avcodec_flush_buffers(codecContext);
   for (auto &track : audioTracks)
@@ -802,6 +823,15 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
   ret = avcodec_receive_frame(track->codecContext, track->frame);
   if (ret < 0)
     return false;
+
+  AVStream *as = formatContext->streams[track->streamIndex];
+  double framePts = 0.0;
+  if (track->frame->best_effort_timestamp != AV_NOPTS_VALUE)
+    framePts = track->frame->best_effort_timestamp * av_q2d(as->time_base);
+  else if (track->frame->pts != AV_NOPTS_VALUE)
+    framePts = track->frame->pts * av_q2d(as->time_base);
+  if (framePts - startTimeOffset < 0.0)
+    return true; // Drop early audio
 
   // Resample audio
   int outSamples = swr_get_out_samples(track->swrContext, track->frame->nb_samples);
