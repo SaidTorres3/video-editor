@@ -34,6 +34,9 @@
 #define ID_BUTTON_SET_END 1012
 #define ID_BUTTON_CUT 1013
 #define ID_CHECKBOX_MERGE_AUDIO 1014
+#define ID_RADIO_COPY_CODEC 1015
+#define ID_RADIO_H264 1016
+#define ID_SLIDER_QUALITY 1017
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
@@ -44,6 +47,7 @@ HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
 HWND g_hLabelCutInfo;
+HWND g_hRadioCopyCodec, g_hRadioH264, g_hSliderQuality, g_hLabelQuality;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
 
@@ -135,6 +139,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case ID_BUTTON_CUT:
             OnCutClicked(hwnd);
+            break;
+        case ID_RADIO_COPY_CODEC:
+        case ID_RADIO_H264:
+            UpdateControls();
             break;
         }
         
@@ -425,7 +433,43 @@ void CreateControls(HWND hwnd)
        hwnd, (HMENU)ID_CHECKBOX_MERGE_AUDIO,
        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
    SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, BST_CHECKED, 0);
-    ApplyDarkTheme(g_hCheckboxMergeAudio);
+   ApplyDarkTheme(g_hCheckboxMergeAudio);
+
+    g_hRadioCopyCodec = CreateWindow(
+        L"BUTTON", L"Keep Codec (fast)",
+        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+        340, 515, 200, 20,
+        hwnd, (HMENU)ID_RADIO_COPY_CODEC,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    SendMessage(g_hRadioCopyCodec, BM_SETCHECK, BST_CHECKED, 0);
+    ApplyDarkTheme(g_hRadioCopyCodec);
+
+    g_hRadioH264 = CreateWindow(
+        L"BUTTON", L"Convert to H.264",
+        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+        340, 540, 200, 20,
+        hwnd, (HMENU)ID_RADIO_H264,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hRadioH264);
+
+    g_hLabelQuality = CreateWindow(
+        L"STATIC", L"Quality (18-28):",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        340, 565, 200, 20,
+        hwnd, nullptr,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelQuality);
+
+    g_hSliderQuality = CreateWindow(
+        TRACKBAR_CLASS, L"Quality",
+        WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
+        340, 585, 200, 30,
+        hwnd, (HMENU)ID_SLIDER_QUALITY,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    SendMessage(g_hSliderQuality, TBM_SETRANGE, TRUE, MAKELONG(18, 28));
+    SendMessage(g_hSliderQuality, TBM_SETPOS, TRUE, 23);
+    EnableWindow(g_hSliderQuality, FALSE);
+    ApplyDarkTheme(g_hSliderQuality);
 
 
     // Disable controls until video is loaded
@@ -440,7 +484,11 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hButtonSetStart, FALSE);
     EnableWindow(g_hButtonSetEnd, FALSE);
     EnableWindow(g_hButtonCut, FALSE);
-   EnableWindow(g_hCheckboxMergeAudio, FALSE);
+    EnableWindow(g_hCheckboxMergeAudio, FALSE);
+    EnableWindow(g_hRadioCopyCodec, FALSE);
+    EnableWindow(g_hRadioH264, FALSE);
+    EnableWindow(g_hSliderQuality, FALSE);
+    EnableWindow(g_hLabelQuality, FALSE);
 }
 
 void OpenVideoFile(HWND hwnd)
@@ -490,6 +538,10 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         EnableWindow(g_hButtonSetEnd, TRUE);
         EnableWindow(g_hButtonCut, TRUE);
         EnableWindow(g_hCheckboxMergeAudio, TRUE);
+        EnableWindow(g_hRadioCopyCodec, TRUE);
+        EnableWindow(g_hRadioH264, TRUE);
+        EnableWindow(g_hLabelQuality, TRUE);
+        EnableWindow(g_hSliderQuality, SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED);
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
         UpdateCutInfoLabel(hwnd);
@@ -528,8 +580,13 @@ void UpdateControls()
     EnableWindow(g_hButtonSetEnd, isLoaded);
     EnableWindow(g_hButtonCut, isLoaded && g_cutStartTime >= 0 && g_cutEndTime > g_cutStartTime);
 
-   bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
-   EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
+    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
+    EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
+    EnableWindow(g_hRadioCopyCodec, isLoaded);
+    EnableWindow(g_hRadioH264, isLoaded);
+    EnableWindow(g_hLabelQuality, isLoaded);
+    BOOL h264Checked = (SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    EnableWindow(g_hSliderQuality, isLoaded && h264Checked);
 
 
     if (isLoaded)
@@ -760,7 +817,9 @@ void OnCutClicked(HWND hwnd)
         EnableWindow(hwnd, FALSE); // Disable UI during cut
 
         bool mergeAudio = IsDlgButtonChecked(hwnd, ID_CHECKBOX_MERGE_AUDIO) == BST_CHECKED;
-        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime, mergeAudio);
+        bool reencode = IsDlgButtonChecked(hwnd, ID_RADIO_H264) == BST_CHECKED;
+        int quality = (int)SendMessage(g_hSliderQuality, TBM_GETPOS, 0, 0);
+        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime, mergeAudio, reencode, quality);
 
         EnableWindow(hwnd, TRUE); // Re-enable UI
 
@@ -808,6 +867,10 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 55, 200, 40, TRUE);
     MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 100, 200, 30, TRUE);
     MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 135, 200, 25, TRUE);
+    MoveWindow(g_hRadioCopyCodec, audioControlsX, editingControlsY + 165, 200, 20, TRUE);
+    MoveWindow(g_hRadioH264, audioControlsX, editingControlsY + 185, 200, 20, TRUE);
+    MoveWindow(g_hLabelQuality, audioControlsX, editingControlsY + 205, 200, 20, TRUE);
+    MoveWindow(g_hSliderQuality, audioControlsX, editingControlsY + 230, 200, 30, TRUE);
 
     // Video area (takes up remaining space)
     int videoSectionWidth = clientRect.right - audioControlsWidth - 30;

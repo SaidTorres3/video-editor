@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+#include <cstdio>
 
 // Link with Windows Audio libraries
 #pragma comment(lib, "ole32.lib")
@@ -108,6 +109,7 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
   }
 
   isLoaded = true;
+  loadedFilename = filename;
   currentFrame = 0;
   AVStream *vs = formatContext->streams[videoStreamIndex];
   AVRational guessed = av_guess_frame_rate(formatContext, vs, nullptr);
@@ -222,6 +224,7 @@ void VideoPlayer::UnloadVideo()
   currentPts = 0.0;
   totalFrames = 0;
   duration = 0.0;
+  loadedFilename.clear();
 }
 
 bool VideoPlayer::Play()
@@ -920,9 +923,35 @@ void VideoPlayer::PlaybackThreadFunction()
   isPlaying = false;
 }
 
-bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime, double endTime, bool mergeAudio)
+bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime, double endTime, bool mergeAudio, bool reencodeToH264, int quality)
 {
     if (!isLoaded) return false;
+
+    if (reencodeToH264) {
+        if (loadedFilename.empty()) return false;
+        int inSize = WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string utf8Input(inSize, 0);
+        WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], inSize, nullptr, nullptr);
+
+        int outSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string utf8Out(outSize, 0);
+        WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Out[0], outSize, nullptr, nullptr);
+
+        int activeTracks = 0;
+        for (const auto &t : audioTracks) {
+            if (!t->isMuted) activeTracks++; 
+        }
+        std::string filterArg;
+        if (mergeAudio && activeTracks > 1) {
+            filterArg = "-filter_complex amix=inputs=" + std::to_string(activeTracks);
+        }
+        char cmd[1024];
+        snprintf(cmd, sizeof(cmd),
+                 "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" %s -c:v libx264 -crf %d -preset veryfast -c:a aac \"%s\"",
+                 startTime, endTime, utf8Input.c_str(), filterArg.c_str(), quality, utf8Out.c_str());
+        int result = system(cmd);
+        return result == 0;
+    }
 
     // Convert filename to UTF-8
     int bufSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -945,6 +974,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     AVStream* video_out_stream = avformat_new_stream(outFormatContext, nullptr);
     avcodec_parameters_copy(video_out_stream->codecpar, formatContext->streams[videoStreamIndex]->codecpar);
     video_out_stream->codecpar->codec_tag = 0;
+    video_out_stream->time_base = formatContext->streams[videoStreamIndex]->time_base;
 
     // Identify unmuted audio streams
     for (const auto& track : audioTracks) {
@@ -958,6 +988,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         AVStream* audio_out_stream = avformat_new_stream(outFormatContext, nullptr);
         avcodec_parameters_copy(audio_out_stream->codecpar, formatContext->streams[unmuted_audio_streams[0]]->codecpar);
         audio_out_stream->codecpar->codec_tag = 0;
+        audio_out_stream->time_base = formatContext->streams[unmuted_audio_streams[0]]->time_base;
     } else {
         // Map each unmuted audio stream individually
         for (int stream_index : unmuted_audio_streams) {
@@ -965,6 +996,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             AVStream* audio_out_stream = avformat_new_stream(outFormatContext, nullptr);
             avcodec_parameters_copy(audio_out_stream->codecpar, formatContext->streams[stream_index]->codecpar);
             audio_out_stream->codecpar->codec_tag = 0;
+            audio_out_stream->time_base = formatContext->streams[stream_index]->time_base;
         }
     }
 
