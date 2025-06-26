@@ -950,11 +950,11 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     }
 
     int bufSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8Output(bufSize, 0);
+    std::string utf8Output(bufSize - 1, 0);
     WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Output[0], bufSize, nullptr, nullptr);
 
     bufSize = WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8Input(bufSize, 0);
+    std::string utf8Input(bufSize - 1, 0);
     WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], bufSize, nullptr, nullptr);
 
     std::vector<int> activeTracks;
