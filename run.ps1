@@ -1,5 +1,3 @@
-# PowerShell script to build and run the Video Editor
-
 param(
     [string]$FFmpegPath = "C:\Program Files\ffmpeg"
 )
@@ -7,53 +5,86 @@ param(
 Write-Host "Video Editor Build Script" -ForegroundColor Green
 Write-Host "=========================" -ForegroundColor Green
 
-# ////////////////////// EXPERIMENTAL CODE //////////////////////
-# Check CMake
-if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-    Write-Host "`n❌ CMake no está instalado." -ForegroundColor Red
-    Write-Host "¿Quieres que lo descargue con winget? (Requiere permisos de administrador)" -ForegroundColor Yellow
-    $resp = Read-Host "[s/n]"
-    if ($resp -eq "s") {
-        Start-Process "powershell" "-Command winget install Kitware.CMake" -Verb RunAs
-        return
-    } else {
-        Write-Host "Por favor instala CMake manualmente desde https://cmake.org/download/" -ForegroundColor Cyan
-        exit 1
+# ==================== EXPERIMENTAL CODE ====================
+
+function Add-ToPath {
+    param($dir)
+    if (Test-Path $dir -and -not ($env:Path -split ';' | Where-Object { $_ -eq $dir })) {
+        Write-Host "Añadiendo '$dir' a PATH de esta sesión..." -ForegroundColor Cyan
+        $env:Path = "$env:Path;$dir"
     }
 }
 
-# Check if MSBuild is available (Visual Studio or Build Tools)
+# --- 1) Verificar CMake ---
+$cmakeExe = "$env:ProgramFiles\CMake\bin\cmake.exe"
+if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+    if (Test-Path $cmakeExe) {
+        # Instalado pero no en PATH
+        Add-ToPath (Split-Path $cmakeExe)
+        Write-Host "✅ CMake detectado e integrado en PATH." -ForegroundColor Green
+    } else {
+        Write-Host "`n❌ CMake no está instalado." -ForegroundColor Red
+        Write-Host "¿Lo instalo con winget? (Requiere admin)" -ForegroundColor Yellow
+        $resp = Read-Host "[s/n]"
+        if ($resp -eq "s") {
+            Write-Host "Instalando CMake vía winget, espera un momento…" -ForegroundColor Cyan
+            # -e = exact match, --silent = sin prompts
+            Start-Process winget -ArgumentList 'install','Kitware.CMake','-e','--silent' -Verb RunAs -Wait
+            # Tras instalación, integramos a PATH
+            Add-ToPath (Split-Path $cmakeExe)
+            if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+                Write-Host "❌ No se encontró CMake tras la instalación. Por favor reinicia la consola." -ForegroundColor Red
+                exit 1
+            }
+            Write-Host "✅ CMake instalado y listo en esta sesión." -ForegroundColor Green
+        } else {
+            Write-Host "Por favor instala CMake manualmente desde https://cmake.org/download/" -ForegroundColor Cyan
+            exit 1
+        }
+    }
+} else {
+    Write-Host "✅ CMake disponible: $(Get-Command cmake).Source" -ForegroundColor Green
+}
+
+# --- 2) Verificar MSBuild (VS o Build Tools) ---
 function Find-MSBuild {
-    $vsPath = "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
-    if (Test-Path $vsPath) {
-        return $vsPath
+    $vsPaths = @(
+        "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+    )
+    foreach ($p in $vsPaths) {
+        if (Test-Path $p) { return $p }
     }
-
-    # Buscar en el registro si hay más instalaciones
-    $paths = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\" -Recurse -Filter "MSBuild.exe" -ErrorAction SilentlyContinue
-    if ($paths.Count -gt 0) {
-        return $paths[0].FullName
-    }
-
+    # Buscar en registros de carpetas
+    $found = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022" -Recurse -Filter "MSBuild.exe" -ErrorAction SilentlyContinue
+    if ($found) { return $found[0].FullName }
     return $null
 }
 
 $msbuildPath = Find-MSBuild
 if (-not $msbuildPath) {
-    Write-Host "`n❌ MSBuild (Visual Studio o Build Tools) no encontrado." -ForegroundColor Red
-    Write-Host "¿Quieres que descargue los Build Tools de Visual Studio? (Requiere permisos de administrador)" -ForegroundColor Yellow
+    Write-Host "`n❌ MSBuild no encontrado." -ForegroundColor Red
+    Write-Host "¿Instalo Visual Studio Build Tools con winget? (Requiere admin)" -ForegroundColor Yellow
     $resp = Read-Host "[s/n]"
     if ($resp -eq "s") {
-        Start-Process "powershell" "-Command winget install Microsoft.VisualStudio.2022.BuildTools" -Verb RunAs
-        return
+        Write-Host "Instalando Build Tools vía winget, espera un momento…" -ForegroundColor Cyan
+        Start-Process winget -ArgumentList 'install','Microsoft.VisualStudio.2022.BuildTools','-e','--silent' -Verb RunAs -Wait
+        # Rebuscar ahora
+        $msbuildPath = Find-MSBuild
+        if (-not $msbuildPath) {
+            Write-Host "❌ Aún no se encuentra MSBuild. Reinicia la consola o instala manualmente." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "✅ MSBuild localizado en: $msbuildPath" -ForegroundColor Green
     } else {
         Write-Host "Descarga desde: https://visualstudio.microsoft.com/visual-cpp-build-tools/" -ForegroundColor Cyan
         exit 1
     }
 } else {
-    Write-Host "`n✅ MSBuild encontrado en: $msbuildPath" -ForegroundColor Green
+    Write-Host "✅ MSBuild encontrado en: $msbuildPath" -ForegroundColor Green
 }
-# ////////////////////// END OF EXPERIMENTAL CODE //////////////////////
+
+# ==================== FIN DEL EXPERIMENTAL CODE ====================
 
 # Define default FFmpeg path
 if (-not $FFmpegPath) {
@@ -64,19 +95,16 @@ if (-not $FFmpegPath) {
 if (-not (Test-Path "$FFmpegPath\bin\ffmpeg.exe")) {
     Write-Host "FFmpeg not found. Downloading automatically..." -ForegroundColor Yellow
 
-    $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
-    $zipPath = "$env:TEMP\ffmpeg.zip"
+    $ffmpegUrl   = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+    $zipPath     = "$env:TEMP\ffmpeg.zip"
     $extractPath = "$PSScriptRoot\third_party"
 
-    # Download FFmpeg ZIP
     Write-Host "Downloading FFmpeg from $ffmpegUrl..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath
 
-    # Extract ZIP
     Write-Host "Extracting FFmpeg..." -ForegroundColor Yellow
     Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
 
-    # Find the folder inside and move it to $FFmpegPath
     $extracted = Get-ChildItem -Directory -Path $extractPath | Where-Object { $_.Name -like "ffmpeg*" } | Select-Object -First 1
     if ($extracted) {
         Move-Item "$extractPath\$($extracted.Name)" "$FFmpegPath" -Force
@@ -95,7 +123,6 @@ $requiredPaths = @(
     "$FFmpegPath\lib\avcodec.lib",
     "$FFmpegPath\bin"
 )
-
 foreach ($path in $requiredPaths) {
     if (-not (Test-Path -Path $path)) {
         Write-Host "ERROR: Required FFmpeg component not found: $path" -ForegroundColor Red
@@ -103,24 +130,17 @@ foreach ($path in $requiredPaths) {
         exit 1
     }
 }
-
 Write-Host "FFmpeg found at: $FFmpegPath" -ForegroundColor Green
 
-# Check if the build directory exists, if not, configure CMake
+# Configurar o reconfigurar CMake
 if (-not (Test-Path -Path ".\build")) {
     Write-Host "Build directory not found. Configuring CMake..." -ForegroundColor Yellow
     cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "CMake configuration failed."
-        exit 1
-    }
+    if ($LASTEXITCODE -ne 0) { Write-Error "CMake configuration failed."; exit 1 }
 } else {
     Write-Host "Build directory exists. Reconfiguring with FFmpeg path..." -ForegroundColor Yellow
     cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "CMake reconfiguration failed."
-        exit 1
-    }
+    if ($LASTEXITCODE -ne 0) { Write-Error "CMake reconfiguration failed."; exit 1 }
 }
 
 # Build the project
@@ -130,57 +150,34 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "CMake build failed."
     Write-Host ""
     Write-Host "Common issues:" -ForegroundColor Yellow
-    Write-Host "- Make sure you have Visual Studio or Visual Studio Build Tools installed" -ForegroundColor Cyan
-    Write-Host "- Verify FFmpeg libraries are for the correct architecture (x64/x86)" -ForegroundColor Cyan
+    Write-Host "- Asegúrate de tener Visual Studio o Build Tools instalados" -ForegroundColor Cyan
+    Write-Host "- Verifica que las librerías de FFmpeg sean x64 si tu build es x64" -ForegroundColor Cyan
     exit 1
 }
 
-# Copy FFmpeg DLLs manually if the automatic copy failed
+# Copiar DLLs de FFmpeg si faltan
 $dllSource = "$FFmpegPath\bin"
 $dllTarget = ".\build\Release"
-
 if (Test-Path -Path $dllTarget) {
     Write-Host "Copying FFmpeg DLLs..." -ForegroundColor Yellow
-    
-    $ffmpegDlls = Get-ChildItem -Path $dllSource -Filter "*.dll" | Where-Object { 
-        $_.Name -match "^(avcodec|avformat|avutil|swscale|swresample)" 
-    }
-    
+    $ffmpegDlls = Get-ChildItem -Path $dllSource -Filter "*.dll" |
+                  Where-Object { $_.Name -match "^(avcodec|avformat|avutil|swscale|swresample)" }
     foreach ($dll in $ffmpegDlls) {
-        $targetPath = Join-Path $dllTarget $dll.Name
-        if (-not (Test-Path -Path $targetPath)) {
-            Copy-Item -Path $dll.FullName -Destination $targetPath -Force
+        $dest = Join-Path $dllTarget $dll.Name
+        if (-not (Test-Path $dest)) {
+            Copy-Item -Path $dll.FullName -Destination $dest -Force
             Write-Host "  Copied: $($dll.Name)" -ForegroundColor Cyan
         }
     }
 }
 
-# Check if executable was created
+# Ejecutable
 $exePath = ".\build\Release\VideoEditor.exe"
 if (-not (Test-Path -Path $exePath)) {
-    Write-Host "ERROR: VideoEditor.exe was not created!" -ForegroundColor Red
-    Write-Host "Check the build output above for errors." -ForegroundColor Yellow
+    Write-Host "ERROR: VideoEditor.exe no fue creado!" -ForegroundColor Red
     exit 1
 }
 
-Write-Host ""
-Write-Host "Build completed successfully!" -ForegroundColor Green
+Write-Host "" ; Write-Host "Build completed successfully!" -ForegroundColor Green
 Write-Host "Running the Video Editor..." -ForegroundColor Yellow
-
-# Run the application
-try {
-    Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath -Parent)
-    Write-Host ""
-    Write-Host "Video Editor started!" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Usage Instructions:" -ForegroundColor Yellow
-    Write-Host "- Click 'Open Video' to load a video file" -ForegroundColor Cyan
-    Write-Host "- Use Play/Pause/Stop buttons to control playback" -ForegroundColor Cyan
-    Write-Host "- Use the slider to seek through the video" -ForegroundColor Cyan
-    Write-Host "- Supported formats: MP4, AVI, MOV, MKV, WMV, FLV, WebM, M4V, 3GP" -ForegroundColor Cyan
-} catch {
-    Write-Host "ERROR: Failed to start the application: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Try running the executable directly:" -ForegroundColor Yellow
-    Write-Host "$exePath" -ForegroundColor Cyan
-}
+Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath -Parent)
