@@ -103,6 +103,9 @@ private:
   int audioChannels;
   AVSampleFormat audioSampleFormat;
 
+  // Currently loaded file path
+  std::wstring loadedFilename;
+
 public:
   VideoPlayer(HWND parent);
   ~VideoPlayer();
@@ -134,7 +137,8 @@ public:
   float GetAudioTrackVolume(int trackIndex) const;
   void SetAudioTrackVolume(int trackIndex, float volume);
   void SetMasterVolume(float volume);
-  bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime, bool mergeAudio);
+  bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
+                bool mergeAudio, bool convertH264, int maxBitrate, HWND progressBar);
 
   // Timer callback
   static void CALLBACK TimerProc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD time);

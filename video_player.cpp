@@ -1,6 +1,8 @@
 // video_player.cpp
 #include "video_player.h"
 #include <iostream>
+#include <sstream>
+#include <cstdlib>
 #include <d2d1.h>
 #include <d2d1helper.h>
 #include <dxgiformat.h>
@@ -66,6 +68,7 @@ void VideoPlayer::CreateVideoWindow()
 bool VideoPlayer::LoadVideo(const std::wstring &filename)
 {
   UnloadVideo();
+  loadedFilename = filename;
 
   int bufSize = WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1, nullptr, 0, nullptr, nullptr);
   std::string utf8Filename(bufSize, 0);
@@ -920,172 +923,114 @@ void VideoPlayer::PlaybackThreadFunction()
   isPlaying = false;
 }
 
-bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime, double endTime, bool mergeAudio)
+
+bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
+                           double endTime, bool mergeAudio, bool convertH264,
+                           int maxBitrate, HWND progressBar)
 {
     if (!isLoaded) return false;
 
-    // Convert filename to UTF-8
     int bufSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8OutputFilename(bufSize, 0);
-    WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8OutputFilename[0], bufSize, nullptr, nullptr);
+    std::string utf8Output(bufSize, 0);
+    WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Output[0], bufSize, nullptr, nullptr);
 
-    AVFormatContext* outFormatContext = nullptr;
-    int ret = avformat_alloc_output_context2(&outFormatContext, nullptr, nullptr, utf8OutputFilename.c_str());
-    if (ret < 0 || !outFormatContext) {
-        std::cerr << "Could not create output context" << std::endl;
-        return false;
-    }
+    bufSize = WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string utf8Input(bufSize, 0);
+    WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], bufSize, nullptr, nullptr);
 
-    std::vector<int> stream_mapping;
-    int out_stream_index = 0;
-    std::vector<int> unmuted_audio_streams;
-
-    // Map video stream
-    stream_mapping.push_back(out_stream_index++);
-    AVStream* video_out_stream = avformat_new_stream(outFormatContext, nullptr);
-    avcodec_parameters_copy(video_out_stream->codecpar, formatContext->streams[videoStreamIndex]->codecpar);
-    video_out_stream->codecpar->codec_tag = 0;
-
-    // Identify unmuted audio streams
+    std::vector<int> activeTracks;
     for (const auto& track : audioTracks) {
-        if (!track->isMuted) {
-            unmuted_audio_streams.push_back(track->streamIndex);
-        }
+        if (!track->isMuted)
+            activeTracks.push_back(track->streamIndex);
     }
 
-    if (mergeAudio && unmuted_audio_streams.size() > 1) {
-        // Create a single audio stream for merging
-        AVStream* audio_out_stream = avformat_new_stream(outFormatContext, nullptr);
-        avcodec_parameters_copy(audio_out_stream->codecpar, formatContext->streams[unmuted_audio_streams[0]]->codecpar);
-        audio_out_stream->codecpar->codec_tag = 0;
+    std::ostringstream cmd;
+    cmd << "ffmpeg -y -ss " << startTime << " -to " << endTime << " -i \"" << utf8Input << "\" ";
+
+    if (mergeAudio && activeTracks.size() > 1) {
+        cmd << "-filter_complex \"";
+        for (size_t i = 0; i < activeTracks.size(); ++i) {
+            cmd << "[0:a:" << i << "]";
+        }
+        cmd << "amix=inputs=" << activeTracks.size() << "[aout]\" -map 0:v -map [aout] ";
+        cmd << "-c:a aac -b:a 192k ";
     } else {
-        // Map each unmuted audio stream individually
-        for (int stream_index : unmuted_audio_streams) {
-            stream_mapping.push_back(out_stream_index++);
-            AVStream* audio_out_stream = avformat_new_stream(outFormatContext, nullptr);
-            avcodec_parameters_copy(audio_out_stream->codecpar, formatContext->streams[stream_index]->codecpar);
-            audio_out_stream->codecpar->codec_tag = 0;
+        cmd << "-map 0:v ";
+        for (size_t i = 0; i < activeTracks.size(); ++i) {
+            cmd << "-map 0:a:" << i << " ";
         }
+        cmd << "-c:a copy ";
     }
 
-    // Open output file
-    if (!(outFormatContext->oformat->flags & AVFMT_NOFILE)) {
-        ret = avio_open(&outFormatContext->pb, utf8OutputFilename.c_str(), AVIO_FLAG_WRITE);
-        if (ret < 0) {
-            // Error handling
-            avformat_free_context(outFormatContext);
-            return false;
-        }
+    if (convertH264) {
+        cmd << "-c:v libx264 ";
+        if (maxBitrate > 0)
+            cmd << "-maxrate " << maxBitrate << "k ";
+        cmd << "-pix_fmt yuv420p ";
+    } else {
+        cmd << "-c:v copy ";
     }
 
-    AVDictionary* opts = nullptr;
-    if (mergeAudio && unmuted_audio_streams.size() > 1) {
-        std::string filter_spec;
-        for (int stream_index : unmuted_audio_streams) {
-            filter_spec += "[0:" + std::to_string(stream_index) + "]";
-        }
-        filter_spec += "amix=inputs=" + std::to_string(unmuted_audio_streams.size()) + "[a]";
-        av_dict_set(&opts, "filter_complex", filter_spec.c_str(), 0);
-        av_dict_set(&opts, "map", "0:v", 0);
-        av_dict_set(&opts, "map", "[a]", 0);
-    }
-    
-    // Write header
-    ret = avformat_write_header(outFormatContext, &opts);
-    av_dict_free(&opts);
-    if (ret < 0) {
-        // Error handling
-        avio_closep(&outFormatContext->pb);
-        avformat_free_context(outFormatContext);
+    cmd << "-progress pipe:1 -nostats \"" << utf8Output << "\"";
+
+    SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
+    HANDLE readPipe = NULL, writePipe = NULL;
+    if (!CreatePipe(&readPipe, &writePipe, &sa, 0))
+        return false;
+    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = writePipe;
+    si.hStdError = writePipe;
+
+    PROCESS_INFORMATION pi{};
+    std::string cmdStr = cmd.str();
+
+    std::vector<char> cmdBuf(cmdStr.begin(), cmdStr.end());
+    cmdBuf.push_back('\0');
+    BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    CloseHandle(writePipe);
+    if (!ok) {
+        CloseHandle(readPipe);
         return false;
     }
+    SendMessage(progressBar, PBM_SETPOS, 0, 0);
 
-    // Seek to start time
-    ret = av_seek_frame(formatContext, -1, startTime * AV_TIME_BASE, AVSEEK_FLAG_BACKWARD);
-    if (ret < 0) {
-       // Error handling
-       avformat_free_context(outFormatContext);
-       return false;
+    char buffer[256];
+    std::string line;
+    DWORD bytesRead = 0;
+    double totalMs = (endTime - startTime) * 1000.0;
+    while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr)) {
+        if (bytesRead == 0) break;
+        buffer[bytesRead] = 0;
+        line.append(buffer);
+        size_t pos;
+        while ((pos = line.find('\n')) != std::string::npos) {
+            std::string l = line.substr(0, pos);
+            line.erase(0, pos + 1);
+            if (l.rfind("out_time_ms=", 0) == 0) {
+                long long ms = _atoi64(l.substr(12).c_str()) / 1000;
+                int percent = static_cast<int>((ms / totalMs) * 100.0);
+                SendMessage(progressBar, PBM_SETPOS, percent, 0);
+            }
+        }
     }
 
-    AVPacket pkt;
-    std::vector<int64_t> start_ts(formatContext->nb_streams, AV_NOPTS_VALUE);
-    while (av_read_frame(formatContext, &pkt) >= 0) {
-        double ts_seconds = pkt.pts * av_q2d(formatContext->streams[pkt.stream_index]->time_base);
-        if (ts_seconds > endTime) {
-            av_packet_unref(&pkt);
-            break;
-        }
+    WaitForSingleObject(pi.hProcess, INFINITE);
 
-        bool is_unmuted_audio = false;
-        for (int stream_idx : unmuted_audio_streams) {
-            if (pkt.stream_index == stream_idx) {
-                is_unmuted_audio = true;
-                break;
-            }
-        }
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
 
-        if (pkt.stream_index != videoStreamIndex && !is_unmuted_audio) {
-            av_packet_unref(&pkt);
-            continue;
-        }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(readPipe);
 
-        if (ts_seconds >= startTime) {
-            if (start_ts[pkt.stream_index] == AV_NOPTS_VALUE) {
-                start_ts[pkt.stream_index] = pkt.pts;
-            }
-            int64_t offset = start_ts[pkt.stream_index];
+    SendMessage(progressBar, PBM_SETPOS, 100, 0);
 
-            AVStream* inStream = formatContext->streams[pkt.stream_index];
-            AVStream* outStream;
-
-            if (mergeAudio && is_unmuted_audio) {
-                outStream = outFormatContext->streams[1]; // Merged audio stream
-                pkt.stream_index = 1;
-            } else if (pkt.stream_index == videoStreamIndex) {
-                 outStream = outFormatContext->streams[0]; // Video stream
-                 pkt.stream_index = 0;
-            } else {
-                int current_audio_stream = 0;
-                for(size_t i = 0; i < unmuted_audio_streams.size(); ++i){
-                    if(unmuted_audio_streams[i] == inStream->index){
-                        current_audio_stream = i;
-                        break;
-                    }
-                }
-                outStream = outFormatContext->streams[1 + current_audio_stream];
-                pkt.stream_index = 1 + current_audio_stream;
-            }
-
-
-            pkt.pts = av_rescale_q(pkt.pts - offset, inStream->time_base, outStream->time_base);
-            if (pkt.dts != AV_NOPTS_VALUE)
-                pkt.dts = av_rescale_q(pkt.dts - offset, inStream->time_base, outStream->time_base);
-            if(pkt.dts > pkt.pts) pkt.dts = pkt.pts;
-            pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
-            pkt.pos = -1;
-
-            ret = av_interleaved_write_frame(outFormatContext, &pkt);
-            if (ret < 0) {
-                // Error handling...
-                break;
-            }
-        }
-        av_packet_unref(&pkt);
-    }
-
-    av_write_trailer(outFormatContext);
-    if (!(outFormatContext->oformat->flags & AVFMT_NOFILE)) {
-        avio_closep(&outFormatContext->pb);
-    }
-    avformat_free_context(outFormatContext);
-
-    // Reset format context for further use
-    av_seek_frame(formatContext, -1, 0, AVSEEK_FLAG_BACKWARD);
-
-    return true;
+    return exitCode == 0;
 }
-
 bool VideoPlayer::InitializeD2D()
 {
   return SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2dFactory));
