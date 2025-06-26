@@ -931,7 +931,9 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        FillRect(hdc, &rc, g_hbrBackground);
+        HBRUSH bg = CreateSolidBrush(RGB(70,70,70));
+        FillRect(hdc, &rc, bg);
+        DeleteObject(bg);
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             double dur = g_videoPlayer->GetDuration();
@@ -974,7 +976,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     twc.hInstance = hInstance;
     twc.lpszClassName = L"TimelineClass";
     twc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    twc.hbrBackground = (HBRUSH)GetStockObject(DKGRAY_BRUSH);
+    twc.hbrBackground = nullptr; // custom paint
     RegisterClass(&twc);
 
     HWND hwnd = CreateWindowEx(

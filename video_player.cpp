@@ -485,7 +485,7 @@ void VideoPlayer::SeekToTime(double seconds)
 
   currentFrame = (int64_t)(seconds * frameRate);
 
-  int maxFrames = (int)frameRate + 10; // safety cap ~1s
+  int maxFrames = 10; // decode a few frames for accuracy
   DecodeNextFrame();
   while (currentPts < seconds && maxFrames-- > 0)
     DecodeNextFrame();
