@@ -470,7 +470,11 @@ void VideoPlayer::SeekToTime(double seconds)
   AVStream *vs = formatContext->streams[videoStreamIndex];
   int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));
 
-  av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
+  // Seek directly to the requested timestamp. AVSEEK_FLAG_ANY allows seeking
+  // to non-keyframes so the timeline jumps exactly where the user clicked
+  // without having to decode many frames.
+  av_seek_frame(formatContext, videoStreamIndex, ts,
+                AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
   avcodec_flush_buffers(codecContext);
   for (auto &track : audioTracks)
   {
@@ -484,14 +488,10 @@ void VideoPlayer::SeekToTime(double seconds)
   }
 
   currentFrame = (int64_t)(seconds * frameRate);
+  currentPts = seconds;
 
-  int maxFrames = frameRate > 0 ? (int)(frameRate * 3) : 90; // decode up to ~3s
+  // Decode the frame at the requested timestamp to update the preview
   DecodeNextFrame();
-  while (currentPts < seconds && maxFrames-- > 0)
-  {
-    if (!DecodeNextFrame())
-      break;
-  }
 }
 
 double VideoPlayer::GetDuration() const
