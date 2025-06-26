@@ -945,8 +945,8 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         if (!t->isMuted)
             activeTracks++;
 
-    std::string cmd = "ffmpeg -y -ss " + std::to_string(startTime) + " -to " + std::to_string(endTime) +
-                       " -i \"" + utf8Input + "\" ";
+    std::string cmd = "ffmpeg -y -i \"" + utf8Input + "\" -ss " + std::to_string(startTime) +
+                       " -to " + std::to_string(endTime) + " ";
 
     std::string filter;
     if (mergeAudio && activeTracks > 1)
