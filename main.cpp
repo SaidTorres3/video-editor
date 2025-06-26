@@ -1,5 +1,6 @@
 // main.cpp
 #include <windows.h>
+#include <windowsx.h>
 #include <commdlg.h>  // For file dialog
 #include <commctrl.h> // For common controls
 #include <shellapi.h> // For drag-and-drop
@@ -20,15 +21,13 @@
 #define ID_BUTTON_PLAY 1002
 #define ID_BUTTON_PAUSE 1003
 #define ID_BUTTON_STOP 1004
-#define ID_SLIDER_SEEK 1005
+#define ID_TIMELINE 1005
 #define ID_TIMER_UPDATE 1006
 #define ID_LISTBOX_AUDIO_TRACKS 1007
 #define ID_BUTTON_MUTE_TRACK 1008
 #define ID_SLIDER_TRACK_VOLUME 1009
 #define ID_SLIDER_MASTER_VOLUME 1010
 
-// Range for the seek slider (higher value = finer granularity)
-#define SEEK_SLIDER_MAX 1000
 
 // Editing Control IDs
 #define ID_BUTTON_SET_START 1011
@@ -41,7 +40,7 @@
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
-HWND g_hSliderSeek;
+HWND g_hTimeline;
 HWND g_hStatusText;
 HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
 HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
@@ -52,6 +51,8 @@ HWND g_hLabelCutInfo;
 HWND g_hProgressWnd, g_hProgressBar;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
+bool g_isTimelineDragging = false;
+bool g_wasPlayingBeforeDrag = false;
 
 // Dark mode UI resources
 HFONT g_hFont = nullptr;
@@ -64,7 +65,7 @@ void CreateControls(HWND hwnd);
 void OpenVideoFile(HWND hwnd);
 void LoadVideoFile(HWND hwnd, const std::wstring& filename);
 void UpdateControls();
-void UpdateSeekBar();
+void UpdateTimeline();
 void UpdateAudioTrackList();
 void OnAudioTrackSelectionChanged();
 void OnMuteTrackClicked();
@@ -80,6 +81,7 @@ void ApplyDarkTheme(HWND hwnd);
 void ShowProgressWindow(HWND parent);
 void UpdateProgress(int percent);
 void CloseProgressWindow();
+LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 
 // Window procedure
@@ -130,7 +132,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             {
                 g_videoPlayer->Stop();
                 UpdateControls();
-                UpdateSeekBar();
+                UpdateTimeline();
             }
             break;
         case ID_BUTTON_MUTE_TRACK:
@@ -159,24 +161,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_HSCROLL:
-        if ((HWND)lParam == g_hSliderSeek && g_videoPlayer && g_videoPlayer->IsLoaded())
-        {
-            int pos = (int)SendMessage(g_hSliderSeek, TBM_GETPOS, 0, 0);
-            double duration = g_videoPlayer->GetDuration();
-            double seekTime = (pos / (double)SEEK_SLIDER_MAX) * duration;
-
-            bool wasPlaying = g_videoPlayer->IsPlaying();
-            if (wasPlaying)
-                g_videoPlayer->Pause();
-
-            g_videoPlayer->SeekToTime(seekTime);
-
-            if (wasPlaying)
-                g_videoPlayer->Play();
-
-            UpdateControls();
-        }
-        else if ((HWND)lParam == g_hSliderTrackVolume)
+        if ((HWND)lParam == g_hSliderTrackVolume)
         {
             OnTrackVolumeChanged();
         }
@@ -189,7 +174,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_TIMER:
         if (wParam == ID_TIMER_UPDATE)
         {
-            UpdateSeekBar();
+            UpdateTimeline();
             UpdateControls();
         }
         break;
@@ -302,16 +287,14 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonStop);
 
-    // Seek slider
-    g_hSliderSeek = CreateWindow(
-        TRACKBAR_CLASS, L"Seek",
-        WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
+    // Timeline
+    g_hTimeline = CreateWindow(
+        L"TimelineClass", nullptr,
+        WS_CHILD | WS_VISIBLE,
         10, 370, 600, 30, // Placeholder position
-        hwnd, (HMENU)ID_SLIDER_SEEK,
+        hwnd, (HMENU)ID_TIMELINE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderSeek, TBM_SETRANGE, TRUE, MAKELONG(0, SEEK_SLIDER_MAX));
-    SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, 0);
-    ApplyDarkTheme(g_hSliderSeek);
+    ApplyDarkTheme(g_hTimeline);
 
     // Status text
     g_hStatusText = CreateWindow(
@@ -470,7 +453,7 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hButtonPlay, FALSE);
     EnableWindow(g_hButtonPause, FALSE);
     EnableWindow(g_hButtonStop, FALSE);
-    EnableWindow(g_hSliderSeek, FALSE);
+    EnableWindow(g_hTimeline, FALSE);
     EnableWindow(g_hListBoxAudioTracks, FALSE);
     EnableWindow(g_hButtonMuteTrack, FALSE);
     EnableWindow(g_hSliderTrackVolume, FALSE);
@@ -512,7 +495,7 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         EnableWindow(g_hButtonPlay, TRUE);
         EnableWindow(g_hButtonPause, TRUE);
         EnableWindow(g_hButtonStop, TRUE);
-        EnableWindow(g_hSliderSeek, TRUE);
+        EnableWindow(g_hTimeline, TRUE);
 
         // Enable audio controls and populate audio tracks
         UpdateAudioTrackList();
@@ -539,7 +522,7 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         UpdateCutInfoLabel(hwnd);
 
         UpdateControls();
-        UpdateSeekBar();
+        UpdateTimeline();
     }
     else
     {
@@ -559,7 +542,7 @@ void UpdateControls()
     EnableWindow(g_hButtonPlay, isLoaded && !isPlaying);
     EnableWindow(g_hButtonPause, isLoaded && isPlaying);
     EnableWindow(g_hButtonStop, isLoaded);
-    EnableWindow(g_hSliderSeek, isLoaded);
+    EnableWindow(g_hTimeline, isLoaded);
 
     // Ensure audio controls remain enabled if a video is loaded
     EnableWindow(g_hListBoxAudioTracks, isLoaded && g_videoPlayer->GetAudioTrackCount() > 0);
@@ -595,7 +578,7 @@ void UpdateControls()
     }
 }
 
-void UpdateSeekBar()
+void UpdateTimeline()
 {
     if (!g_videoPlayer || !g_videoPlayer->IsLoaded())
         return;
@@ -603,8 +586,7 @@ void UpdateSeekBar()
     double duration = g_videoPlayer->GetDuration();
     if (duration > 0)
     {
-        int pos = (int)((currentTime / duration) * SEEK_SLIDER_MAX);
-        SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, pos);
+        InvalidateRect(g_hTimeline, NULL, FALSE);
     }
 }
 
@@ -879,7 +861,7 @@ void RepositionControls(HWND hwnd)
 
     // Bottom controls
     int bottomControlsY = clientRect.bottom - 90;
-    MoveWindow(g_hSliderSeek, 10, bottomControlsY, videoSectionWidth, 30, TRUE);
+    MoveWindow(g_hTimeline, 10, bottomControlsY, videoSectionWidth, 30, TRUE);
     MoveWindow(g_hStatusText, 10, bottomControlsY + 40, videoSectionWidth, 20, TRUE);
 
     // Redraw all controls
@@ -916,6 +898,94 @@ void CloseProgressWindow()
         g_hProgressBar = nullptr;
     }
 }
+
+LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_LBUTTONDOWN:
+        if (g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            SetFocus(hwnd);
+            RECT rc; GetClientRect(hwnd, &rc);
+            int x = GET_X_LPARAM(lParam);
+            if (x < 0) x = 0; if (x > rc.right) x = rc.right;
+            double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
+            double dur = g_videoPlayer->GetDuration();
+            double seekTime = ratio * dur;
+
+            g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
+            if (g_wasPlayingBeforeDrag)
+                g_videoPlayer->Pause();
+            g_isTimelineDragging = true;
+            SetCapture(hwnd);
+            g_videoPlayer->SeekToTime(seekTime);
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateControls();
+            return 0;
+        }
+        break;
+    case WM_MOUSEMOVE:
+        if (g_isTimelineDragging && g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            RECT rc; GetClientRect(hwnd, &rc);
+            int x = GET_X_LPARAM(lParam);
+            if (x < 0) x = 0; if (x > rc.right) x = rc.right;
+            double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
+            double dur = g_videoPlayer->GetDuration();
+            double seekTime = ratio * dur;
+            g_videoPlayer->SeekToTime(seekTime);
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateControls();
+            return 0;
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (g_isTimelineDragging && g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            ReleaseCapture();
+            g_isTimelineDragging = false;
+            RECT rc; GetClientRect(hwnd, &rc);
+            int x = GET_X_LPARAM(lParam);
+            if (x < 0) x = 0; if (x > rc.right) x = rc.right;
+            double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
+            double dur = g_videoPlayer->GetDuration();
+            double seekTime = ratio * dur;
+            g_videoPlayer->SeekToTime(seekTime);
+            if (g_wasPlayingBeforeDrag)
+                g_videoPlayer->Play();
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateControls();
+            return 0;
+        }
+        break;
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH bg = CreateSolidBrush(RGB(70,70,70));
+        FillRect(hdc, &rc, bg);
+        DeleteObject(bg);
+        if (g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            double dur = g_videoPlayer->GetDuration();
+            double cur = g_videoPlayer->GetCurrentTime();
+            int x = (dur > 0) ? (int)((cur / dur) * rc.right) : 0;
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(200,0,0));
+            HGDIOBJ old = SelectObject(hdc, pen);
+            MoveToEx(hdc, x, 0, NULL);
+            LineTo(hdc, x, rc.bottom);
+            SelectObject(hdc, old);
+            DeleteObject(pen);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
 void ApplyDarkTheme(HWND hwnd)
 {
     if (g_hFont)
@@ -934,6 +1004,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
 
     RegisterClass(&wc);
+
+    WNDCLASS twc = {};
+    twc.lpfnWndProc = TimelineProc;
+    twc.hInstance = hInstance;
+    twc.lpszClassName = L"TimelineClass";
+    twc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    twc.hbrBackground = nullptr; // custom paint
+    RegisterClass(&twc);
 
     HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"Video Editor - Preview",
@@ -954,17 +1032,87 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     MSG msg = {};
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
-        if (msg.message == WM_KEYDOWN && msg.wParam == VK_SPACE)
+        if (msg.message == WM_KEYDOWN && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
-            if (g_videoPlayer && g_videoPlayer->IsLoaded())
+            bool handled = true;
+            switch (msg.wParam)
             {
+            case VK_SPACE:
                 if (g_videoPlayer->IsPlaying())
                     g_videoPlayer->Pause();
                 else
                     g_videoPlayer->Play();
-                UpdateControls();
+                break;
+            case VK_LEFT:
+            case 'J':
+            case 'j':
+            {
+                double offset = (msg.wParam == VK_LEFT) ? 5.0 : 10.0;
+                double t = g_videoPlayer->GetCurrentTime() - offset;
+                if (t < 0.0) t = 0.0;
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToTime(t);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                break;
             }
-            continue;
+            case VK_RIGHT:
+            case 'L':
+            case 'l':
+            {
+                double offset = (msg.wParam == VK_RIGHT) ? 5.0 : 10.0;
+                double t = g_videoPlayer->GetCurrentTime() + offset;
+                double dur = g_videoPlayer->GetDuration();
+                if (t > dur) t = dur;
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToTime(t);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                break;
+            }
+            case 'K':
+            case 'k':
+                g_videoPlayer->Pause();
+                break;
+            case VK_OEM_COMMA:
+            {
+                int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
+                if (frame < 0) frame = 0;
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToFrame(frame);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                break;
+            }
+            case VK_OEM_PERIOD:
+            {
+                int64_t frame = g_videoPlayer->GetCurrentFrame() + 1;
+                int64_t maxf = g_videoPlayer->GetTotalFrames() - 1;
+                if (frame > maxf) frame = maxf;
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToFrame(frame);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                break;
+            }
+            default:
+                handled = false;
+                break;
+            }
+            if (handled)
+            {
+                UpdateControls();
+                UpdateTimeline();
+                continue;
+            }
         }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
