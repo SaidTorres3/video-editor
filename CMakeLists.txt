@@ -82,6 +82,7 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avutil-60.dll" "$<TARGET_FILE_DIR:VideoEditor>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/swscale-9.dll" "$<TARGET_FILE_DIR:VideoEditor>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/swresample-6.dll" "$<TARGET_FILE_DIR:VideoEditor>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/ffmpeg.exe" "$<TARGET_FILE_DIR:VideoEditor>"
         COMMENT "Copying FFmpeg DLLs"
     )
 endif()

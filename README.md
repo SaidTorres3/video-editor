@@ -12,6 +12,8 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - Seek bar for navigation
 - Frame-by-frame playback control
 - Hardware-accelerated rendering using Direct2D
+- Cut clips with optional audio merging
+- Choice of fast codec copy or H.264 re-encode
 
 ### Audio Playback (NEW!)
 - **Multitrack Audio Support**: Automatically detects and loads all audio tracks from video files
@@ -87,6 +89,12 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - **Individual Control**: Each track can be muted or have its volume adjusted independently
 - **Volume Range**: 0-200% volume control (0% = silent, 100% = original, 200% = amplified)
 - **Real-time Changes**: All audio adjustments take effect immediately during playback
+
+### Cutting Videos
+- **Set Start/End**: Mark a start and end position while previewing
+- **Merge Audio Tracks**: Optionally merge all unmuted tracks into a single stream
+- **Copy Codec or Re-encode**: Choose between fast stream copy or H.264 re-encode with a maximum bitrate
+- **Progress Bar**: Cutting shows a progress indicator while FFmpeg processes the file
 
 ## Audio Track Display
 - Track names are shown in the format: "Audio Track N" or the actual track name from metadata

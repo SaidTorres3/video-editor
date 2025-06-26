@@ -169,6 +169,15 @@ if (Test-Path -Path $dllTarget) {
             Write-Host "  Copied: $($dll.Name)" -ForegroundColor Cyan
         }
     }
+
+    $ffmpegExe = Join-Path $dllSource 'ffmpeg.exe'
+    if (Test-Path $ffmpegExe) {
+        $destExe = Join-Path $dllTarget 'ffmpeg.exe'
+        if (-not (Test-Path $destExe)) {
+            Copy-Item -Path $ffmpegExe -Destination $destExe -Force
+            Write-Host "  Copied: ffmpeg.exe" -ForegroundColor Cyan
+        }
+    }
 }
 
 # Ejecutable

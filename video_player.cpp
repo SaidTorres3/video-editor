@@ -8,6 +8,7 @@
 #include <uxtheme.h>
 #include <algorithm>
 #include <cstring>
+#include <cwchar>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -936,6 +937,16 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     std::string utf8Input(inSize, 0);
     WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], inSize, nullptr, nullptr);
 
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    wchar_t *slash = wcsrchr(exePath, L'\\');
+    if (slash)
+        *slash = L'\0';
+    std::wstring ffmpegExe = std::wstring(exePath) + L"\\ffmpeg.exe";
+    int ffSize = WideCharToMultiByte(CP_UTF8, 0, ffmpegExe.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string utf8Ffmpeg(ffSize, 0);
+    WideCharToMultiByte(CP_UTF8, 0, ffmpegExe.c_str(), -1, &utf8Ffmpeg[0], ffSize, nullptr, nullptr);
+
     int outSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
     std::string utf8Out(outSize, 0);
     WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Out[0], outSize, nullptr, nullptr);
@@ -945,8 +956,8 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         if (!t->isMuted)
             activeTracks++;
 
-    std::string cmd = "ffmpeg -y -i \"" + utf8Input + "\" -ss " + std::to_string(startTime) +
-                       " -to " + std::to_string(endTime) + " ";
+    std::string cmd = "\"" + utf8Ffmpeg + "\" -y -i \"" + utf8Input + "\" -ss " +
+                       std::to_string(startTime) + " -to " + std::to_string(endTime) + " ";
 
     std::string filter;
     if (mergeAudio && activeTracks > 1)
