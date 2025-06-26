@@ -455,35 +455,24 @@ void VideoPlayer::UpdateDisplay()
 
 void VideoPlayer::SeekToFrame(int64_t frameNumber)
 {
-  if (!isLoaded || frameNumber < 0 || frameNumber >= totalFrames)
+  if (!isLoaded)
     return;
-  AVStream *vs = formatContext->streams[videoStreamIndex];
-  AVRational fps = av_d2q(frameRate, 100000);
-  int64_t ts = av_rescale_q(frameNumber, av_inv_q(fps), vs->time_base);
-  ts += (int64_t)(startTimeOffset / av_q2d(vs->time_base));
-  av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
-  avcodec_flush_buffers(codecContext);
-  for (auto &track : audioTracks)
-  {
-    if (track->codecContext)
-      avcodec_flush_buffers(track->codecContext);
-  }
-  {
-    std::lock_guard<std::mutex> lock(audioMutex);
-    for (auto& tr : audioTracks)
-      tr->buffer.clear();
-  }
-  currentFrame = frameNumber;
-  currentPts = frameNumber / frameRate;
-  DecodeNextFrame();
+  if (frameNumber < 0)
+    frameNumber = 0;
+  if (totalFrames > 0 && frameNumber >= totalFrames)
+    frameNumber = totalFrames - 1;
+  double targetTime = frameNumber / frameRate;
+  SeekToTime(targetTime);
 }
 
 void VideoPlayer::SeekToTime(double seconds)
 {
   if (!isLoaded)
     return;
+
   AVStream *vs = formatContext->streams[videoStreamIndex];
   int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));
+
   av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
   avcodec_flush_buffers(codecContext);
   for (auto &track : audioTracks)
@@ -496,9 +485,15 @@ void VideoPlayer::SeekToTime(double seconds)
     for (auto& tr : audioTracks)
       tr->buffer.clear();
   }
-  currentFrame = (int64_t)(seconds * frameRate);
-  currentPts = seconds;
-  DecodeNextFrame();
+
+  // Decode frames until we reach the requested time
+  while (DecodeNextFrame())
+  {
+    if (currentPts + (1.0 / std::max(1.0, frameRate)) / 2.0 >= seconds)
+      break;
+  }
+  // Adjust frame index approximation
+  currentFrame = static_cast<int64_t>(currentPts * frameRate);
 }
 
 double VideoPlayer::GetDuration() const
