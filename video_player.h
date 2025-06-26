@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <string>
+#include <functional>
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
 
@@ -67,6 +68,7 @@ private:
   int64_t totalFrames;
   double currentPts;
   double duration;
+  std::wstring loadedFilename;
 
   HWND parentWindow;
   HWND videoWindow;
@@ -134,7 +136,9 @@ public:
   float GetAudioTrackVolume(int trackIndex) const;
   void SetAudioTrackVolume(int trackIndex, float volume);
   void SetMasterVolume(float volume);
-  bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime, bool mergeAudio);
+  bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
+                bool mergeAudio, bool convertToH264, int maxBitrate,
+                std::function<void(double)> progressCb);
 
   // Timer callback
   static void CALLBACK TimerProc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD time);

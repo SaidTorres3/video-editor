@@ -34,6 +34,11 @@
 #define ID_BUTTON_SET_END 1012
 #define ID_BUTTON_CUT 1013
 #define ID_CHECKBOX_MERGE_AUDIO 1014
+#define ID_RADIO_KEEP_CODEC 1015
+#define ID_RADIO_H264 1016
+#define ID_EDIT_BITRATE 1017
+#define ID_LABEL_BITRATE 1018
+#define ID_PROGRESS_BAR 2001
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
@@ -44,6 +49,8 @@ HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
 HWND g_hLabelCutInfo;
+HWND g_hRadioKeepCodec, g_hRadioH264, g_hEditBitrate, g_hLabelBitrate;
+HWND g_hProgressWnd, g_hProgressBar;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
 
@@ -71,6 +78,8 @@ void OnCutClicked(HWND hwnd);
 std::wstring FormatTime(double totalSeconds, bool showMilliseconds = false);
 void RepositionControls(HWND hwnd);
 void ApplyDarkTheme(HWND hwnd);
+HWND CreateProgressWindow(HWND parent);
+void CloseProgressWindow();
 
 
 // Window procedure
@@ -135,6 +144,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case ID_BUTTON_CUT:
             OnCutClicked(hwnd);
+            break;
+        case ID_RADIO_KEEP_CODEC:
+        case ID_RADIO_H264:
+            if (LOWORD(wParam) == ID_RADIO_H264)
+            {
+                EnableWindow(g_hLabelBitrate, TRUE);
+                EnableWindow(g_hEditBitrate, TRUE);
+            }
+            else
+            {
+                EnableWindow(g_hLabelBitrate, FALSE);
+                EnableWindow(g_hEditBitrate, FALSE);
+            }
             break;
         }
         
@@ -410,13 +432,13 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hLabelCutInfo);
 
-    g_hButtonCut = CreateWindow(
+   g_hButtonCut = CreateWindow(
         L"BUTTON", L"Cut & Save",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         340, 450, 200, 30, // Placeholder
         hwnd, (HMENU)ID_BUTTON_CUT,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonCut);
+   ApplyDarkTheme(g_hButtonCut);
 
    g_hCheckboxMergeAudio = CreateWindow(
        L"BUTTON", L"Merge Audios",
@@ -425,7 +447,40 @@ void CreateControls(HWND hwnd)
        hwnd, (HMENU)ID_CHECKBOX_MERGE_AUDIO,
        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
    SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, BST_CHECKED, 0);
-    ApplyDarkTheme(g_hCheckboxMergeAudio);
+   ApplyDarkTheme(g_hCheckboxMergeAudio);
+
+   g_hRadioKeepCodec = CreateWindow(
+        L"BUTTON", L"Keep codec (fast)",
+        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+        340, 515, 200, 20,
+        hwnd, (HMENU)ID_RADIO_KEEP_CODEC,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    g_hRadioH264 = CreateWindow(
+        L"BUTTON", L"Convert to H264",
+        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+        340, 540, 200, 20,
+        hwnd, (HMENU)ID_RADIO_H264,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    SendMessage(g_hRadioKeepCodec, BM_SETCHECK, BST_CHECKED, 0);
+    ApplyDarkTheme(g_hRadioKeepCodec);
+    ApplyDarkTheme(g_hRadioH264);
+
+    g_hLabelBitrate = CreateWindow(
+        L"STATIC", L"Max bitrate (kbps):",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        360, 565, 140, 20,
+        hwnd, (HMENU)ID_LABEL_BITRATE,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    g_hEditBitrate = CreateWindow(
+        L"EDIT", L"5000",
+        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
+        500, 565, 40, 20,
+        hwnd, (HMENU)ID_EDIT_BITRATE,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelBitrate);
+    ApplyDarkTheme(g_hEditBitrate);
+    EnableWindow(g_hLabelBitrate, FALSE);
+    EnableWindow(g_hEditBitrate, FALSE);
 
 
     // Disable controls until video is loaded
@@ -439,8 +494,12 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hSliderMasterVolume, FALSE);
     EnableWindow(g_hButtonSetStart, FALSE);
     EnableWindow(g_hButtonSetEnd, FALSE);
-    EnableWindow(g_hButtonCut, FALSE);
+   EnableWindow(g_hButtonCut, FALSE);
    EnableWindow(g_hCheckboxMergeAudio, FALSE);
+    EnableWindow(g_hRadioKeepCodec, FALSE);
+    EnableWindow(g_hRadioH264, FALSE);
+    EnableWindow(g_hLabelBitrate, FALSE);
+    EnableWindow(g_hEditBitrate, FALSE);
 }
 
 void OpenVideoFile(HWND hwnd)
@@ -490,6 +549,11 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         EnableWindow(g_hButtonSetEnd, TRUE);
         EnableWindow(g_hButtonCut, TRUE);
         EnableWindow(g_hCheckboxMergeAudio, TRUE);
+        EnableWindow(g_hRadioKeepCodec, TRUE);
+        EnableWindow(g_hRadioH264, TRUE);
+        bool h264 = SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        EnableWindow(g_hLabelBitrate, h264);
+        EnableWindow(g_hEditBitrate, h264);
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
         UpdateCutInfoLabel(hwnd);
@@ -528,8 +592,13 @@ void UpdateControls()
     EnableWindow(g_hButtonSetEnd, isLoaded);
     EnableWindow(g_hButtonCut, isLoaded && g_cutStartTime >= 0 && g_cutEndTime > g_cutStartTime);
 
-   bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
-   EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
+    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
+    EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
+    EnableWindow(g_hRadioKeepCodec, isLoaded);
+    EnableWindow(g_hRadioH264, isLoaded);
+    bool h264 = SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    EnableWindow(g_hLabelBitrate, isLoaded && h264);
+    EnableWindow(g_hEditBitrate, isLoaded && h264);
 
 
     if (isLoaded)
@@ -760,8 +829,18 @@ void OnCutClicked(HWND hwnd)
         EnableWindow(hwnd, FALSE); // Disable UI during cut
 
         bool mergeAudio = IsDlgButtonChecked(hwnd, ID_CHECKBOX_MERGE_AUDIO) == BST_CHECKED;
-        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime, mergeAudio);
+        bool convertH264 = SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        int bitrate = GetDlgItemInt(hwnd, ID_EDIT_BITRATE, NULL, FALSE);
 
+        g_hProgressWnd = CreateProgressWindow(hwnd);
+        ShowWindow(g_hProgressWnd, SW_SHOW);
+        UpdateWindow(g_hProgressWnd);
+
+        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime,
+                                               mergeAudio, convertH264, bitrate,
+                                               [](double p){ if(g_hProgressBar) SendMessage(g_hProgressBar, PBM_SETPOS, (int)p, 0); });
+
+        CloseProgressWindow();
         EnableWindow(hwnd, TRUE); // Re-enable UI
 
         MessageBoxW(hwnd, success ? L"Video successfully cut and saved." : L"Failed to cut the video.",
@@ -808,6 +887,10 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 55, 200, 40, TRUE);
     MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 100, 200, 30, TRUE);
     MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 135, 200, 25, TRUE);
+    MoveWindow(g_hRadioKeepCodec, audioControlsX, editingControlsY + 165, 200, 20, TRUE);
+    MoveWindow(g_hRadioH264, audioControlsX, editingControlsY + 185, 200, 20, TRUE);
+    MoveWindow(g_hLabelBitrate, audioControlsX + 20, editingControlsY + 210, 140, 20, TRUE);
+    MoveWindow(g_hEditBitrate, audioControlsX + 160, editingControlsY + 210, 40, 20, TRUE);
 
     // Video area (takes up remaining space)
     int videoSectionWidth = clientRect.right - audioControlsWidth - 30;
@@ -833,6 +916,35 @@ void ApplyDarkTheme(HWND hwnd)
     if (g_hFont)
         SendMessage(hwnd, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     SetWindowTheme(hwnd, L"DarkMode_Explorer", nullptr);
+}
+
+HWND CreateProgressWindow(HWND parent)
+{
+    HWND wnd = CreateWindowEx(WS_EX_DLGMODALFRAME, L"#32770", L"Exporting...",
+                              WS_CAPTION | WS_POPUPWINDOW,
+                              CW_USEDEFAULT, CW_USEDEFAULT, 300, 100,
+                              parent, nullptr,
+                              (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
+    g_hProgressBar = CreateWindowEx(0, PROGRESS_CLASS, nullptr,
+                                    WS_VISIBLE | WS_CHILD,
+                                    20, 40, 260, 20,
+                                    wnd, (HMENU)ID_PROGRESS_BAR,
+                                    (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
+    SendMessage(g_hProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0,100));
+    SendMessage(g_hProgressBar, PBM_SETPOS, 0, 0);
+    ApplyDarkTheme(wnd);
+    ApplyDarkTheme(g_hProgressBar);
+    return wnd;
+}
+
+void CloseProgressWindow()
+{
+    if (g_hProgressWnd)
+    {
+        DestroyWindow(g_hProgressWnd);
+        g_hProgressWnd = nullptr;
+        g_hProgressBar = nullptr;
+    }
 }
 // Entry point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
