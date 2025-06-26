@@ -969,14 +969,14 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     if (mergeAudio && activeTracks.size() > 1) {
         cmd << "-filter_complex \"";
         for (size_t i = 0; i < activeTracks.size(); ++i) {
-            cmd << "[0:a:" << i << "]";
+            cmd << "[0:a:" << activeTracks[i] << "]";
         }
         cmd << "amix=inputs=" << activeTracks.size() << "[aout]\" -map 0:v -map [aout] ";
         cmd << "-c:a aac -b:a 192k ";
     } else {
         cmd << "-map 0:v ";
         for (size_t i = 0; i < activeTracks.size(); ++i) {
-            cmd << "-map 0:a:" << i << " ";
+            cmd << "-map 0:a:" << activeTracks[i] << " ";
         }
         cmd << "-c:a copy ";
     }
