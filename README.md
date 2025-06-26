@@ -117,6 +117,11 @@ The application supports all audio formats that FFmpeg can decode, including:
 - Check system audio latency settings
 - Ensure sufficient CPU resources for real-time processing
 
+### Debug Logs
+All diagnostic output from the application is written to `debug.log` in the
+working directory. Critical errors will also be shown in popup windows during
+export operations.
+
 ## Future Enhancements
 - Audio effects and filters
 - Audio track synchronization controls

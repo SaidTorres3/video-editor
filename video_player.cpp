@@ -4,6 +4,7 @@
 #include <sstream>
 #include <cstdlib>
 #include <windows.h>
+#include <fstream>
 #include <d2d1.h>
 #include <d2d1helper.h>
 #include <dxgiformat.h>
@@ -13,10 +14,18 @@
 #include <cstring>
 #include <chrono>
 
-// Simple debug logging helper
-static void DebugLog(const std::string& msg)
+// Simple debug logging helper that also writes to a file and can show popups
+static std::ofstream g_debugFile;
+static void DebugLog(const std::string& msg, bool popup = false)
 {
+    if (!g_debugFile.is_open())
+        g_debugFile.open("debug.log", std::ios::app);
+    if (g_debugFile.is_open())
+        g_debugFile << msg << std::endl;
+
     OutputDebugStringA((msg + "\n").c_str());
+    if (popup)
+        MessageBoxA(nullptr, msg.c_str(), "Video Editor Debug", MB_OK | MB_ICONINFORMATION);
 }
 
 // Link with Windows Audio libraries
@@ -936,7 +945,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            int maxBitrate, HWND progressBar)
 {
     if (!isLoaded) {
-        DebugLog("CutVideo called but no video loaded");
+        DebugLog("CutVideo called but no video loaded", true);
         return false;
     }
 
@@ -986,7 +995,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
     HANDLE readPipe = NULL, writePipe = NULL;
     if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
-        DebugLog("CreatePipe failed");
+        DebugLog("CreatePipe failed", true);
         return false;
     }
     SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
@@ -1002,11 +1011,11 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
 
     std::vector<char> cmdBuf(cmdStr.begin(), cmdStr.end());
     cmdBuf.push_back('\0');
-    DebugLog(std::string("Running command: ") + cmdStr);
+    DebugLog(std::string("Running command: ") + cmdStr, true);
     BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     CloseHandle(writePipe);
     if (!ok) {
-        DebugLog("CreateProcess failed");
+        DebugLog("CreateProcess failed", true);
         CloseHandle(readPipe);
         return false;
     }
@@ -1040,7 +1049,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     {
         std::ostringstream oss;
         oss << "ffmpeg exited with code " << exitCode;
-        DebugLog(oss.str());
+        DebugLog(oss.str(), exitCode != 0);
     }
 
     CloseHandle(pi.hProcess);
