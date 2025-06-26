@@ -80,6 +80,7 @@ void ApplyDarkTheme(HWND hwnd);
 void ShowProgressWindow(HWND parent);
 void UpdateProgress(int percent);
 void CloseProgressWindow();
+LRESULT CALLBACK SeekBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR);
 
 
 // Window procedure
@@ -311,6 +312,7 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     SendMessage(g_hSliderSeek, TBM_SETRANGE, TRUE, MAKELONG(0, SEEK_SLIDER_MAX));
     SendMessage(g_hSliderSeek, TBM_SETPOS, TRUE, 0);
+    SetWindowSubclass(g_hSliderSeek, SeekBarProc, 0, 0);
     ApplyDarkTheme(g_hSliderSeek);
 
     // Status text
@@ -916,6 +918,37 @@ void CloseProgressWindow()
         g_hProgressBar = nullptr;
     }
 }
+
+LRESULT CALLBACK SeekBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
+{
+    switch (msg)
+    {
+    case WM_LBUTTONDOWN:
+        if (g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            int x = GET_X_LPARAM(lParam);
+            if (x < 0) x = 0;
+            if (x > rc.right) x = rc.right;
+            int pos = (int)((x / (double)rc.right) * SEEK_SLIDER_MAX);
+            SendMessage(hwnd, TBM_SETPOS, TRUE, pos);
+
+            double duration = g_videoPlayer->GetDuration();
+            double seekTime = (pos / (double)SEEK_SLIDER_MAX) * duration;
+
+            bool wasPlaying = g_videoPlayer->IsPlaying();
+            if (wasPlaying)
+                g_videoPlayer->Pause();
+            g_videoPlayer->SeekToTime(seekTime);
+            if (wasPlaying)
+                g_videoPlayer->Play();
+            UpdateControls();
+        }
+        break;
+    }
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
 void ApplyDarkTheme(HWND hwnd)
 {
     if (g_hFont)
@@ -954,17 +987,87 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     MSG msg = {};
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
-        if (msg.message == WM_KEYDOWN && msg.wParam == VK_SPACE)
+        if (msg.message == WM_KEYDOWN && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
-            if (g_videoPlayer && g_videoPlayer->IsLoaded())
+            bool handled = true;
+            switch (msg.wParam)
             {
+            case VK_SPACE:
                 if (g_videoPlayer->IsPlaying())
                     g_videoPlayer->Pause();
                 else
                     g_videoPlayer->Play();
-                UpdateControls();
+                break;
+            case VK_LEFT:
+            case 'J':
+            case 'j':
+            {
+                double offset = (msg.wParam == VK_LEFT) ? 5.0 : 10.0;
+                double t = g_videoPlayer->GetCurrentTime() - offset;
+                if (t < 0.0) t = 0.0;
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToTime(t);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                break;
             }
-            continue;
+            case VK_RIGHT:
+            case 'L':
+            case 'l':
+            {
+                double offset = (msg.wParam == VK_RIGHT) ? 5.0 : 10.0;
+                double t = g_videoPlayer->GetCurrentTime() + offset;
+                double dur = g_videoPlayer->GetDuration();
+                if (t > dur) t = dur;
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToTime(t);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                break;
+            }
+            case 'K':
+            case 'k':
+                g_videoPlayer->Pause();
+                break;
+            case VK_OEM_COMMA:
+            {
+                int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
+                if (frame < 0) frame = 0;
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToFrame(frame);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                break;
+            }
+            case VK_OEM_PERIOD:
+            {
+                int64_t frame = g_videoPlayer->GetCurrentFrame() + 1;
+                int64_t maxf = g_videoPlayer->GetTotalFrames() - 1;
+                if (frame > maxf) frame = maxf;
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToFrame(frame);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                break;
+            }
+            default:
+                handled = false;
+                break;
+            }
+            if (handled)
+            {
+                UpdateControls();
+                UpdateSeekBar();
+                continue;
+            }
         }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
