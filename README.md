@@ -10,6 +10,8 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - **Spacebar toggles play/pause** for quick control
 - **Drag and drop** a video onto the window to load it
 - Seek bar for navigation
+- Click anywhere on the seek bar to jump directly to that point
+- Keyboard shortcuts for quick navigation (Left/Right arrows skip 5s, J/L skip 10s, K pauses, ',' and '.' step frames)
 - Frame-by-frame playback control
 - Hardware-accelerated rendering using Direct2D
 

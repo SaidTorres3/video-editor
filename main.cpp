@@ -1,5 +1,6 @@
 // main.cpp
 #include <windows.h>
+#include <windowsx.h>
 #include <commdlg.h>  // For file dialog
 #include <commctrl.h> // For common controls
 #include <shellapi.h> // For drag-and-drop
