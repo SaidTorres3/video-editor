@@ -950,12 +950,14 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     }
 
     int bufSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8Output(bufSize - 1, 0);
+    std::string utf8Output(bufSize, 0);
     WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Output[0], bufSize, nullptr, nullptr);
+    utf8Output.resize(bufSize - 1);
 
     bufSize = WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8Input(bufSize - 1, 0);
+    std::string utf8Input(bufSize, 0);
     WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], bufSize, nullptr, nullptr);
+    utf8Input.resize(bufSize - 1);
 
     std::vector<int> activeTracks;
     for (const auto& track : audioTracks) {
@@ -969,14 +971,14 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     if (mergeAudio && activeTracks.size() > 1) {
         cmd << "-filter_complex \"";
         for (size_t i = 0; i < activeTracks.size(); ++i) {
-            cmd << "[0:a:" << activeTracks[i] << "]";
+            cmd << "[0:" << activeTracks[i] << "]";
         }
         cmd << "amix=inputs=" << activeTracks.size() << "[aout]\" -map 0:v -map [aout] ";
         cmd << "-c:a aac -b:a 192k ";
     } else {
         cmd << "-map 0:v ";
         for (size_t i = 0; i < activeTracks.size(); ++i) {
-            cmd << "-map 0:a:" << activeTracks[i] << " ";
+            cmd << "-map 0:" << activeTracks[i] << " ";
         }
         cmd << "-c:a copy ";
     }
