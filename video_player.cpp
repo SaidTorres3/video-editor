@@ -937,12 +937,20 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     std::string utf8Input(inSize, 0);
     WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], inSize, nullptr, nullptr);
 
+    std::wstring ffmpegExe = L"ffmpeg";
     wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    wchar_t *slash = wcsrchr(exePath, L'\\');
-    if (slash)
-        *slash = L'\0';
-    std::wstring ffmpegExe = std::wstring(exePath) + L"\\ffmpeg.exe";
+    if (GetModuleFileNameW(nullptr, exePath, MAX_PATH))
+    {
+        wchar_t *slash = wcsrchr(exePath, L'\\');
+        if (slash)
+        {
+            *slash = L'\0';
+            std::wstring local = std::wstring(exePath) + L"\\ffmpeg.exe";
+            if (GetFileAttributesW(local.c_str()) != INVALID_FILE_ATTRIBUTES)
+                ffmpegExe = std::move(local);
+        }
+    }
+
     int ffSize = WideCharToMultiByte(CP_UTF8, 0, ffmpegExe.c_str(), -1, nullptr, 0, nullptr, nullptr);
     std::string utf8Ffmpeg(ffSize, 0);
     WideCharToMultiByte(CP_UTF8, 0, ffmpegExe.c_str(), -1, &utf8Ffmpeg[0], ffSize, nullptr, nullptr);
@@ -952,24 +960,38 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Out[0], outSize, nullptr, nullptr);
 
     int activeTracks = 0;
+    std::vector<int> unmutedIndices;
     for (const auto &t : audioTracks)
+    {
         if (!t->isMuted)
+        {
             activeTracks++;
+            unmutedIndices.push_back(t->audioIndex);
+        }
+    }
 
     std::string cmd = "\"" + utf8Ffmpeg + "\" -y -i \"" + utf8Input + "\" -ss " +
                        std::to_string(startTime) + " -to " + std::to_string(endTime) + " ";
 
     std::string filter;
+    std::string mapArgs = "-map 0:v ";
     if (mergeAudio && activeTracks > 1)
     {
-        for (const auto &t : audioTracks)
-        {
-            if (!t->isMuted)
-            {
-                filter += "[0:a:" + std::to_string(t->audioIndex) + "]";
-            }
-        }
+        for (int idx : unmutedIndices)
+            filter += "[0:a:" + std::to_string(idx) + "]";
         filter += "amix=inputs=" + std::to_string(activeTracks) + ":duration=longest[a]";
+    }
+    else
+    {
+        if (!unmutedIndices.empty())
+        {
+            for (int idx : unmutedIndices)
+                mapArgs += "-map 0:a:" + std::to_string(idx) + " ";
+        }
+        else
+        {
+            mapArgs += "-an ";
+        }
     }
 
     if (reencodeToH264)
@@ -981,7 +1003,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         }
         else
         {
-            cmd += "-map 0 -c:v libx264 -b:v " + std::to_string(bitrateKbps) +
+            cmd += mapArgs + "-c:v libx264 -b:v " + std::to_string(bitrateKbps) +
                    "k -preset veryfast -c:a aac \"" + utf8Out + "\"";
         }
     }
@@ -994,7 +1016,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         }
         else
         {
-            cmd += "-map 0 -c copy \"" + utf8Out + "\"";
+            cmd += mapArgs + "-c copy \"" + utf8Out + "\"";
         }
     }
 

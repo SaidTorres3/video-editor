@@ -59,7 +59,9 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - FFmpeg development libraries
 
 ### Build Steps
-1. Extract FFmpeg to `C:/Program Files/ffmpeg` (or update CMakeLists.txt path)
+1. Extract FFmpeg to `C:/Program Files/ffmpeg` (or update CMakeLists.txt path).
+   The build copies `ffmpeg.exe` next to the final executable. If it's not found
+   there at runtime, the application falls back to `ffmpeg` available in `PATH`.
 2. Create build directory: `mkdir build && cd build`
 3. Generate project: `cmake ..`
 4. Build: `cmake --build . --config Release`
