@@ -63,7 +63,12 @@ VideoPlayer::~VideoPlayer()
       playbackThread.join();
   }
   if (videoWindow)
+  {
+    SetWindowLongPtr(videoWindow, GWLP_WNDPROC, (LONG_PTR)originalVideoWndProc);
+    SetWindowLongPtr(videoWindow, GWLP_USERDATA, 0);
     DestroyWindow(videoWindow);
+    originalVideoWndProc = nullptr;
+  }
 }
 
 void VideoPlayer::CreateVideoWindow()
