@@ -36,6 +36,7 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - **Codec Options**: Copy video/audio codecs for a fast cut or convert to H.264
 - **Bitrate Limit**: Specify a max bitrate when converting to H.264
 - **Progress Window**: A small window shows export progress in real time
+- **Subtitle Handling**: Subtitle streams are automatically ignored when cutting so the command works even if no subtitles are present
 
 ## Technical Implementation
 
