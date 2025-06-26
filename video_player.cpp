@@ -925,7 +925,8 @@ void VideoPlayer::PlaybackThreadFunction()
 }
 
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime, double endTime,
-                           bool mergeAudio, bool reencodeToH264, int bitrateKbps)
+                           bool mergeAudio, bool reencodeToH264, int bitrateKbps,
+                           std::function<void(double)> progressCallback)
 {
     if (!isLoaded || loadedFilename.empty())
         return false;
@@ -943,41 +944,76 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         if (!t->isMuted)
             activeTracks++;
 
-    char cmd[2048];
+    std::string cmd = "ffmpeg -y -ss " + std::to_string(startTime) + " -to " + std::to_string(endTime) +
+                       " -i \"" + utf8Input + "\" ";
+
+    std::string filter;
+    if (mergeAudio && activeTracks > 1)
+    {
+        for (const auto &t : audioTracks)
+        {
+            if (!t->isMuted)
+            {
+                filter += "[0:a:" + std::to_string(t->streamIndex) + "]";
+            }
+        }
+        filter += "amix=inputs=" + std::to_string(activeTracks) + ":duration=longest[a]";
+    }
 
     if (reencodeToH264)
     {
-        if (mergeAudio && activeTracks > 1)
+        if (!filter.empty())
         {
-            snprintf(cmd, sizeof(cmd),
-                     "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" -filter_complex amix=inputs=%d -map 0:v -map \"[a]\" -c:v libx264 -b:v %dk -preset veryfast -c:a aac \"%s\"",
-                     startTime, endTime, utf8Input.c_str(), activeTracks, bitrateKbps, utf8Out.c_str());
+            cmd += "-filter_complex \"" + filter + "\" -map 0:v -map \"[a]\" -c:v libx264 -b:v " +
+                   std::to_string(bitrateKbps) + "k -preset veryfast -c:a aac \"" + utf8Out + "\"";
         }
         else
         {
-            snprintf(cmd, sizeof(cmd),
-                     "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" -map 0 -c:v libx264 -b:v %dk -preset veryfast -c:a aac \"%s\"",
-                     startTime, endTime, utf8Input.c_str(), bitrateKbps, utf8Out.c_str());
+            cmd += "-map 0 -c:v libx264 -b:v " + std::to_string(bitrateKbps) +
+                   "k -preset veryfast -c:a aac \"" + utf8Out + "\"";
         }
     }
     else
     {
-        if (mergeAudio && activeTracks > 1)
+        if (!filter.empty())
         {
-            snprintf(cmd, sizeof(cmd),
-                     "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" -filter_complex amix=inputs=%d -map 0:v -map \"[a]\" -c:v copy -c:a aac \"%s\"",
-                     startTime, endTime, utf8Input.c_str(), activeTracks, utf8Out.c_str());
+            cmd += "-filter_complex \"" + filter + "\" -map 0:v -map \"[a]\" -c:v copy -c:a aac \"" +
+                   utf8Out + "\"";
         }
         else
         {
-            snprintf(cmd, sizeof(cmd),
-                     "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" -map 0 -c copy \"%s\"",
-                     startTime, endTime, utf8Input.c_str(), utf8Out.c_str());
+            cmd += "-map 0 -c copy \"" + utf8Out + "\"";
         }
     }
 
-    int result = system(cmd);
-    return result == 0;
+    cmd += " -progress pipe:1 -nostats 2>&1";
+
+    FILE *pipe = _popen(cmd.c_str(), "r");
+    if (!pipe)
+        return false;
+
+    char buffer[512];
+    double total = endTime - startTime;
+    while (fgets(buffer, sizeof(buffer), pipe))
+    {
+        if (progressCallback)
+        {
+            const char *p = strstr(buffer, "out_time_ms=");
+            if (p)
+            {
+                long long us = _atoi64(p + strlen("out_time_ms="));
+                double sec = us / 1000000.0;
+                double prog = total > 0 ? sec / total : 0.0;
+                if (prog > 1.0) prog = 1.0;
+                progressCallback(prog);
+            }
+        }
+    }
+
+    int code = _pclose(pipe);
+    if (progressCallback)
+        progressCallback(1.0);
+    return code == 0;
 }
 
 bool VideoPlayer::InitializeD2D()

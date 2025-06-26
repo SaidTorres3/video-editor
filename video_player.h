@@ -27,6 +27,7 @@ extern "C"
 #include <condition_variable>
 #include <deque>
 #include <atomic>
+#include <functional>
 
 // Audio output using Windows Audio Session API (WASAPI)
 #include <mmdeviceapi.h>
@@ -135,7 +136,9 @@ public:
   float GetAudioTrackVolume(int trackIndex) const;
   void SetAudioTrackVolume(int trackIndex, float volume);
   void SetMasterVolume(float volume);
-  bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime, bool mergeAudio, bool reencodeToH264, int bitrateKbps);
+  bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
+                bool mergeAudio, bool reencodeToH264, int bitrateKbps,
+                std::function<void(double)> progressCallback = {});
 
   // Timer callback
   static void CALLBACK TimerProc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD time);

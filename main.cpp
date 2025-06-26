@@ -13,6 +13,7 @@
 #include "video_player.h"
 #include <string>
 #include <cstdio> // For swprintf_s
+#include <cstdlib>
 
 // Control IDs
 #define ID_BUTTON_OPEN 1001
@@ -814,14 +815,42 @@ void OnCutClicked(HWND hwnd)
         SetWindowTextW(g_hStatusText, L"Cutting video... Please wait.");
         EnableWindow(hwnd, FALSE); // Disable UI during cut
 
+        // Progress window
+        HWND hProgWnd = CreateWindowEx(WS_EX_DLGMODALFRAME, L"STATIC", L"Exporting...",
+                                       WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                                       CW_USEDEFAULT, CW_USEDEFAULT, 300, 100,
+                                       hwnd, nullptr, (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+        HWND hProgBar = CreateWindow(PROGRESS_CLASS, nullptr,
+                                     WS_CHILD | WS_VISIBLE, 20, 40, 260, 20,
+                                     hProgWnd, nullptr, (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+        SendMessage(hProgBar, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+        ApplyDarkTheme(hProgWnd);
+        ApplyDarkTheme(hProgBar);
+        ShowWindow(hProgWnd, SW_SHOW);
+        UpdateWindow(hProgWnd);
+
         bool mergeAudio = IsDlgButtonChecked(hwnd, ID_CHECKBOX_MERGE_AUDIO) == BST_CHECKED;
         bool reencode = IsDlgButtonChecked(hwnd, ID_RADIO_H264) == BST_CHECKED;
         wchar_t bitrateBuf[16];
         GetWindowTextW(g_hEditBitrate, bitrateBuf, 16);
         int bitrate = _wtoi(bitrateBuf);
         if (bitrate <= 0) bitrate = 3000;
-        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime, mergeAudio, reencode, bitrate);
 
+        auto progressCb = [&](double p)
+        {
+            SendMessage(hProgBar, PBM_SETPOS, (int)(p * 100), 0);
+            MSG msg;
+            while (PeekMessage(&msg, hProgWnd, 0, 0, PM_REMOVE))
+            {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+        };
+
+        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime,
+                                               mergeAudio, reencode, bitrate, progressCb);
+
+        DestroyWindow(hProgWnd);
         EnableWindow(hwnd, TRUE); // Re-enable UI
 
         MessageBoxW(hwnd, success ? L"Video successfully cut and saved." : L"Failed to cut the video.",
