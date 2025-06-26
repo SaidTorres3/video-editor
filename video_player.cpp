@@ -43,7 +43,8 @@ VideoPlayer::VideoPlayer(HWND parent)
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
-      audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16)
+      audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
+      originalVideoWndProc(nullptr)
 {
   InitializeD2D();
   CreateVideoWindow();
@@ -76,6 +77,8 @@ void VideoPlayer::CreateVideoWindow()
       nullptr);
   if (videoWindow)
   {
+    SetWindowLongPtr(videoWindow, GWLP_USERDATA, (LONG_PTR)this);
+    originalVideoWndProc = (WNDPROC)SetWindowLongPtr(videoWindow, GWLP_WNDPROC, (LONG_PTR)VideoWindowProc);
     SetWindowTheme(videoWindow, L"DarkMode_Explorer", nullptr);
     CreateRenderTarget();
   }
@@ -1121,4 +1124,34 @@ void VideoPlayer::CleanupD2D()
     d2dFactory->Release();
     d2dFactory = nullptr;
   }
+}
+
+LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  VideoPlayer* player = reinterpret_cast<VideoPlayer*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+  if (player)
+  {
+    if (msg == WM_PAINT)
+    {
+      player->OnVideoWindowPaint();
+      return 0;
+    }
+    else if (msg == WM_ERASEBKGND)
+    {
+      return 1;
+    }
+    return CallWindowProc(player->originalVideoWndProc, hwnd, msg, wParam, lParam);
+  }
+  return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+void VideoPlayer::OnVideoWindowPaint()
+{
+  PAINTSTRUCT ps;
+  BeginPaint(videoWindow, &ps);
+  if (isLoaded)
+    UpdateDisplay();
+  else
+    FillRect(ps.hdc, &ps.rcPaint, (HBRUSH)GetStockObject(BLACK_BRUSH));
+  EndPaint(videoWindow, &ps);
 }

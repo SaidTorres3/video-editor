@@ -75,6 +75,7 @@ private:
 
   HWND parentWindow;
   HWND videoWindow;
+  WNDPROC originalVideoWndProc;
 
   // Direct2D rendering components
   ID2D1Factory* d2dFactory;
@@ -171,5 +172,7 @@ private:
   bool InitializeD2D();
   void CleanupD2D();
   bool CreateRenderTarget();
+  static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+  void OnVideoWindowPaint();
 };
 #endif // VIDEO_PLAYER_H
