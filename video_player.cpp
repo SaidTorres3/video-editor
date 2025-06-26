@@ -3,6 +3,7 @@
 #include <iostream>
 #include <sstream>
 #include <cstdlib>
+#include <windows.h>
 #include <d2d1.h>
 #include <d2d1helper.h>
 #include <dxgiformat.h>
@@ -11,6 +12,12 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+
+// Simple debug logging helper
+static void DebugLog(const std::string& msg)
+{
+    OutputDebugStringA((msg + "\n").c_str());
+}
 
 // Link with Windows Audio libraries
 #pragma comment(lib, "ole32.lib")
@@ -928,7 +935,10 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
                            int maxBitrate, HWND progressBar)
 {
-    if (!isLoaded) return false;
+    if (!isLoaded) {
+        DebugLog("CutVideo called but no video loaded");
+        return false;
+    }
 
     int bufSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
     std::string utf8Output(bufSize, 0);
@@ -975,8 +985,10 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
 
     SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
     HANDLE readPipe = NULL, writePipe = NULL;
-    if (!CreatePipe(&readPipe, &writePipe, &sa, 0))
+    if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
+        DebugLog("CreatePipe failed");
         return false;
+    }
     SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOA si{};
@@ -990,9 +1002,11 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
 
     std::vector<char> cmdBuf(cmdStr.begin(), cmdStr.end());
     cmdBuf.push_back('\0');
+    DebugLog(std::string("Running command: ") + cmdStr);
     BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     CloseHandle(writePipe);
     if (!ok) {
+        DebugLog("CreateProcess failed");
         CloseHandle(readPipe);
         return false;
     }
@@ -1010,6 +1024,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         while ((pos = line.find('\n')) != std::string::npos) {
             std::string l = line.substr(0, pos);
             line.erase(0, pos + 1);
+            DebugLog(l);
             if (l.rfind("out_time_ms=", 0) == 0) {
                 long long ms = _atoi64(l.substr(12).c_str()) / 1000;
                 int percent = static_cast<int>((ms / totalMs) * 100.0);
@@ -1022,6 +1037,11 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
 
     DWORD exitCode = 1;
     GetExitCodeProcess(pi.hProcess, &exitCode);
+    {
+        std::ostringstream oss;
+        oss << "ffmpeg exited with code " << exitCode;
+        DebugLog(oss.str());
+    }
 
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
