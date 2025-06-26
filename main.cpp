@@ -51,6 +51,8 @@ HWND g_hLabelCutInfo;
 HWND g_hProgressWnd, g_hProgressBar;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
+bool g_isTimelineDragging = false;
+bool g_wasPlayingBeforeDrag = false;
 
 // Dark mode UI resources
 HFONT g_hFont = nullptr;
@@ -904,22 +906,54 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_LBUTTONDOWN:
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
-            RECT rc;
-            GetClientRect(hwnd, &rc);
+            SetFocus(hwnd);
+            RECT rc; GetClientRect(hwnd, &rc);
             int x = GET_X_LPARAM(lParam);
-            if (x < 0) x = 0;
-            if (x > rc.right) x = rc.right;
+            if (x < 0) x = 0; if (x > rc.right) x = rc.right;
             double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
-            double duration = g_videoPlayer->GetDuration();
-            double seekTime = ratio * duration;
+            double dur = g_videoPlayer->GetDuration();
+            double seekTime = ratio * dur;
 
-            bool wasPlaying = g_videoPlayer->IsPlaying();
-            if (wasPlaying)
+            g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
+            if (g_wasPlayingBeforeDrag)
                 g_videoPlayer->Pause();
+            g_isTimelineDragging = true;
+            SetCapture(hwnd);
             g_videoPlayer->SeekToTime(seekTime);
-            if (wasPlaying)
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateControls();
+            return 0;
+        }
+        break;
+    case WM_MOUSEMOVE:
+        if (g_isTimelineDragging && g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            RECT rc; GetClientRect(hwnd, &rc);
+            int x = GET_X_LPARAM(lParam);
+            if (x < 0) x = 0; if (x > rc.right) x = rc.right;
+            double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
+            double dur = g_videoPlayer->GetDuration();
+            double seekTime = ratio * dur;
+            g_videoPlayer->SeekToTime(seekTime);
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateControls();
+            return 0;
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (g_isTimelineDragging && g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            ReleaseCapture();
+            g_isTimelineDragging = false;
+            RECT rc; GetClientRect(hwnd, &rc);
+            int x = GET_X_LPARAM(lParam);
+            if (x < 0) x = 0; if (x > rc.right) x = rc.right;
+            double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
+            double dur = g_videoPlayer->GetDuration();
+            double seekTime = ratio * dur;
+            g_videoPlayer->SeekToTime(seekTime);
+            if (g_wasPlayingBeforeDrag)
                 g_videoPlayer->Play();
-
             InvalidateRect(hwnd, NULL, FALSE);
             UpdateControls();
             return 0;

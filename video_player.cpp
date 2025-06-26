@@ -485,10 +485,13 @@ void VideoPlayer::SeekToTime(double seconds)
 
   currentFrame = (int64_t)(seconds * frameRate);
 
-  int maxFrames = 10; // decode a few frames for accuracy
+  int maxFrames = frameRate > 0 ? (int)(frameRate * 3) : 90; // decode up to ~3s
   DecodeNextFrame();
   while (currentPts < seconds && maxFrames-- > 0)
-    DecodeNextFrame();
+  {
+    if (!DecodeNextFrame())
+      break;
+  }
 }
 
 double VideoPlayer::GetDuration() const
