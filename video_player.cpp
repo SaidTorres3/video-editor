@@ -672,6 +672,7 @@ bool VideoPlayer::InitializeAudioTracks()
     {
       auto track = std::make_unique<AudioTrack>();
       track->streamIndex = i;
+      track->audioIndex = static_cast<int>(audioTracks.size());
       
       // Get codec and create context
       AVCodecParameters *codecpar = formatContext->streams[i]->codecpar;
@@ -954,7 +955,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         {
             if (!t->isMuted)
             {
-                filter += "[0:a:" + std::to_string(t->streamIndex) + "]";
+                filter += "[0:a:" + std::to_string(t->audioIndex) + "]";
             }
         }
         filter += "amix=inputs=" + std::to_string(activeTracks) + ":duration=longest[a]";
