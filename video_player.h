@@ -1,6 +1,9 @@
 #ifndef VIDEO_PLAYER_H
 #define VIDEO_PLAYER_H
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <string>
@@ -27,6 +30,7 @@ extern "C"
 #include <condition_variable>
 #include <deque>
 #include <atomic>
+#include <limits>
 
 // Audio output using Windows Audio Session API (WASAPI)
 #include <mmdeviceapi.h>
@@ -67,6 +71,7 @@ private:
   int64_t totalFrames;
   double currentPts;
   double duration;
+  double startTimeOffset;
 
   HWND parentWindow;
   HWND videoWindow;
