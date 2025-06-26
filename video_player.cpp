@@ -10,6 +10,7 @@
 #include <cstring>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 
 // Link with Windows Audio libraries
 #pragma comment(lib, "ole32.lib")
@@ -923,199 +924,60 @@ void VideoPlayer::PlaybackThreadFunction()
   isPlaying = false;
 }
 
-bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime, double endTime, bool mergeAudio, bool reencodeToH264, int quality)
+bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime, double endTime,
+                           bool mergeAudio, bool reencodeToH264, int bitrateKbps)
 {
-    if (!isLoaded) return false;
-
-    if (reencodeToH264) {
-        if (loadedFilename.empty()) return false;
-        int inSize = WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Input(inSize, 0);
-        WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], inSize, nullptr, nullptr);
-
-        int outSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Out(outSize, 0);
-        WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Out[0], outSize, nullptr, nullptr);
-
-        int activeTracks = 0;
-        for (const auto &t : audioTracks) {
-            if (!t->isMuted) activeTracks++; 
-        }
-        std::string filterArg;
-        if (mergeAudio && activeTracks > 1) {
-            filterArg = "-filter_complex amix=inputs=" + std::to_string(activeTracks);
-        }
-        char cmd[1024];
-        snprintf(cmd, sizeof(cmd),
-                 "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" %s -c:v libx264 -crf %d -preset veryfast -c:a aac \"%s\"",
-                 startTime, endTime, utf8Input.c_str(), filterArg.c_str(), quality, utf8Out.c_str());
-        int result = system(cmd);
-        return result == 0;
-    }
-
-    // Convert filename to UTF-8
-    int bufSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8OutputFilename(bufSize, 0);
-    WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8OutputFilename[0], bufSize, nullptr, nullptr);
-
-    AVFormatContext* outFormatContext = nullptr;
-    int ret = avformat_alloc_output_context2(&outFormatContext, nullptr, nullptr, utf8OutputFilename.c_str());
-    if (ret < 0 || !outFormatContext) {
-        std::cerr << "Could not create output context" << std::endl;
+    if (!isLoaded || loadedFilename.empty())
         return false;
+
+    int inSize = WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string utf8Input(inSize, 0);
+    WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], inSize, nullptr, nullptr);
+
+    int outSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string utf8Out(outSize, 0);
+    WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Out[0], outSize, nullptr, nullptr);
+
+    int activeTracks = 0;
+    for (const auto &t : audioTracks)
+        if (!t->isMuted)
+            activeTracks++;
+
+    char cmd[2048];
+
+    if (reencodeToH264)
+    {
+        if (mergeAudio && activeTracks > 1)
+        {
+            snprintf(cmd, sizeof(cmd),
+                     "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" -filter_complex amix=inputs=%d -map 0:v -map \"[a]\" -c:v libx264 -b:v %dk -preset veryfast -c:a aac \"%s\"",
+                     startTime, endTime, utf8Input.c_str(), activeTracks, bitrateKbps, utf8Out.c_str());
+        }
+        else
+        {
+            snprintf(cmd, sizeof(cmd),
+                     "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" -map 0 -c:v libx264 -b:v %dk -preset veryfast -c:a aac \"%s\"",
+                     startTime, endTime, utf8Input.c_str(), bitrateKbps, utf8Out.c_str());
+        }
     }
-
-    std::vector<int> stream_mapping;
-    int out_stream_index = 0;
-    std::vector<int> unmuted_audio_streams;
-
-    // Map video stream
-    stream_mapping.push_back(out_stream_index++);
-    AVStream* video_out_stream = avformat_new_stream(outFormatContext, nullptr);
-    avcodec_parameters_copy(video_out_stream->codecpar, formatContext->streams[videoStreamIndex]->codecpar);
-    video_out_stream->codecpar->codec_tag = 0;
-    video_out_stream->time_base = formatContext->streams[videoStreamIndex]->time_base;
-
-    // Identify unmuted audio streams
-    for (const auto& track : audioTracks) {
-        if (!track->isMuted) {
-            unmuted_audio_streams.push_back(track->streamIndex);
+    else
+    {
+        if (mergeAudio && activeTracks > 1)
+        {
+            snprintf(cmd, sizeof(cmd),
+                     "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" -filter_complex amix=inputs=%d -map 0:v -map \"[a]\" -c:v copy -c:a aac \"%s\"",
+                     startTime, endTime, utf8Input.c_str(), activeTracks, utf8Out.c_str());
+        }
+        else
+        {
+            snprintf(cmd, sizeof(cmd),
+                     "ffmpeg -y -ss %.3f -to %.3f -i \"%s\" -map 0 -c copy \"%s\"",
+                     startTime, endTime, utf8Input.c_str(), utf8Out.c_str());
         }
     }
 
-    if (mergeAudio && unmuted_audio_streams.size() > 1) {
-        // Create a single audio stream for merging
-        AVStream* audio_out_stream = avformat_new_stream(outFormatContext, nullptr);
-        avcodec_parameters_copy(audio_out_stream->codecpar, formatContext->streams[unmuted_audio_streams[0]]->codecpar);
-        audio_out_stream->codecpar->codec_tag = 0;
-        audio_out_stream->time_base = formatContext->streams[unmuted_audio_streams[0]]->time_base;
-    } else {
-        // Map each unmuted audio stream individually
-        for (int stream_index : unmuted_audio_streams) {
-            stream_mapping.push_back(out_stream_index++);
-            AVStream* audio_out_stream = avformat_new_stream(outFormatContext, nullptr);
-            avcodec_parameters_copy(audio_out_stream->codecpar, formatContext->streams[stream_index]->codecpar);
-            audio_out_stream->codecpar->codec_tag = 0;
-            audio_out_stream->time_base = formatContext->streams[stream_index]->time_base;
-        }
-    }
-
-    // Open output file
-    if (!(outFormatContext->oformat->flags & AVFMT_NOFILE)) {
-        ret = avio_open(&outFormatContext->pb, utf8OutputFilename.c_str(), AVIO_FLAG_WRITE);
-        if (ret < 0) {
-            // Error handling
-            avformat_free_context(outFormatContext);
-            return false;
-        }
-    }
-
-    AVDictionary* opts = nullptr;
-    if (mergeAudio && unmuted_audio_streams.size() > 1) {
-        std::string filter_spec;
-        for (int stream_index : unmuted_audio_streams) {
-            filter_spec += "[0:" + std::to_string(stream_index) + "]";
-        }
-        filter_spec += "amix=inputs=" + std::to_string(unmuted_audio_streams.size()) + "[a]";
-        av_dict_set(&opts, "filter_complex", filter_spec.c_str(), 0);
-        av_dict_set(&opts, "map", "0:v", 0);
-        av_dict_set(&opts, "map", "[a]", 0);
-    }
-    
-    // Write header
-    ret = avformat_write_header(outFormatContext, &opts);
-    av_dict_free(&opts);
-    if (ret < 0) {
-        // Error handling
-        avio_closep(&outFormatContext->pb);
-        avformat_free_context(outFormatContext);
-        return false;
-    }
-
-    // Seek to start time
-    ret = av_seek_frame(formatContext, -1, startTime * AV_TIME_BASE, AVSEEK_FLAG_BACKWARD);
-    if (ret < 0) {
-       // Error handling
-       avformat_free_context(outFormatContext);
-       return false;
-    }
-
-    AVPacket pkt;
-    std::vector<int64_t> start_ts(formatContext->nb_streams, AV_NOPTS_VALUE);
-    while (av_read_frame(formatContext, &pkt) >= 0) {
-        double ts_seconds = pkt.pts * av_q2d(formatContext->streams[pkt.stream_index]->time_base);
-        if (ts_seconds > endTime) {
-            av_packet_unref(&pkt);
-            break;
-        }
-
-        bool is_unmuted_audio = false;
-        for (int stream_idx : unmuted_audio_streams) {
-            if (pkt.stream_index == stream_idx) {
-                is_unmuted_audio = true;
-                break;
-            }
-        }
-
-        if (pkt.stream_index != videoStreamIndex && !is_unmuted_audio) {
-            av_packet_unref(&pkt);
-            continue;
-        }
-
-        if (ts_seconds >= startTime) {
-            if (start_ts[pkt.stream_index] == AV_NOPTS_VALUE) {
-                start_ts[pkt.stream_index] = pkt.pts;
-            }
-            int64_t offset = start_ts[pkt.stream_index];
-
-            AVStream* inStream = formatContext->streams[pkt.stream_index];
-            AVStream* outStream;
-
-            if (mergeAudio && is_unmuted_audio) {
-                outStream = outFormatContext->streams[1]; // Merged audio stream
-                pkt.stream_index = 1;
-            } else if (pkt.stream_index == videoStreamIndex) {
-                 outStream = outFormatContext->streams[0]; // Video stream
-                 pkt.stream_index = 0;
-            } else {
-                int current_audio_stream = 0;
-                for(size_t i = 0; i < unmuted_audio_streams.size(); ++i){
-                    if(unmuted_audio_streams[i] == inStream->index){
-                        current_audio_stream = i;
-                        break;
-                    }
-                }
-                outStream = outFormatContext->streams[1 + current_audio_stream];
-                pkt.stream_index = 1 + current_audio_stream;
-            }
-
-
-            pkt.pts = av_rescale_q(pkt.pts - offset, inStream->time_base, outStream->time_base);
-            if (pkt.dts != AV_NOPTS_VALUE)
-                pkt.dts = av_rescale_q(pkt.dts - offset, inStream->time_base, outStream->time_base);
-            if(pkt.dts > pkt.pts) pkt.dts = pkt.pts;
-            pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
-            pkt.pos = -1;
-
-            ret = av_interleaved_write_frame(outFormatContext, &pkt);
-            if (ret < 0) {
-                // Error handling...
-                break;
-            }
-        }
-        av_packet_unref(&pkt);
-    }
-
-    av_write_trailer(outFormatContext);
-    if (!(outFormatContext->oformat->flags & AVFMT_NOFILE)) {
-        avio_closep(&outFormatContext->pb);
-    }
-    avformat_free_context(outFormatContext);
-
-    // Reset format context for further use
-    av_seek_frame(formatContext, -1, 0, AVSEEK_FLAG_BACKWARD);
-
-    return true;
+    int result = system(cmd);
+    return result == 0;
 }
 
 bool VideoPlayer::InitializeD2D()

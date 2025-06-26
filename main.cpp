@@ -36,7 +36,7 @@
 #define ID_CHECKBOX_MERGE_AUDIO 1014
 #define ID_RADIO_COPY_CODEC 1015
 #define ID_RADIO_H264 1016
-#define ID_SLIDER_QUALITY 1017
+#define ID_EDIT_BITRATE 1017
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
@@ -47,7 +47,7 @@ HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
 HWND g_hLabelCutInfo;
-HWND g_hRadioCopyCodec, g_hRadioH264, g_hSliderQuality, g_hLabelQuality;
+HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hLabelBitrate;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
 
@@ -452,24 +452,22 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hRadioH264);
 
-    g_hLabelQuality = CreateWindow(
-        L"STATIC", L"Quality (18-28):",
+    g_hLabelBitrate = CreateWindow(
+        L"STATIC", L"Max Bitrate (kbps):",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
         340, 565, 200, 20,
         hwnd, nullptr,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hLabelQuality);
+    ApplyDarkTheme(g_hLabelBitrate);
 
-    g_hSliderQuality = CreateWindow(
-        TRACKBAR_CLASS, L"Quality",
-        WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        340, 585, 200, 30,
-        hwnd, (HMENU)ID_SLIDER_QUALITY,
+    g_hEditBitrate = CreateWindow(
+        L"EDIT", L"3000",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+        340, 585, 200, 25,
+        hwnd, (HMENU)ID_EDIT_BITRATE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderQuality, TBM_SETRANGE, TRUE, MAKELONG(18, 28));
-    SendMessage(g_hSliderQuality, TBM_SETPOS, TRUE, 23);
-    EnableWindow(g_hSliderQuality, FALSE);
-    ApplyDarkTheme(g_hSliderQuality);
+    EnableWindow(g_hEditBitrate, FALSE);
+    ApplyDarkTheme(g_hEditBitrate);
 
 
     // Disable controls until video is loaded
@@ -487,8 +485,8 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hCheckboxMergeAudio, FALSE);
     EnableWindow(g_hRadioCopyCodec, FALSE);
     EnableWindow(g_hRadioH264, FALSE);
-    EnableWindow(g_hSliderQuality, FALSE);
-    EnableWindow(g_hLabelQuality, FALSE);
+    EnableWindow(g_hEditBitrate, FALSE);
+    EnableWindow(g_hLabelBitrate, FALSE);
 }
 
 void OpenVideoFile(HWND hwnd)
@@ -540,8 +538,8 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         EnableWindow(g_hCheckboxMergeAudio, TRUE);
         EnableWindow(g_hRadioCopyCodec, TRUE);
         EnableWindow(g_hRadioH264, TRUE);
-        EnableWindow(g_hLabelQuality, TRUE);
-        EnableWindow(g_hSliderQuality, SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED);
+        EnableWindow(g_hLabelBitrate, TRUE);
+        EnableWindow(g_hEditBitrate, SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED);
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
         UpdateCutInfoLabel(hwnd);
@@ -584,9 +582,9 @@ void UpdateControls()
     EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
     EnableWindow(g_hRadioCopyCodec, isLoaded);
     EnableWindow(g_hRadioH264, isLoaded);
-    EnableWindow(g_hLabelQuality, isLoaded);
+    EnableWindow(g_hLabelBitrate, isLoaded);
     BOOL h264Checked = (SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED);
-    EnableWindow(g_hSliderQuality, isLoaded && h264Checked);
+    EnableWindow(g_hEditBitrate, isLoaded && h264Checked);
 
 
     if (isLoaded)
@@ -818,8 +816,11 @@ void OnCutClicked(HWND hwnd)
 
         bool mergeAudio = IsDlgButtonChecked(hwnd, ID_CHECKBOX_MERGE_AUDIO) == BST_CHECKED;
         bool reencode = IsDlgButtonChecked(hwnd, ID_RADIO_H264) == BST_CHECKED;
-        int quality = (int)SendMessage(g_hSliderQuality, TBM_GETPOS, 0, 0);
-        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime, mergeAudio, reencode, quality);
+        wchar_t bitrateBuf[16];
+        GetWindowTextW(g_hEditBitrate, bitrateBuf, 16);
+        int bitrate = _wtoi(bitrateBuf);
+        if (bitrate <= 0) bitrate = 3000;
+        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime, mergeAudio, reencode, bitrate);
 
         EnableWindow(hwnd, TRUE); // Re-enable UI
 
@@ -869,8 +870,8 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 135, 200, 25, TRUE);
     MoveWindow(g_hRadioCopyCodec, audioControlsX, editingControlsY + 165, 200, 20, TRUE);
     MoveWindow(g_hRadioH264, audioControlsX, editingControlsY + 185, 200, 20, TRUE);
-    MoveWindow(g_hLabelQuality, audioControlsX, editingControlsY + 205, 200, 20, TRUE);
-    MoveWindow(g_hSliderQuality, audioControlsX, editingControlsY + 230, 200, 30, TRUE);
+    MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 205, 200, 20, TRUE);
+    MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 230, 200, 25, TRUE);
 
     // Video area (takes up remaining space)
     int videoSectionWidth = clientRect.right - audioControlsWidth - 30;

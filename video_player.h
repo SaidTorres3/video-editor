@@ -135,7 +135,7 @@ public:
   float GetAudioTrackVolume(int trackIndex) const;
   void SetAudioTrackVolume(int trackIndex, float volume);
   void SetMasterVolume(float volume);
-  bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime, bool mergeAudio, bool reencodeToH264, int quality);
+  bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime, bool mergeAudio, bool reencodeToH264, int bitrateKbps);
 
   // Timer callback
   static void CALLBACK TimerProc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD time);
