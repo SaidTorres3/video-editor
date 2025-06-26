@@ -1010,10 +1010,10 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         for (size_t i = 0; i < activeStreamIdx.size(); ++i) {
             cmd << "[0:" << activeStreamIdx[i] << "]";
         }
-        cmd << "amix=inputs=" << activeStreamIdx.size() << "[aout]\" -map 0:v -map [aout] ";
+        cmd << "amix=inputs=" << activeStreamIdx.size() << "[aout]\" -map 0:v -map -0:s -map [aout] ";
         cmd << "-c:a aac -b:a 192k ";
     } else {
-        cmd << "-map 0:v ";
+        cmd << "-map 0:v -map -0:s ";
         for (size_t i = 0; i < activeAudioIdx.size(); ++i) {
             cmd << "-map 0:a:" << activeAudioIdx[i] << " ";
         }
