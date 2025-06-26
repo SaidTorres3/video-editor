@@ -702,6 +702,8 @@ bool VideoPlayer::InitializeAudioTracks()
   if (!formatContext)
     return false;
 
+  int audioIdx = 0;
+
   // Find all audio streams
   for (unsigned i = 0; i < formatContext->nb_streams; i++)
   {
@@ -709,6 +711,7 @@ bool VideoPlayer::InitializeAudioTracks()
     {
       auto track = std::make_unique<AudioTrack>();
       track->streamIndex = i;
+      track->audioIndex = audioIdx++;
       
       // Get codec and create context
       AVCodecParameters *codecpar = formatContext->streams[i]->codecpar;
@@ -990,26 +993,29 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8Input[0], bufSize, nullptr, nullptr);
     utf8Input.resize(bufSize - 1);
 
-    std::vector<int> activeTracks;
+    std::vector<int> activeStreamIdx;
+    std::vector<int> activeAudioIdx;
     for (const auto& track : audioTracks) {
-        if (!track->isMuted)
-            activeTracks.push_back(track->streamIndex);
+        if (!track->isMuted) {
+            activeStreamIdx.push_back(track->streamIndex);
+            activeAudioIdx.push_back(track->audioIndex);
+        }
     }
 
     std::ostringstream cmd;
     cmd << "ffmpeg -y -ss " << startTime << " -to " << endTime << " -i \"" << utf8Input << "\" ";
 
-    if (mergeAudio && activeTracks.size() > 1) {
+    if (mergeAudio && activeStreamIdx.size() > 1) {
         cmd << "-filter_complex \"";
-        for (size_t i = 0; i < activeTracks.size(); ++i) {
-            cmd << "[0:" << activeTracks[i] << "]";
+        for (size_t i = 0; i < activeStreamIdx.size(); ++i) {
+            cmd << "[0:" << activeStreamIdx[i] << "]";
         }
-        cmd << "amix=inputs=" << activeTracks.size() << "[aout]\" -map 0:v -map [aout] ";
+        cmd << "amix=inputs=" << activeStreamIdx.size() << "[aout]\" -map 0:v -map [aout] ";
         cmd << "-c:a aac -b:a 192k ";
     } else {
         cmd << "-map 0:v ";
-        for (size_t i = 0; i < activeTracks.size(); ++i) {
-            cmd << "-map 0:" << activeTracks[i] << " ";
+        for (size_t i = 0; i < activeAudioIdx.size(); ++i) {
+            cmd << "-map 0:a:" << activeAudioIdx[i] << " ";
         }
         cmd << "-c:a copy ";
     }

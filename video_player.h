@@ -40,6 +40,7 @@ extern "C"
 // Audio track structure
 struct AudioTrack {
     int streamIndex;
+    int audioIndex; // index among audio streams for ffmpeg mapping
     AVCodecContext *codecContext;
     SwrContext *swrContext;
     AVFrame *frame;
@@ -48,7 +49,7 @@ struct AudioTrack {
     std::string name;
     std::deque<int16_t> buffer;
     
-    AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
+    AudioTrack() : streamIndex(-1), audioIndex(-1), codecContext(nullptr), swrContext(nullptr),
                    frame(nullptr), isMuted(false), volume(1.0f) {}
 };
 
