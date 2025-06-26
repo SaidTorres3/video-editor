@@ -927,12 +927,13 @@ LRESULT CALLBACK SeekBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, 
     case WM_LBUTTONDOWN:
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            int x = GET_X_LPARAM(lParam);
+            RECT channel{};
+            SendMessage(hwnd, TBM_GETCHANNELRECT, 0, (LPARAM)&channel);
+            int x = GET_X_LPARAM(lParam) - channel.left;
             if (x < 0) x = 0;
-            if (x > rc.right) x = rc.right;
-            int pos = (int)((x / (double)rc.right) * SEEK_SLIDER_MAX);
+            int width = channel.right - channel.left;
+            if (x > width) x = width;
+            int pos = (int)((x / (double)width) * SEEK_SLIDER_MAX);
             SendMessage(hwnd, TBM_SETPOS, TRUE, pos);
 
             double duration = g_videoPlayer->GetDuration();
@@ -945,6 +946,7 @@ LRESULT CALLBACK SeekBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, 
             if (wasPlaying)
                 g_videoPlayer->Play();
             UpdateControls();
+            return 0;
         }
         break;
     case WM_KEYDOWN:

@@ -457,25 +457,9 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 {
   if (!isLoaded || frameNumber < 0 || frameNumber >= totalFrames)
     return;
-  AVStream *vs = formatContext->streams[videoStreamIndex];
-  AVRational fps = av_d2q(frameRate, 100000);
-  int64_t ts = av_rescale_q(frameNumber, av_inv_q(fps), vs->time_base);
-  ts += (int64_t)(startTimeOffset / av_q2d(vs->time_base));
-  av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
-  avcodec_flush_buffers(codecContext);
-  for (auto &track : audioTracks)
-  {
-    if (track->codecContext)
-      avcodec_flush_buffers(track->codecContext);
-  }
-  {
-    std::lock_guard<std::mutex> lock(audioMutex);
-    for (auto& tr : audioTracks)
-      tr->buffer.clear();
-  }
-  currentFrame = frameNumber;
-  currentPts = frameNumber / frameRate;
-  DecodeNextFrame();
+
+  double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
+  SeekToTime(seconds);
 }
 
 void VideoPlayer::SeekToTime(double seconds)
@@ -500,8 +484,11 @@ void VideoPlayer::SeekToTime(double seconds)
   }
 
   currentFrame = (int64_t)(seconds * frameRate);
-  currentPts = seconds;
+
+  int maxFrames = (int)frameRate + 10; // safety cap ~1s
   DecodeNextFrame();
+  while (currentPts < seconds && maxFrames-- > 0)
+    DecodeNextFrame();
 }
 
 double VideoPlayer::GetDuration() const
