@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.10)
 project(VideoEditor CXX)
 
+# Option to link FFmpeg statically
+option(USE_STATIC_FFMPEG "Link FFmpeg statically" OFF)
+
+if(MSVC AND USE_STATIC_FFMPEG)
+    # Link the MSVC runtime statically when building a portable executable
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    # Enable link-time optimization to reduce overhead in the static build
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -74,8 +84,8 @@ target_link_libraries(VideoEditor PRIVATE
     ${SWRESAMPLE_LIBRARY}
 )
 
-# Copy FFmpeg DLLs to output directory after build
-if(WIN32)
+# Copy FFmpeg DLLs when linking dynamically
+if(WIN32 AND NOT USE_STATIC_FFMPEG)
     add_custom_command(TARGET VideoEditor POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avcodec-62.dll" "$<TARGET_FILE_DIR:VideoEditor>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avformat-62.dll" "$<TARGET_FILE_DIR:VideoEditor>"
