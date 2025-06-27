@@ -66,6 +66,18 @@ if(FFMPEG_INCLUDE_DIR)
 endif()
 
 # Link libraries
+set(FFMPEG_EXTRA_LIBS "")
+if(USE_STATIC_FFMPEG)
+    # When linking the static variant from vcpkg, FFmpeg depends on several
+    # additional libraries (zlib, libxml2, libmp3lame, etc.).  Rather than
+    # hardcoding each one, gather all libraries in the FFmpeg lib folder and
+    # link them as well.  This prevents unresolved symbols when optional
+    # features are enabled.
+    file(GLOB _all_ffmpeg_libs "${FFMPEG_ROOT}/lib/*.lib")
+    list(FILTER _all_ffmpeg_libs EXCLUDE REGEX "avcodec|avformat|avutil|swscale|swresample")
+    set(FFMPEG_EXTRA_LIBS ${_all_ffmpeg_libs})
+endif()
+
 target_link_libraries(VideoEditor PRIVATE
     user32
     gdi32
@@ -89,6 +101,7 @@ target_link_libraries(VideoEditor PRIVATE
     ${AVUTIL_LIBRARY}
     ${SWSCALE_LIBRARY}
     ${SWRESAMPLE_LIBRARY}
+    ${FFMPEG_EXTRA_LIBS}
 )
 
 # Copy FFmpeg DLLs when linking dynamically

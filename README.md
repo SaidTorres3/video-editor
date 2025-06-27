@@ -80,9 +80,10 @@ single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
    4. Build: `cmake --build . --config Release`
 
 2. **Building a portable executable with static FFmpeg**
-   1. Install FFmpeg via vcpkg using the static triplet:
+   1. Install FFmpeg via vcpkg using the static triplet.  You may enable
+      additional codec features if desired:
       ```
-      vcpkg install ffmpeg:x64-windows-static
+      vcpkg install ffmpeg[dav1d,avcodec,avformat,avfilter,swscale,swresample,freetype,fribidi,fontconfig,mp3lame,opus,vpx,webp,openjpeg,zlib,xml2]:x64-windows-static
       ```
    2. Configure CMake pointing `FFMPEG_ROOT` to the vcpkg installation and
       enabling static linking:
