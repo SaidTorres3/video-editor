@@ -108,6 +108,11 @@ When `-Static` is used the script looks for FFmpeg in
 `C:\tools\vcpkg\installed\x64-windows-static` unless another path is passed
 via `-FFmpegPath`.
 
+If the static libraries are not found, or the path contains the regular DLL
+distribution of FFmpeg, the script will abort with an error. Install the
+`ffmpeg:x64-windows-static` package with vcpkg or provide the correct location
+using `-FFmpegPath`.
+
 ### FFmpeg Libraries Required
 - avcodec (video/audio decoding)
 - avformat (container format handling)

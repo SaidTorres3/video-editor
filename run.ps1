@@ -15,6 +15,21 @@ if ($Static -and $FFmpegPath -eq "C:\Program Files\ffmpeg") {
     }
 }
 
+# Validar que la instalación es realmente estática
+if ($Static) {
+    if (-not (Test-Path "$FFmpegPath\lib\avcodec.lib")) {
+        Write-Host "ERROR: No se encontró una instalación estática de FFmpeg en $FFmpegPath" -ForegroundColor Red
+        Write-Host "Instala 'ffmpeg:x64-windows-static' con vcpkg o especifica la ruta con -FFmpegPath" -ForegroundColor Yellow
+        exit 1
+    }
+    $dlls = Get-ChildItem "$FFmpegPath\bin" -Filter "avcodec*.dll" -ErrorAction SilentlyContinue
+    if ($dlls) {
+        Write-Host "ERROR: La ruta $FFmpegPath contiene DLLs de FFmpeg. Se requiere la variante estática." -ForegroundColor Red
+        Write-Host "Asegúrate de haber instalado la tripleta x64-windows-static" -ForegroundColor Yellow
+        exit 1
+    }
+}
+
 Write-Host "Video Editor Build Script" -ForegroundColor Green
 Write-Host "=========================" -ForegroundColor Green
 

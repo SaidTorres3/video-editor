@@ -77,6 +77,13 @@ target_link_libraries(VideoEditor PRIVATE
     dwmapi
     uxtheme
     shell32
+    ws2_32
+    bcrypt
+    secur32
+    mfplat
+    mf
+    mfuuid
+    strmiids
     ${AVCODEC_LIBRARY}
     ${AVFORMAT_LIBRARY}
     ${AVUTIL_LIBRARY}
