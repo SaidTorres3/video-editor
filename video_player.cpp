@@ -223,7 +223,7 @@ bool VideoPlayer::InitializeDecoder()
   swsContext = sws_getContext(
       frameWidth, frameHeight, codecContext->pix_fmt,
       frameWidth, frameHeight, AV_PIX_FMT_BGRA,
-      SWS_BILINEAR, nullptr, nullptr, nullptr);
+      SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
   if (!swsContext)
   {
     CleanupDecoder();
@@ -836,22 +836,22 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
 
   // Resample audio
   int outSamples = swr_get_out_samples(track->swrContext, track->frame->nb_samples);
-  std::vector<uint8_t> resampledData(outSamples * audioChannels * sizeof(int16_t));
-  uint8_t *outPtr = resampledData.data();
-  
-  int convertedSamples = swr_convert(track->swrContext, &outPtr, outSamples,
+  size_t needed = static_cast<size_t>(outSamples * audioChannels);
+  if (track->resampleBuffer.size() < needed)
+      track->resampleBuffer.resize(needed);
+  int16_t* outPtr = track->resampleBuffer.data();
+
+  int convertedSamples = swr_convert(track->swrContext, (uint8_t**)&outPtr, outSamples,
                                     (const uint8_t**)track->frame->data, track->frame->nb_samples);
   if (convertedSamples < 0)
     return false;
 
   // Store raw samples in track buffer
-  resampledData.resize(convertedSamples * audioChannels * sizeof(int16_t));
   {
     std::lock_guard<std::mutex> lock(audioMutex);
-    int16_t* samples = reinterpret_cast<int16_t*>(resampledData.data());
     track->buffer.insert(track->buffer.end(),
-                         samples,
-                         samples + convertedSamples * audioChannels);
+                         outPtr,
+                         outPtr + convertedSamples * audioChannels);
   }
   audioCondition.notify_one();
 
