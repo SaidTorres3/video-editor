@@ -3,6 +3,8 @@ param(
     [switch]$Static
 )
 
+# Se recomienda instalar FFmpeg con:
+# vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib]:x64-windows-static
 # Si piden build estática y no cambiaron la ruta por defecto,
 # intentamos adivinar la ubicación de vcpkg estático.
 if ($Static -and $FFmpegPath -eq "C:\Program Files\ffmpeg") {
@@ -19,7 +21,7 @@ if ($Static -and $FFmpegPath -eq "C:\Program Files\ffmpeg") {
 if ($Static) {
     if (-not (Test-Path "$FFmpegPath\lib\avcodec.lib")) {
         Write-Host "ERROR: No se encontró una instalación estática de FFmpeg en $FFmpegPath" -ForegroundColor Red
-        Write-Host "Instala 'ffmpeg:x64-windows-static' con vcpkg o especifica la ruta con -FFmpegPath" -ForegroundColor Yellow
+        Write-Host "Instala 'ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib]:x64-windows-static' con vcpkg o especifica la ruta con -FFmpegPath" -ForegroundColor Yellow
         exit 1
     }
     $dlls = Get-ChildItem "$FFmpegPath\bin" -Filter "avcodec*.dll" -ErrorAction SilentlyContinue
