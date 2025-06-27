@@ -66,10 +66,45 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 - FFmpeg development libraries
 
 ### Build Steps
-1. Extract FFmpeg to `C:/Program Files/ffmpeg` (or update CMakeLists.txt path)
-2. Create build directory: `mkdir build && cd build`
-3. Generate project: `cmake ..`
-4. Build: `cmake --build . --config Release`
+The project can be built against the regular FFmpeg DLLs or the static
+libraries provided by `vcpkg`. Building with the static libraries produces a
+single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
+
+1. **Using the prebuilt shared FFmpeg binaries** (default)
+   1. Extract FFmpeg to `C:/Program Files/ffmpeg` (or set `FFMPEG_ROOT` when
+      configuring CMake).
+   2. Create a build directory: `mkdir build && cd build`
+   3. Generate the project: `cmake ..`
+   4. Build: `cmake --build . --config Release`
+
+2. **Building a portable executable with static FFmpeg**
+   1. Install FFmpeg via vcpkg using the static triplet:
+      ```
+      vcpkg install ffmpeg:x64-windows-static
+      ```
+   2. Configure CMake pointing `FFMPEG_ROOT` to the vcpkg installation and
+      enabling static linking:
+   ```
+   cmake -S . -B build -DFFMPEG_ROOT="C:/tools/vcpkg/installed/x64-windows-static" -DUSE_STATIC_FFMPEG=ON
+   ```
+   3. Build the release configuration:
+      ```
+   cmake --build build --config Release
+   ```
+   The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
+
+   Link-time optimization is automatically enabled when `USE_STATIC_FFMPEG` is
+   used to keep performance similar to the dynamic build.
+
+Alternatively you can use the provided `run.ps1` script:
+
+```powershell
+./run.ps1 -Static
+```
+
+When `-Static` is used the script looks for FFmpeg in
+`C:\tools\vcpkg\installed\x64-windows-static` unless another path is passed
+via `-FFmpegPath`.
 
 ### FFmpeg Libraries Required
 - avcodec (video/audio decoding)

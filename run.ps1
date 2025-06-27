@@ -1,6 +1,19 @@
 param(
-    [string]$FFmpegPath = "C:\Program Files\ffmpeg"
+    [string]$FFmpegPath = "C:\Program Files\ffmpeg",
+    [switch]$Static
 )
+
+# If a static build is requested and the default path has not been changed,
+# try the typical vcpkg location for the static FFmpeg triplet.
+if ($Static -and $FFmpegPath -eq "C:\Program Files\ffmpeg") {
+    $guess = "C:\tools\vcpkg\installed\x64-windows-static"
+    if (Test-Path "$guess\lib\avcodec.lib") {
+        Write-Host "Static mode detected. Using FFmpeg from $guess" -ForegroundColor Cyan
+        $FFmpegPath = $guess
+    } else {
+        Write-Host "Static mode requested but FFmpegPath not provided." -ForegroundColor Yellow
+    }
+}
 
 Write-Host "Video Editor Build Script" -ForegroundColor Green
 Write-Host "=========================" -ForegroundColor Green
@@ -135,11 +148,11 @@ Write-Host "FFmpeg found at: $FFmpegPath" -ForegroundColor Green
 # Configurar o reconfigurar CMake
 if (-not (Test-Path -Path ".\build")) {
     Write-Host "Build directory not found. Configuring CMake..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath"
+    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$($Static.IsPresent)
     if ($LASTEXITCODE -ne 0) { Write-Error "CMake configuration failed."; exit 1 }
 } else {
     Write-Host "Build directory exists. Reconfiguring with FFmpeg path..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath"
+    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$($Static.IsPresent)
     if ($LASTEXITCODE -ne 0) { Write-Error "CMake reconfiguration failed."; exit 1 }
 }
 
@@ -156,17 +169,19 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Copiar DLLs de FFmpeg si faltan
-$dllSource = "$FFmpegPath\bin"
-$dllTarget = ".\build\Release"
-if (Test-Path -Path $dllTarget) {
-    Write-Host "Copying FFmpeg DLLs..." -ForegroundColor Yellow
-    $ffmpegDlls = Get-ChildItem -Path $dllSource -Filter "*.dll" |
-                  Where-Object { $_.Name -match "^(avcodec|avformat|avutil|swscale|swresample)" }
-    foreach ($dll in $ffmpegDlls) {
-        $dest = Join-Path $dllTarget $dll.Name
-        if (-not (Test-Path $dest)) {
-            Copy-Item -Path $dll.FullName -Destination $dest -Force
-            Write-Host "  Copied: $($dll.Name)" -ForegroundColor Cyan
+if (-not $Static) {
+    $dllSource = "$FFmpegPath\bin"
+    $dllTarget = ".\build\Release"
+    if (Test-Path -Path $dllTarget) {
+        Write-Host "Copying FFmpeg DLLs..." -ForegroundColor Yellow
+        $ffmpegDlls = Get-ChildItem -Path $dllSource -Filter "*.dll" |
+                      Where-Object { $_.Name -match "^(avcodec|avformat|avutil|swscale|swresample)" }
+        foreach ($dll in $ffmpegDlls) {
+            $dest = Join-Path $dllTarget $dll.Name
+            if (-not (Test-Path $dest)) {
+                Copy-Item -Path $dll.FullName -Destination $dest -Force
+                Write-Host "  Copied: $($dll.Name)" -ForegroundColor Cyan
+            }
         }
     }
 }
