@@ -231,8 +231,10 @@ bool VideoPlayer::InitializeDecoder()
   av_image_fill_arrays(frameRGB->data, frameRGB->linesize, buffer,
                        AV_PIX_FMT_BGRA, frameWidth, frameHeight, 32);
 
+  AVPixelFormat srcFmt = useHwAccel ? codecContext->sw_pix_fmt
+                                    : codecContext->pix_fmt;
   swsContext = sws_getContext(
-      frameWidth, frameHeight, codecContext->pix_fmt,
+      frameWidth, frameHeight, srcFmt,
       frameWidth, frameHeight, AV_PIX_FMT_BGRA,
       SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
   if (!swsContext)
@@ -452,6 +454,8 @@ bool VideoPlayer::DecodeNextFrame()
         currentFrame++;
         UpdateDisplay();
         av_frame_unref(target);
+        if (useHwAccel && target != frame)
+          av_frame_unref(frame);
         return true;
       }
     }
