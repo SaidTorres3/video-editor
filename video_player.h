@@ -21,6 +21,7 @@ extern "C"
 #include <libavutil/channel_layout.h>
 #include <libavutil/rational.h>
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 }
 
 #include <vector>
@@ -59,6 +60,7 @@ private:
   AVFormatContext *formatContext;
   AVCodecContext *codecContext;
   AVFrame *frame;
+  AVFrame *hwFrame;
   AVFrame *frameRGB;
   AVPacket *packet;
   struct SwsContext *swsContext;
@@ -73,6 +75,11 @@ private:
   double currentPts;
   double duration;
   double startTimeOffset;
+
+  // Hardware acceleration
+  AVBufferRef *hwDeviceCtx;
+  AVPixelFormat hwPixelFormat;
+  bool useHwAccel;
 
   HWND parentWindow;
   HWND videoWindow;
@@ -157,6 +164,9 @@ private:
   bool DecodeNextFrame();
   void UpdateDisplay();
   void CreateVideoWindow();
+
+  bool InitHardwareDecoder(AVCodecID codecId);
+  static enum AVPixelFormat GetHwFormat(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts);
   
   // Audio methods
   bool InitializeAudio();

@@ -44,7 +44,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
-      originalVideoWndProc(nullptr)
+      originalVideoWndProc(nullptr), hwFrame(nullptr), hwDeviceCtx(nullptr), hwPixelFormat(AV_PIX_FMT_NONE), useHwAccel(false)
 {
   InitializeD2D();
   CreateVideoWindow();
@@ -56,6 +56,8 @@ VideoPlayer::~VideoPlayer()
   UnloadVideo();
   CleanupAudio();
   CleanupD2D();
+  if (hwDeviceCtx)
+    av_buffer_unref(&hwDeviceCtx);
   if (playbackThreadRunning)
   {
     playbackThreadRunning = false;
@@ -198,6 +200,13 @@ bool VideoPlayer::InitializeDecoder()
     avcodec_free_context(&codecContext);
     return false;
   }
+  codecContext->opaque = this;
+  InitHardwareDecoder(codec->id);
+  if (useHwAccel)
+  {
+    codecContext->get_format = GetHwFormat;
+    codecContext->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+  }
   if (avcodec_open2(codecContext, codec, nullptr) < 0)
   {
     avcodec_free_context(&codecContext);
@@ -208,8 +217,10 @@ bool VideoPlayer::InitializeDecoder()
   frameHeight = codecContext->height;
   frame = av_frame_alloc();
   frameRGB = av_frame_alloc();
+  if (useHwAccel)
+    hwFrame = av_frame_alloc();
   packet = av_packet_alloc();
-  if (!frame || !frameRGB || !packet)
+  if (!frame || !frameRGB || !packet || (useHwAccel && !hwFrame))
   {
     CleanupDecoder();
     return false;
@@ -233,6 +244,42 @@ bool VideoPlayer::InitializeDecoder()
   return true;
 }
 
+bool VideoPlayer::InitHardwareDecoder(AVCodecID codecId)
+{
+  useHwAccel = false;
+  hwPixelFormat = AV_PIX_FMT_NONE;
+  if (codecId != AV_CODEC_ID_H264)
+    return false;
+
+  if (av_hwdevice_ctx_create(&hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) >= 0)
+  {
+    hwPixelFormat = AV_PIX_FMT_D3D11;
+  }
+  else if (av_hwdevice_ctx_create(&hwDeviceCtx, AV_HWDEVICE_TYPE_DXVA2, nullptr, nullptr, 0) >= 0)
+  {
+    hwPixelFormat = AV_PIX_FMT_DXVA2_VLD;
+  }
+  else
+  {
+    return false;
+  }
+
+  useHwAccel = true;
+  return true;
+}
+
+enum AVPixelFormat VideoPlayer::GetHwFormat(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
+{
+  VideoPlayer *player = reinterpret_cast<VideoPlayer*>(ctx->opaque);
+  const enum AVPixelFormat *p;
+  for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++)
+  {
+    if (*p == player->hwPixelFormat)
+      return *p;
+  }
+  return pix_fmts[0];
+}
+
 void VideoPlayer::CleanupDecoder()
 {
   if (swsContext)
@@ -243,10 +290,14 @@ void VideoPlayer::CleanupDecoder()
     av_packet_free(&packet), packet = nullptr;
   if (frameRGB)
     av_frame_free(&frameRGB), frameRGB = nullptr;
+  if (hwFrame)
+    av_frame_free(&hwFrame), hwFrame = nullptr;
   if (frame)
     av_frame_free(&frame), frame = nullptr;
   if (codecContext)
     avcodec_free_context(&codecContext), codecContext = nullptr;
+  if (hwDeviceCtx)
+    av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr, useHwAccel = false;
 }
 
 void VideoPlayer::UnloadVideo()
@@ -365,12 +416,23 @@ bool VideoPlayer::DecodeNextFrame()
 
       while (true)
       {
-        ret = avcodec_receive_frame(codecContext, frame);
+        AVFrame *target = useHwAccel ? hwFrame : frame;
+        ret = avcodec_receive_frame(codecContext, target);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
           break;
         if (ret < 0)
           return false;
 
+        if (useHwAccel && target->format == hwPixelFormat)
+        {
+          if (av_hwframe_transfer_data(frame, target, 0) < 0)
+            return false;
+        }
+        else if (useHwAccel)
+        {
+          av_frame_ref(frame, target);
+        }
+        
         sws_scale(
             swsContext,
             (uint8_t const *const *)frame->data, frame->linesize,
@@ -389,6 +451,7 @@ bool VideoPlayer::DecodeNextFrame()
           currentPts = 0.0;
         currentFrame++;
         UpdateDisplay();
+        av_frame_unref(target);
         return true;
       }
     }
