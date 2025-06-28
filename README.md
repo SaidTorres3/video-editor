@@ -156,8 +156,9 @@ The application supports all audio formats that FFmpeg can decode, including:
 - Low-latency audio output using WASAPI shared mode
 - Efficient audio mixing with minimal CPU overhead
 - Automatic format conversion handles different audio specifications
-- The native FFmpeg H.264 decoder is forced and multi-threading enabled for
-  smooth playback when using the static build
+- When using the static build, the native FFmpeg H.264 decoder is chosen over
+  the slower OpenH264 wrapper and multi-threaded decoding is enabled
+  automatically
 
 ## Troubleshooting
 
