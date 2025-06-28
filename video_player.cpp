@@ -427,6 +427,9 @@ bool VideoPlayer::DecodeNextFrame()
 
         if (useHwAccel && target->format == hwPixelFormat)
         {
+          frame->format = codecContext->sw_pix_fmt;
+          frame->width = codecContext->width;
+          frame->height = codecContext->height;
           if (av_hwframe_transfer_data(frame, target, 0) < 0)
             return false;
         }
