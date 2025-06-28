@@ -28,13 +28,24 @@ static void DebugLog(const std::string& msg, bool popup = false)
         MessageBoxA(nullptr, msg.c_str(), "Video Editor Debug", MB_OK | MB_ICONINFORMATION);
 }
 
+static enum AVPixelFormat GetHWFormat(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
+{
+    VideoPlayer *player = reinterpret_cast<VideoPlayer*>(ctx->opaque);
+    for (const enum AVPixelFormat *p = pix_fmts; *p != -1; ++p)
+    {
+        if (*p == player->hwPixelFormat)
+            return *p;
+    }
+    return pix_fmts[0];
+}
+
 // Link with Windows Audio libraries
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "winmm.lib")
 
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
-      frame(nullptr), frameRGB(nullptr), packet(nullptr), swsContext(nullptr),
+      frame(nullptr), frameRGB(nullptr), swFrame(nullptr), packet(nullptr), swsContext(nullptr),
       buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0), videoWindow(nullptr),
@@ -44,6 +55,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
+      hwDeviceCtx(nullptr), hwPixelFormat(AV_PIX_FMT_NONE), usingHwAccel(false),
       originalVideoWndProc(nullptr)
 {
   InitializeD2D();
@@ -210,6 +222,18 @@ bool VideoPlayer::InitializeDecoder()
     avcodec_free_context(&codecContext);
     return false;
   }
+  // Try to enable D3D11 hardware acceleration for H.264/HEVC
+  if (cp->codec_id == AV_CODEC_ID_H264 || cp->codec_id == AV_CODEC_ID_HEVC)
+  {
+    if (av_hwdevice_ctx_create(&hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) >= 0)
+    {
+      codecContext->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+      codecContext->get_format = GetHWFormat;
+      codecContext->opaque = this;
+      hwPixelFormat = AV_PIX_FMT_D3D11;
+      usingHwAccel = true;
+    }
+  }
   // Enable multi-threaded decoding.  Let FFmpeg decide the thread count when
   // thread_count is set to 0.  Use both frame and slice threading when
   // supported.
@@ -226,8 +250,9 @@ bool VideoPlayer::InitializeDecoder()
   frameHeight = codecContext->height;
   frame = av_frame_alloc();
   frameRGB = av_frame_alloc();
+  swFrame = av_frame_alloc();
   packet = av_packet_alloc();
-  if (!frame || !frameRGB || !packet)
+  if (!frame || !frameRGB || !swFrame || !packet)
   {
     CleanupDecoder();
     return false;
@@ -238,8 +263,9 @@ bool VideoPlayer::InitializeDecoder()
   av_image_fill_arrays(frameRGB->data, frameRGB->linesize, buffer,
                        AV_PIX_FMT_BGRA, frameWidth, frameHeight, 32);
 
+  AVPixelFormat srcFmt = usingHwAccel ? codecContext->sw_pix_fmt : codecContext->pix_fmt;
   swsContext = sws_getContext(
-      frameWidth, frameHeight, codecContext->pix_fmt,
+      frameWidth, frameHeight, srcFmt,
       frameWidth, frameHeight, AV_PIX_FMT_BGRA,
       SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
   if (!swsContext)
@@ -261,10 +287,15 @@ void VideoPlayer::CleanupDecoder()
     av_packet_free(&packet), packet = nullptr;
   if (frameRGB)
     av_frame_free(&frameRGB), frameRGB = nullptr;
+  if (swFrame)
+    av_frame_free(&swFrame), swFrame = nullptr;
   if (frame)
     av_frame_free(&frame), frame = nullptr;
   if (codecContext)
     avcodec_free_context(&codecContext), codecContext = nullptr;
+  if (hwDeviceCtx)
+    av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
+  usingHwAccel = false;
 }
 
 void VideoPlayer::UnloadVideo()
@@ -389,9 +420,17 @@ bool VideoPlayer::DecodeNextFrame()
         if (ret < 0)
           return false;
 
+        AVFrame *src = frame;
+        if (usingHwAccel && frame->format == hwPixelFormat)
+        {
+          if (av_hwframe_transfer_data(swFrame, frame, 0) < 0)
+            return false;
+          src = swFrame;
+        }
+
         sws_scale(
             swsContext,
-            (uint8_t const *const *)frame->data, frame->linesize,
+            (uint8_t const *const *)src->data, src->linesize,
             0, frameHeight,
             frameRGB->data, frameRGB->linesize);
         AVStream *vs = formatContext->streams[videoStreamIndex];
