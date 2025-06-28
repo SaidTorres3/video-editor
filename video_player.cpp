@@ -57,6 +57,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
       hwDeviceCtx(nullptr), hwPixelFormat(AV_PIX_FMT_NONE), usingHwAccel(false),
+      swsSrcFormat(AV_PIX_FMT_NONE),
       originalVideoWndProc(nullptr)
 {
   InitializeD2D();
@@ -268,11 +269,15 @@ bool VideoPlayer::InitializeDecoder()
   av_image_fill_arrays(frameRGB->data, frameRGB->linesize, buffer,
                        AV_PIX_FMT_BGRA, frameWidth, frameHeight, 32);
 
-  AVPixelFormat srcFmt = usingHwAccel ? codecContext->sw_pix_fmt : codecContext->pix_fmt;
+  AVPixelFormat srcFmt = codecContext->pix_fmt;
+  if (usingHwAccel)
+      srcFmt = codecContext->sw_pix_fmt != AV_PIX_FMT_NONE ? codecContext->sw_pix_fmt
+                                                           : AV_PIX_FMT_NV12;
   swsContext = sws_getContext(
       frameWidth, frameHeight, srcFmt,
       frameWidth, frameHeight, AV_PIX_FMT_BGRA,
       SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+  swsSrcFormat = srcFmt;
   if (!swsContext)
   {
     CleanupDecoder();
@@ -301,6 +306,7 @@ void VideoPlayer::CleanupDecoder()
   if (hwDeviceCtx)
     av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
   usingHwAccel = false;
+  swsSrcFormat = AV_PIX_FMT_NONE;
 }
 
 void VideoPlayer::UnloadVideo()
@@ -448,6 +454,19 @@ bool VideoPlayer::DecodeNextFrame()
           if (av_hwframe_transfer_data(swFrame, frame, 0) < 0)
             return false;
           src = swFrame;
+        }
+
+        if (!swsContext || src->format != swsSrcFormat)
+        {
+          if (swsContext)
+            sws_freeContext(swsContext);
+          swsContext = sws_getContext(
+              frameWidth, frameHeight, static_cast<AVPixelFormat>(src->format),
+              frameWidth, frameHeight, AV_PIX_FMT_BGRA,
+              SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+          if (!swsContext)
+            return false;
+          swsSrcFormat = static_cast<AVPixelFormat>(src->format);
         }
 
         sws_scale(

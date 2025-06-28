@@ -66,6 +66,7 @@ private:
   AVFrame *swFrame;
   AVPacket *packet;
   struct SwsContext *swsContext;
+  AVPixelFormat swsSrcFormat;
   uint8_t *buffer;
   int videoStreamIndex;
   int frameWidth, frameHeight;
