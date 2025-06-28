@@ -21,7 +21,10 @@ extern "C"
 #include <libavutil/channel_layout.h>
 #include <libavutil/rational.h>
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 }
+
+#include <libavutil/hwcontext_d3d11va.h>
 
 #include <vector>
 #include <memory>
@@ -60,8 +63,10 @@ private:
   AVCodecContext *codecContext;
   AVFrame *frame;
   AVFrame *frameRGB;
+  AVFrame *swFrame;
   AVPacket *packet;
   struct SwsContext *swsContext;
+  AVPixelFormat swsSrcFormat;
   uint8_t *buffer;
   int videoStreamIndex;
   int frameWidth, frameHeight;
@@ -109,6 +114,14 @@ private:
   int audioSampleRate;
   int audioChannels;
   AVSampleFormat audioSampleFormat;
+
+  // Hardware accelerated decoding
+  AVBufferRef *hwDeviceCtx;
+  AVPixelFormat hwPixelFormat;
+  bool usingHwAccel;
+
+  static enum AVPixelFormat GetHWFormat(AVCodecContext *ctx,
+                                         const enum AVPixelFormat *pix_fmts);
 
   // Currently loaded file path
   std::wstring loadedFilename;
