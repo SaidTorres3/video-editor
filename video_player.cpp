@@ -437,7 +437,14 @@ bool VideoPlayer::DecodeNextFrame()
         AVFrame *src = frame;
         if (usingHwAccel && frame->format == hwPixelFormat)
         {
+          // Reset the software frame before transferring from GPU memory.
           av_frame_unref(swFrame);
+          swFrame->format = codecContext->sw_pix_fmt != AV_PIX_FMT_NONE ?
+                                codecContext->sw_pix_fmt : codecContext->pix_fmt;
+          swFrame->width  = codecContext->width;
+          swFrame->height = codecContext->height;
+          if (av_frame_get_buffer(swFrame, 0) < 0)
+            return false;
           if (av_hwframe_transfer_data(swFrame, frame, 0) < 0)
             return false;
           src = swFrame;
