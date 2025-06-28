@@ -28,7 +28,8 @@ static void DebugLog(const std::string& msg, bool popup = false)
         MessageBoxA(nullptr, msg.c_str(), "Video Editor Debug", MB_OK | MB_ICONINFORMATION);
 }
 
-static enum AVPixelFormat GetHWFormat(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
+enum AVPixelFormat VideoPlayer::GetHWFormat(AVCodecContext *ctx,
+                                            const enum AVPixelFormat *pix_fmts)
 {
     VideoPlayer *player = reinterpret_cast<VideoPlayer*>(ctx->opaque);
     for (const enum AVPixelFormat *p = pix_fmts; *p != -1; ++p)
@@ -228,7 +229,7 @@ bool VideoPlayer::InitializeDecoder()
     if (av_hwdevice_ctx_create(&hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) >= 0)
     {
       codecContext->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
-      codecContext->get_format = GetHWFormat;
+      codecContext->get_format = VideoPlayer::GetHWFormat;
       codecContext->opaque = this;
       hwPixelFormat = AV_PIX_FMT_D3D11;
       usingHwAccel = true;

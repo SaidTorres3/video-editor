@@ -22,8 +22,9 @@ extern "C"
 #include <libavutil/rational.h>
 #include <libavutil/avutil.h>
 #include <libavutil/hwcontext.h>
-#include <libavutil/hwcontext_d3d11va.h>
 }
+
+#include <libavutil/hwcontext_d3d11va.h>
 
 #include <vector>
 #include <memory>
@@ -117,6 +118,9 @@ private:
   AVBufferRef *hwDeviceCtx;
   AVPixelFormat hwPixelFormat;
   bool usingHwAccel;
+
+  static enum AVPixelFormat GetHWFormat(AVCodecContext *ctx,
+                                         const enum AVPixelFormat *pix_fmts);
 
   // Currently loaded file path
   std::wstring loadedFilename;
