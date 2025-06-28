@@ -259,6 +259,19 @@ bool VideoPlayer::InitializeDecoder()
     return false;
   }
 
+  // Prepare an intermediate frame for hardware pixel transfers. This buffer is
+  // used when decoding directly to GPU surfaces and then converting back to
+  // software memory.
+  swFrame->format = codecContext->sw_pix_fmt != AV_PIX_FMT_NONE ?
+                        codecContext->sw_pix_fmt : codecContext->pix_fmt;
+  swFrame->width  = codecContext->width;
+  swFrame->height = codecContext->height;
+  if (av_frame_get_buffer(swFrame, 0) < 0)
+  {
+    CleanupDecoder();
+    return false;
+  }
+
   int numBytes = av_image_get_buffer_size(AV_PIX_FMT_BGRA, frameWidth, frameHeight, 32);
   buffer = (uint8_t *)av_malloc(numBytes);
   av_image_fill_arrays(frameRGB->data, frameRGB->linesize, buffer,
@@ -424,6 +437,7 @@ bool VideoPlayer::DecodeNextFrame()
         AVFrame *src = frame;
         if (usingHwAccel && frame->format == hwPixelFormat)
         {
+          av_frame_unref(swFrame);
           if (av_hwframe_transfer_data(swFrame, frame, 0) < 0)
             return false;
           src = swFrame;
