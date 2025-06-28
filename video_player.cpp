@@ -259,18 +259,9 @@ bool VideoPlayer::InitializeDecoder()
     return false;
   }
 
-  // Prepare an intermediate frame for hardware pixel transfers. This buffer is
-  // used when decoding directly to GPU surfaces and then converting back to
-  // software memory.
-  swFrame->format = codecContext->sw_pix_fmt != AV_PIX_FMT_NONE ?
-                        codecContext->sw_pix_fmt : codecContext->pix_fmt;
-  swFrame->width  = codecContext->width;
-  swFrame->height = codecContext->height;
-  if (av_frame_get_buffer(swFrame, 0) < 0)
-  {
-    CleanupDecoder();
-    return false;
-  }
+  // swFrame will be initialized on demand when transferring pixels from
+  // hardware surfaces. The exact software pixel format is only known after the
+  // decoder starts returning frames, so allocate the buffer later.
 
   int numBytes = av_image_get_buffer_size(AV_PIX_FMT_BGRA, frameWidth, frameHeight, 32);
   buffer = (uint8_t *)av_malloc(numBytes);
@@ -437,14 +428,23 @@ bool VideoPlayer::DecodeNextFrame()
         AVFrame *src = frame;
         if (usingHwAccel && frame->format == hwPixelFormat)
         {
-          // Reset the software frame before transferring from GPU memory.
-          av_frame_unref(swFrame);
-          swFrame->format = codecContext->sw_pix_fmt != AV_PIX_FMT_NONE ?
-                                codecContext->sw_pix_fmt : codecContext->pix_fmt;
-          swFrame->width  = codecContext->width;
-          swFrame->height = codecContext->height;
-          if (av_frame_get_buffer(swFrame, 0) < 0)
-            return false;
+          // Allocate or resize the intermediate software frame on demand.  The
+          // decoder may not know the final sw_pix_fmt until frames are
+          // returned.
+          AVPixelFormat swFmt = codecContext->sw_pix_fmt != AV_PIX_FMT_NONE ?
+                                   codecContext->sw_pix_fmt
+                                   : AV_PIX_FMT_NV12;
+          if (!swFrame->data[0] || swFrame->format != swFmt ||
+              swFrame->width != codecContext->width ||
+              swFrame->height != codecContext->height)
+          {
+            av_frame_unref(swFrame);
+            swFrame->format = swFmt;
+            swFrame->width = codecContext->width;
+            swFrame->height = codecContext->height;
+            if (av_frame_get_buffer(swFrame, 0) < 0)
+              return false;
+          }
           if (av_hwframe_transfer_data(swFrame, frame, 0) < 0)
             return false;
           src = swFrame;

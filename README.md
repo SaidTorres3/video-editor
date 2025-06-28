@@ -158,7 +158,9 @@ The application supports all audio formats that FFmpeg can decode, including:
 - Automatic format conversion handles different audio specifications
 - When using the static build, the native FFmpeg H.264 decoder is chosen over
   the slower OpenH264 wrapper. Hardware acceleration through D3D11 is
-  attempted and multi-threaded decoding is enabled automatically
+  attempted and multi-threaded decoding is enabled automatically. Software
+  frames are allocated on demand when copying from GPU surfaces to avoid
+  crashes on the first decoded frame.
 
 ## Troubleshooting
 
