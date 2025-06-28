@@ -190,6 +190,16 @@ bool VideoPlayer::InitializeDecoder()
   if (!codec)
     return false;
 
+  // When FFmpeg is built with libopenh264 support, the wrapper decoder can be
+  // chosen over the highly optimized native implementation, which severely
+  // hurts performance.  Force the built-in decoder when handling H.264.
+  if (cp->codec_id == AV_CODEC_ID_H264 && codec && strcmp(codec->name, "h264") != 0)
+  {
+    const AVCodec* native = avcodec_find_decoder_by_name("h264");
+    if (native)
+      codec = native;
+  }
+
   codecContext = avcodec_alloc_context3(codec);
   if (!codecContext)
     return false;
@@ -198,6 +208,10 @@ bool VideoPlayer::InitializeDecoder()
     avcodec_free_context(&codecContext);
     return false;
   }
+  // Enable multi-threaded decoding when possible for smoother playback
+  codecContext->thread_count = std::thread::hardware_concurrency();
+  codecContext->thread_type = FF_THREAD_FRAME;
+  codecContext->flags2 |= AV_CODEC_FLAG2_FAST;
   if (avcodec_open2(codecContext, codec, nullptr) < 0)
   {
     avcodec_free_context(&codecContext);
