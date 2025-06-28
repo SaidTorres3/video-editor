@@ -64,7 +64,7 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 
 ### Prerequisites
 - Visual Studio 2019 or later
-- CMake 3.10 or later
+ - CMake 3.10 or later (3.15+ recommended for static linking)
 - FFmpeg development libraries
 
 ### Build Steps
