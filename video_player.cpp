@@ -1180,7 +1180,9 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             av_opt_set_int(mt.swrCtx, "out_sample_rate", 44100, 0);
             av_opt_set_sample_fmt(mt.swrCtx, "in_sample_fmt", mt.decCtx->sample_fmt, 0);
             av_opt_set_sample_fmt(mt.swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-            av_channel_layout_default(&mt.decCtx->ch_layout, mt.decCtx->channels);
+            av_channel_layout_default(&mt.decCtx->ch_layout,
+                                      mt.decCtx->ch_layout.nb_channels ?
+                                          mt.decCtx->ch_layout.nb_channels : 2);
             AVChannelLayout out_ch{};
             av_channel_layout_default(&out_ch, 2);
             av_opt_set_chlayout(mt.swrCtx, "in_chlayout", &mt.decCtx->ch_layout, 0);
@@ -1214,8 +1216,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         AVStream* aOut = avformat_new_stream(outputCtx, aEnc);
         aEncCtx = avcodec_alloc_context3(aEnc);
         aEncCtx->sample_rate = 44100;
-        aEncCtx->channel_layout = AV_CH_LAYOUT_STEREO;
-        aEncCtx->channels = 2;
+        av_channel_layout_default(&aEncCtx->ch_layout, 2);
         aEncCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
         aEncCtx->time_base = {1, aEncCtx->sample_rate};
         if (avcodec_open2(aEncCtx, aEnc, nullptr) < 0) {
@@ -1228,7 +1229,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         avcodec_parameters_from_context(aOut->codecpar, aEncCtx);
         aOut->time_base = aEncCtx->time_base;
         encFrameSamples = aEncCtx->frame_size > 0 ? aEncCtx->frame_size : 1024;
-        mixBuffer.resize(encFrameSamples * aEncCtx->channels);
+        mixBuffer.resize(encFrameSamples * aEncCtx->ch_layout.nb_channels);
         mergedAudioIndex = aOut->index;
     }
 
@@ -1333,7 +1334,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 }
                 AVFrame* af = av_frame_alloc();
                 af->nb_samples = encFrameSamples;
-                af->channel_layout = aEncCtx->channel_layout;
+                av_channel_layout_copy(&af->ch_layout, &aEncCtx->ch_layout);
                 af->format = aEncCtx->sample_fmt;
                 af->sample_rate = aEncCtx->sample_rate;
                 av_frame_get_buffer(af, 0);
@@ -1382,7 +1383,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             }
             AVFrame* af = av_frame_alloc();
             af->nb_samples = encFrameSamples;
-            af->channel_layout = aEncCtx->channel_layout;
+            av_channel_layout_copy(&af->ch_layout, &aEncCtx->ch_layout);
             af->format = aEncCtx->sample_fmt;
             af->sample_rate = aEncCtx->sample_rate;
             av_frame_get_buffer(af, 0);
