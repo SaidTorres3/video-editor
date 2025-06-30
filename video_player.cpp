@@ -223,6 +223,9 @@ bool VideoPlayer::InitializeDecoder()
     return false;
   }
 
+  // Skip non-reference frames to decode faster at the cost of quality
+  codecContext->skip_frame = AVDISCARD_NONREF;
+
   if (useHwAccel)
   {
     if (av_hwdevice_ctx_create(&hwDeviceCtx, AV_HWDEVICE_TYPE_DXVA2, nullptr, nullptr, 0) < 0)
@@ -562,9 +565,11 @@ void VideoPlayer::SeekToTime(double seconds)
   }
 
   // Decode a few frames after seeking so the display updates immediately
-  for (int i = 0; i < 3 && currentPts < seconds; ++i)
+  for (int i = 0; i < 3; ++i)
   {
     if (!DecodeNextFrame())
+      break;
+    if (currentPts >= seconds)
       break;
   }
 }
