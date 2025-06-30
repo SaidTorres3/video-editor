@@ -308,34 +308,41 @@ bool VideoPlayer::InitializeDecoder()
   else if (useHW)
   {
     DebugLog("No hardware frames context available after decoder open");
-    AVBufferRef *tmp = av_hwframe_ctx_alloc(hwDeviceCtx);
-    if (!tmp)
-    {
-      DebugLog("av_hwframe_ctx_alloc failed");
-    }
-    else
+    AVBufferRef *tmp = nullptr;
+    if (avcodec_get_hw_frames_parameters(codecContext, hwDeviceCtx, hwPixelFormat,
+                                         &tmp) >= 0 && tmp)
     {
       AVHWFramesContext *frames = (AVHWFramesContext *)tmp->data;
-      if (avcodec_get_hw_frames_parameters(codecContext, hwDeviceCtx, 0,
-                                           frames) >= 0)
-      {
-        frames->initial_pool_size = 16;
-      }
-      else
-      {
-        DebugLog("avcodec_get_hw_frames_parameters failed, using defaults");
-        frames->format = hwPixelFormat;
-        frames->sw_format = codecContext->sw_pix_fmt;
-        frames->width = codecContext->width;
-        frames->height = codecContext->height;
-        frames->initial_pool_size = 16;
-      }
-
+      frames->initial_pool_size = 16;
       if (av_hwframe_ctx_init(tmp) < 0)
       {
         DebugLog("av_hwframe_ctx_init failed");
         av_buffer_unref(&tmp);
         tmp = nullptr;
+      }
+    }
+    else
+    {
+      DebugLog("avcodec_get_hw_frames_parameters failed, using defaults");
+      tmp = av_hwframe_ctx_alloc(hwDeviceCtx);
+      if (!tmp)
+      {
+        DebugLog("av_hwframe_ctx_alloc failed");
+      }
+      else
+      {
+        AVHWFramesContext *frames = (AVHWFramesContext *)tmp->data;
+        frames->format = hwPixelFormat;
+        frames->sw_format = codecContext->sw_pix_fmt;
+        frames->width = codecContext->width;
+        frames->height = codecContext->height;
+        frames->initial_pool_size = 16;
+        if (av_hwframe_ctx_init(tmp) < 0)
+        {
+          DebugLog("av_hwframe_ctx_init failed");
+          av_buffer_unref(&tmp);
+          tmp = nullptr;
+        }
       }
     }
 
