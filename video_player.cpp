@@ -478,9 +478,6 @@ bool VideoPlayer::DecodeNextFrame()
             (uint8_t const *const *)src->data, src->linesize,
             0, frameHeight,
             frameRGB->data, frameRGB->linesize);
-        if (tmp)
-          av_frame_free(&tmp);
-        av_frame_unref(frame);
         AVStream *vs = formatContext->streams[videoStreamIndex];
         double pts = 0.0;
         if (frame->best_effort_timestamp != AV_NOPTS_VALUE)
@@ -489,6 +486,9 @@ bool VideoPlayer::DecodeNextFrame()
           pts = frame->pts * av_q2d(vs->time_base);
         else
           pts = currentPts + (frameRate > 0 ? 1.0 / frameRate : 0.0);
+        if (tmp)
+          av_frame_free(&tmp);
+        av_frame_unref(frame);
         currentPts = pts - startTimeOffset;
         if (currentPts < 0.0)
           currentPts = 0.0;
@@ -1273,7 +1273,11 @@ enum AVPixelFormat VideoPlayer::GetHWFormat(AVCodecContext *ctx, const enum AVPi
   for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++)
   {
     if (*p == player->hwPixelFormat)
+    {
+      DebugLog("Selecting hardware pixel format");
       return *p;
+    }
   }
+  DebugLog("Falling back to software pixel format");
   return pix_fmts[0];
 }
