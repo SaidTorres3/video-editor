@@ -1063,16 +1063,58 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     utf8Input.resize(bufSize - 1);
 
     std::vector<int> activeTracks;
-    for (const auto& track : audioTracks) {
+    for (const auto &track : audioTracks) {
         if (!track->isMuted)
             activeTracks.push_back(track->streamIndex);
     }
 
-    if (mergeAudio) {
-        DebugLog("mergeAudio not supported in library cut mode", true);
-    }
-    if (convertH264) {
-        DebugLog("convertH264 option ignored in library cut mode", true);
+    // When re-encoding or merging audio, use the ffmpeg executable. The
+    // library-only path is kept for fast cuts with codec copy.
+    if (convertH264 || mergeAudio) {
+        std::wstring cmd = L"ffmpeg -y -ss " + std::to_wstring(startTime) +
+                           L" -to " + std::to_wstring(endTime) + L" -i \"" +
+                           loadedFilename + L"\" ";
+
+        if (mergeAudio) {
+            if (activeTracks.empty()) {
+                DebugLog("No active audio tracks to merge", true);
+                return false;
+            }
+
+            if (activeTracks.size() == 1) {
+                cmd += L"-map 0:v:" + std::to_wstring(videoStreamIndex) + L" ";
+                cmd += L"-map 0:a:" + std::to_wstring(activeTracks[0]) + L" ";
+                cmd += L"-c:a aac ";
+            } else {
+                cmd += L"-filter_complex \"";
+                for (size_t i = 0; i < activeTracks.size(); ++i)
+                    cmd += L"[0:a:" + std::to_wstring(activeTracks[i]) + L"]";
+                cmd += L"amix=inputs=" + std::to_wstring(activeTracks.size()) +
+                       L":duration=longest[aout]\" ";
+                cmd += L"-map 0:v:" + std::to_wstring(videoStreamIndex) + L" ";
+                cmd += L"-map \"[aout]\" -c:a aac ";
+            }
+        } else {
+            cmd += L"-map 0:v:" + std::to_wstring(videoStreamIndex) + L" ";
+            for (int idx : activeTracks)
+                cmd += L"-map 0:a:" + std::to_wstring(idx) + L" ";
+            cmd += L"-c:a copy ";
+        }
+
+        if (convertH264) {
+            cmd += L"-c:v libx264 ";
+            if (maxBitrate > 0)
+                cmd += L"-b:v " + std::to_wstring(maxBitrate) + L"k ";
+        } else {
+            cmd += L"-c:v copy ";
+        }
+
+        cmd += L"\"" + outputFilename + L"\"";
+
+        DebugLog(std::string(cmd.begin(), cmd.end()));
+        int ret = _wsystem(cmd.c_str());
+        SendMessage(progressBar, PBM_SETPOS, 100, 0);
+        return ret == 0;
     }
 
     AVFormatContext* inputCtx = nullptr;
