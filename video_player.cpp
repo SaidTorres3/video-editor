@@ -54,6 +54,7 @@ VideoPlayer::VideoPlayer(HWND parent)
 
 VideoPlayer::~VideoPlayer()
 {
+  DebugLog("Destroying VideoPlayer");
   UnloadVideo();
   CleanupAudio();
   CleanupD2D();
@@ -96,6 +97,14 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
 {
   UnloadVideo();
   loadedFilename = filename;
+
+  {
+    int buf = WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string tmp(buf, 0);
+    WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1, &tmp[0], buf, nullptr, nullptr);
+    tmp.resize(buf - 1);
+    DebugLog(std::string("Loading video: ") + tmp);
+  }
 
   int bufSize = WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1, nullptr, 0, nullptr, nullptr);
   std::string utf8Filename(bufSize, 0);
@@ -182,6 +191,7 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
   else
     duration = 0.0;
   currentPts = 0.0;
+  DebugLog("Video loaded successfully");
   return true;
 }
 
@@ -193,11 +203,18 @@ bool VideoPlayer::InitializeDecoder()
   if (!codec)
     return false;
 
+  {
+    std::ostringstream oss;
+    oss << "Initializing decoder for codec " << avcodec_get_name(cp->codec_id);
+    DebugLog(oss.str());
+  }
+
   bool useHW = false;
   AVPixelFormat hwfmt = AV_PIX_FMT_NONE;
   hwPixelFormat = AV_PIX_FMT_NONE;
   if (cp->codec_id == AV_CODEC_ID_H264)
   {
+    DebugLog("Checking for D3D11 hardware acceleration");
     for (int i = 0;; i++)
     {
       const AVCodecHWConfig *config = avcodec_get_hw_config(codec, i);
@@ -208,6 +225,7 @@ bool VideoPlayer::InitializeDecoder()
       {
         hwfmt = config->pix_fmt;
         useHW = true;
+        DebugLog("D3D11 hardware config found");
         break;
       }
     }
@@ -229,9 +247,11 @@ bool VideoPlayer::InitializeDecoder()
     {
       codecContext->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
       hwPixelFormat = hwfmt;
+      DebugLog("Created D3D11 device for hardware decode");
     }
     else
     {
+      DebugLog("Failed to create D3D11 device, falling back to software");
       useHW = false;
       hwPixelFormat = AV_PIX_FMT_NONE;
       codecContext->get_format = nullptr;
@@ -244,6 +264,10 @@ bool VideoPlayer::InitializeDecoder()
     if (hwDeviceCtx)
       av_buffer_unref(&hwDeviceCtx);
     return false;
+  }
+
+  {
+    DebugLog(std::string("Decoder opened, using ") + (useHW ? "D3D11" : "software") + " mode");
   }
 
   frameWidth = codecContext->width;
@@ -269,6 +293,7 @@ bool VideoPlayer::InitializeDecoder()
       SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
   if (!swsContext)
   {
+    DebugLog("sws_getContext failed");
     CleanupDecoder();
     return false;
   }
@@ -278,6 +303,7 @@ bool VideoPlayer::InitializeDecoder()
 
 void VideoPlayer::CleanupDecoder()
 {
+  DebugLog("Cleaning up decoder");
   if (swsContext)
     sws_freeContext(swsContext), swsContext = nullptr;
   if (buffer)
@@ -297,6 +323,7 @@ void VideoPlayer::CleanupDecoder()
 
 void VideoPlayer::UnloadVideo()
 {
+  DebugLog("Unloading video");
   Stop();
   CleanupAudioTracks();
   CleanupDecoder();
@@ -318,6 +345,7 @@ bool VideoPlayer::Play()
   if (!isLoaded || isPlaying)
     return false;
   isPlaying = true;
+  DebugLog("Playback started");
   
   // Start audio thread if we have audio tracks
   if (!audioTracks.empty() && audioInitialized)
@@ -341,6 +369,7 @@ void VideoPlayer::Pause()
   if (isPlaying)
   {
     isPlaying = false;
+    DebugLog("Playback paused");
     
     // Stop audio thread
     if (audioThreadRunning)
@@ -369,6 +398,7 @@ void VideoPlayer::Stop()
 {
   Pause();
   currentFrame = 0;
+  DebugLog("Playback stopped");
   if (isLoaded)
   {
     av_seek_frame(formatContext, videoStreamIndex, 0, AVSEEK_FLAG_FRAME);
@@ -415,20 +445,28 @@ bool VideoPlayer::DecodeNextFrame()
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
           break;
         if (ret < 0)
+        {
+          DebugLog("avcodec_receive_frame failed");
           return false;
+        }
         AVFrame *src = frame;
         AVFrame *tmp = nullptr;
         if (frame->format == hwPixelFormat)
         {
+          DebugLog("Transferring hardware frame to system memory");
           tmp = av_frame_alloc();
           if (!tmp)
+          {
+            DebugLog("av_frame_alloc failed");
             return false;
+          }
           tmp->format = codecContext->sw_pix_fmt;
           tmp->width = frame->width;
           tmp->height = frame->height;
           if (av_frame_get_buffer(tmp, 0) < 0 ||
               av_hwframe_transfer_data(tmp, frame, 0) < 0)
           {
+            DebugLog("av_hwframe_transfer_data failed");
             av_frame_free(&tmp);
             return false;
           }
@@ -456,6 +494,7 @@ bool VideoPlayer::DecodeNextFrame()
           currentPts = 0.0;
         currentFrame++;
         UpdateDisplay();
+        DebugLog("Frame decoded");
         return true;
       }
     }
