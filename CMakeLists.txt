@@ -101,6 +101,8 @@ target_link_libraries(VideoEditor PRIVATE
     mf
     mfuuid
     strmiids
+    d3d11
+    dxva2
     ${AVCODEC_LIBRARY}
     ${AVFORMAT_LIBRARY}
     ${AVUTIL_LIBRARY}

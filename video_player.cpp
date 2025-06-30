@@ -35,7 +35,8 @@ static void DebugLog(const std::string& msg, bool popup = false)
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
       frame(nullptr), frameRGB(nullptr), packet(nullptr), swsContext(nullptr),
-      buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
+      buffer(nullptr), hwDeviceCtx(nullptr), hwPixelFormat(AV_PIX_FMT_NONE),
+      videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0), videoWindow(nullptr),
       d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
@@ -69,6 +70,8 @@ VideoPlayer::~VideoPlayer()
     DestroyWindow(videoWindow);
     originalVideoWndProc = nullptr;
   }
+  if (hwDeviceCtx)
+    av_buffer_unref(&hwDeviceCtx);
 }
 
 void VideoPlayer::CreateVideoWindow()
@@ -190,6 +193,24 @@ bool VideoPlayer::InitializeDecoder()
   if (!codec)
     return false;
 
+  bool useHW = false;
+  if (cp->codec_id == AV_CODEC_ID_H264)
+  {
+    for (int i = 0;; i++)
+    {
+      const AVCodecHWConfig *config = avcodec_get_hw_config(codec, i);
+      if (!config)
+        break;
+      if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+          config->device_type == AV_HWDEVICE_TYPE_D3D11VA)
+      {
+        hwPixelFormat = config->pix_fmt;
+        useHW = true;
+        break;
+      }
+    }
+  }
+
   codecContext = avcodec_alloc_context3(codec);
   if (!codecContext)
     return false;
@@ -198,9 +219,20 @@ bool VideoPlayer::InitializeDecoder()
     avcodec_free_context(&codecContext);
     return false;
   }
+  if (useHW)
+  {
+    codecContext->opaque = this;
+    codecContext->get_format = GetHWFormat;
+    if (av_hwdevice_ctx_create(&hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) >= 0)
+      codecContext->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+    else
+      useHW = false;
+  }
   if (avcodec_open2(codecContext, codec, nullptr) < 0)
   {
     avcodec_free_context(&codecContext);
+    if (hwDeviceCtx)
+      av_buffer_unref(&hwDeviceCtx);
     return false;
   }
 
@@ -220,8 +252,9 @@ bool VideoPlayer::InitializeDecoder()
   av_image_fill_arrays(frameRGB->data, frameRGB->linesize, buffer,
                        AV_PIX_FMT_BGRA, frameWidth, frameHeight, 32);
 
+  AVPixelFormat srcFmt = useHW ? codecContext->sw_pix_fmt : codecContext->pix_fmt;
   swsContext = sws_getContext(
-      frameWidth, frameHeight, codecContext->pix_fmt,
+      frameWidth, frameHeight, srcFmt,
       frameWidth, frameHeight, AV_PIX_FMT_BGRA,
       SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
   if (!swsContext)
@@ -247,6 +280,8 @@ void VideoPlayer::CleanupDecoder()
     av_frame_free(&frame), frame = nullptr;
   if (codecContext)
     avcodec_free_context(&codecContext), codecContext = nullptr;
+  if (hwDeviceCtx)
+    av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
 }
 
 void VideoPlayer::UnloadVideo()
@@ -370,12 +405,27 @@ bool VideoPlayer::DecodeNextFrame()
           break;
         if (ret < 0)
           return false;
+        AVFrame *src = frame;
+        AVFrame *tmp = nullptr;
+        if (frame->format == hwPixelFormat)
+        {
+          tmp = av_frame_alloc();
+          if (!tmp || av_hwframe_transfer_data(tmp, frame, 0) < 0)
+          {
+            if (tmp)
+              av_frame_free(&tmp);
+            return false;
+          }
+          src = tmp;
+        }
 
         sws_scale(
             swsContext,
-            (uint8_t const *const *)frame->data, frame->linesize,
+            (uint8_t const *const *)src->data, src->linesize,
             0, frameHeight,
             frameRGB->data, frameRGB->linesize);
+        if (tmp)
+          av_frame_free(&tmp);
         AVStream *vs = formatContext->streams[videoStreamIndex];
         double pts = 0.0;
         if (frame->best_effort_timestamp != AV_NOPTS_VALUE)
@@ -1159,4 +1209,15 @@ void VideoPlayer::OnVideoWindowPaint()
   else
     FillRect(ps.hdc, &ps.rcPaint, (HBRUSH)GetStockObject(BLACK_BRUSH));
   EndPaint(videoWindow, &ps);
+}
+
+enum AVPixelFormat VideoPlayer::GetHWFormat(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
+{
+  VideoPlayer *player = reinterpret_cast<VideoPlayer *>(ctx->opaque);
+  for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++)
+  {
+    if (*p == player->hwPixelFormat)
+      return *p;
+  }
+  return pix_fmts[0];
 }

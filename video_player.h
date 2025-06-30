@@ -63,6 +63,8 @@ private:
   AVPacket *packet;
   struct SwsContext *swsContext;
   uint8_t *buffer;
+  AVBufferRef *hwDeviceCtx;
+  AVPixelFormat hwPixelFormat;
   int videoStreamIndex;
   int frameWidth, frameHeight;
   bool isLoaded;
@@ -175,5 +177,6 @@ private:
   bool CreateRenderTarget();
   static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   void OnVideoWindowPaint();
+  static enum AVPixelFormat GetHWFormat(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts);
 };
 #endif // VIDEO_PLAYER_H
