@@ -1071,6 +1071,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     // When re-encoding or merging audio we need to set up decoder/encoder
     // contexts. The previous implementation only supported stream copying.
     // Build encoder state on demand.
+    bool success = true;
     AVCodecContext* vEncCtx = nullptr;
     AVCodecContext* vDecCtx = nullptr;
     SwsContext*     swsCtx  = nullptr;
@@ -1131,14 +1132,17 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             }
             outStream = avformat_new_stream(outputCtx, vEnc);
             vEncCtx = avcodec_alloc_context3(vEnc);
-            avcodec_parameters_to_context(vEncCtx, inStream->codecpar);
             vEncCtx->codec_id = AV_CODEC_ID_H264;
+            vEncCtx->width = inStream->codecpar->width;
+            vEncCtx->height = inStream->codecpar->height;
             vEncCtx->time_base = inStream->time_base;
+            vEncCtx->pix_fmt = AV_PIX_FMT_YUV420P;
             vEncCtx->max_b_frames = 2;
             vEncCtx->gop_size = 12;
-            vEncCtx->pix_fmt = AV_PIX_FMT_YUV420P;
             if (maxBitrate > 0)
                 vEncCtx->bit_rate = maxBitrate * 1000;
+            if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)
+                vEncCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             if (avcodec_open2(vEncCtx, vEnc, nullptr) < 0) {
                 DebugLog("Failed to open H.264 encoder", true);
                 avcodec_free_context(&vEncCtx);
@@ -1158,9 +1162,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 avformat_close_input(&inputCtx);
                 return false;
             }
-            swsCtx = sws_getContext(vDecCtx->width, vDecCtx->height, vDecCtx->pix_fmt,
-                                    vEncCtx->width, vEncCtx->height, vEncCtx->pix_fmt,
-                                    SWS_BILINEAR, nullptr, nullptr, nullptr);
+            swsCtx = nullptr; // initialized after first decoded frame
             encFrame = av_frame_alloc();
             decFrame = av_frame_alloc();
             encFrame->format = vEncCtx->pix_fmt;
@@ -1270,6 +1272,19 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         if (convertH264 && pkt.stream_index == videoStreamIndex) {
             avcodec_send_packet(vDecCtx, &pkt);
             while (avcodec_receive_frame(vDecCtx, decFrame) == 0) {
+                if (!swsCtx) {
+                    swsCtx = sws_getContext(vDecCtx->width, vDecCtx->height,
+                                            (AVPixelFormat)decFrame->format,
+                                            vEncCtx->width, vEncCtx->height,
+                                            vEncCtx->pix_fmt, SWS_BILINEAR,
+                                            nullptr, nullptr, nullptr);
+                    if (!swsCtx) {
+                        DebugLog("Failed to create scaling context", true);
+                        av_packet_unref(&pkt);
+                        success = false;
+                        goto cleanup;
+                    }
+                }
                 sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, vDecCtx->height, encFrame->data, encFrame->linesize);
                 encFrame->pts = av_rescale_q(decFrame->pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, vEncCtx->time_base);
                 avcodec_send_frame(vEncCtx, encFrame);
@@ -1408,6 +1423,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         }
     }
 
+cleanup:
     av_write_trailer(outputCtx);
     if (!(outputCtx->oformat->flags & AVFMT_NOFILE))
         avio_closep(&outputCtx->pb);
@@ -1427,7 +1443,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
 
     SendMessage(progressBar, PBM_SETPOS, 100, 0);
 
-    return true;
+    return success;
 }
 
 bool VideoPlayer::InitializeD2D()
