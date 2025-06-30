@@ -1068,103 +1068,126 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             activeTracks.push_back(track->streamIndex);
     }
 
-    std::ostringstream cmd;
-    cmd << "ffmpeg -y -ss " << startTime << " -to " << endTime << " -i \"" << utf8Input << "\" ";
-
-    if (mergeAudio && activeTracks.size() > 1) {
-        cmd << "-filter_complex \"";
-        for (size_t i = 0; i < activeTracks.size(); ++i) {
-            cmd << "[0:" << activeTracks[i] << "]";
-        }
-        cmd << "amix=inputs=" << activeTracks.size() << "[aout]\" -map 0:v -map [aout] ";
-        cmd << "-c:a aac -b:a 192k ";
-    } else {
-        cmd << "-map 0:v ";
-        for (size_t i = 0; i < activeTracks.size(); ++i) {
-            cmd << "-map 0:" << activeTracks[i] << " ";
-        }
-        cmd << "-c:a copy ";
+    if (mergeAudio) {
+        DebugLog("mergeAudio not supported in library cut mode", true);
     }
-
     if (convertH264) {
-        cmd << "-c:v libx264 ";
-        if (maxBitrate > 0)
-            cmd << "-maxrate " << maxBitrate << "k ";
-        cmd << "-pix_fmt yuv420p ";
-    } else {
-        cmd << "-c:v copy ";
+        DebugLog("convertH264 option ignored in library cut mode", true);
     }
 
-    cmd << "-progress pipe:1 -nostats \"" << utf8Output << "\"";
-
-    SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
-    HANDLE readPipe = NULL, writePipe = NULL;
-    if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
-        DebugLog("CreatePipe failed", true);
+    AVFormatContext* inputCtx = nullptr;
+    if (avformat_open_input(&inputCtx, utf8Input.c_str(), nullptr, nullptr) < 0) {
+        DebugLog("Failed to open input file", true);
         return false;
     }
-    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-
-    STARTUPINFOA si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = writePipe;
-    si.hStdError = writePipe;
-
-    PROCESS_INFORMATION pi{};
-    std::string cmdStr = cmd.str();
-
-    std::vector<char> cmdBuf(cmdStr.begin(), cmdStr.end());
-    cmdBuf.push_back('\0');
-    DebugLog(std::string("Running command: ") + cmdStr, true);
-    BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-    CloseHandle(writePipe);
-    if (!ok) {
-        DebugLog("CreateProcess failed", true);
-        CloseHandle(readPipe);
+    if (avformat_find_stream_info(inputCtx, nullptr) < 0) {
+        DebugLog("Failed to read stream info", true);
+        avformat_close_input(&inputCtx);
         return false;
     }
-    SendMessage(progressBar, PBM_SETPOS, 0, 0);
 
-    char buffer[256];
-    std::string line;
-    DWORD bytesRead = 0;
-    double totalMs = (endTime - startTime) * 1000.0;
-    while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr)) {
-        if (bytesRead == 0) break;
-        buffer[bytesRead] = 0;
-        line.append(buffer);
-        size_t pos;
-        while ((pos = line.find('\n')) != std::string::npos) {
-            std::string l = line.substr(0, pos);
-            line.erase(0, pos + 1);
-            DebugLog(l);
-            if (l.rfind("out_time_ms=", 0) == 0) {
-                long long ms = _atoi64(l.substr(12).c_str()) / 1000;
-                int percent = static_cast<int>((ms / totalMs) * 100.0);
-                SendMessage(progressBar, PBM_SETPOS, percent, 0);
-            }
+    AVFormatContext* outputCtx = nullptr;
+    if (avformat_alloc_output_context2(&outputCtx, nullptr, nullptr, utf8Output.c_str()) < 0) {
+        DebugLog("Failed to allocate output context", true);
+        avformat_close_input(&inputCtx);
+        return false;
+    }
+
+    std::vector<int> streamMapping(inputCtx->nb_streams, -1);
+    for (unsigned i = 0; i < inputCtx->nb_streams; ++i) {
+        AVStream* inStream = inputCtx->streams[i];
+        bool useStream = (inStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && i == (unsigned)videoStreamIndex);
+        if (!useStream && inStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            useStream = std::find(activeTracks.begin(), activeTracks.end(), (int)i) != activeTracks.end();
+        }
+        if (!useStream)
+            continue;
+
+        AVStream* outStream = avformat_new_stream(outputCtx, nullptr);
+        if (!outStream) {
+            DebugLog("Failed to create output stream", true);
+            avformat_free_context(outputCtx);
+            avformat_close_input(&inputCtx);
+            return false;
+        }
+        if (avcodec_parameters_copy(outStream->codecpar, inStream->codecpar) < 0) {
+            DebugLog("Failed to copy codec parameters", true);
+            avformat_free_context(outputCtx);
+            avformat_close_input(&inputCtx);
+            return false;
+        }
+        outStream->codecpar->codec_tag = 0;
+        outStream->time_base = inStream->time_base;
+        streamMapping[i] = outStream->index;
+    }
+
+    if (!(outputCtx->oformat->flags & AVFMT_NOFILE)) {
+        if (avio_open(&outputCtx->pb, utf8Output.c_str(), AVIO_FLAG_WRITE) < 0) {
+            DebugLog("Could not open output file", true);
+            avformat_free_context(outputCtx);
+            avformat_close_input(&inputCtx);
+            return false;
         }
     }
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
-
-    DWORD exitCode = 1;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    {
-        std::ostringstream oss;
-        oss << "ffmpeg exited with code " << exitCode;
-        DebugLog(oss.str(), exitCode != 0);
+    if (avformat_write_header(outputCtx, nullptr) < 0) {
+        DebugLog("Failed to write header", true);
+        if (!(outputCtx->oformat->flags & AVFMT_NOFILE))
+            avio_closep(&outputCtx->pb);
+        avformat_free_context(outputCtx);
+        avformat_close_input(&inputCtx);
+        return false;
     }
 
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    CloseHandle(readPipe);
+    int64_t startPts = (int64_t)(startTime * AV_TIME_BASE);
+    int64_t endPts = (int64_t)(endTime * AV_TIME_BASE);
+    if (av_seek_frame(inputCtx, -1, startPts, AVSEEK_FLAG_BACKWARD) < 0) {
+        DebugLog("Seek failed", true);
+    }
+
+    AVPacket pkt;
+    av_init_packet(&pkt);
+    while (av_read_frame(inputCtx, &pkt) >= 0) {
+        if (pkt.stream_index >= (int)streamMapping.size() || streamMapping[pkt.stream_index] < 0) {
+            av_packet_unref(&pkt);
+            continue;
+        }
+        AVStream* inStream = inputCtx->streams[pkt.stream_index];
+        int64_t pktPtsUs = av_rescale_q(pkt.pts, inStream->time_base, AV_TIME_BASE_Q);
+        if (pktPtsUs < startPts) {
+            av_packet_unref(&pkt);
+            continue;
+        }
+        if (pktPtsUs > endPts) {
+            av_packet_unref(&pkt);
+            break;
+        }
+
+        AVStream* outStream = outputCtx->streams[streamMapping[pkt.stream_index]];
+        pkt.pts = av_rescale_q(pkt.pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
+        pkt.dts = av_rescale_q(pkt.dts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
+        if (pkt.duration > 0)
+            pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
+        pkt.pos = -1;
+        pkt.stream_index = outStream->index;
+        av_interleaved_write_frame(outputCtx, &pkt);
+        av_packet_unref(&pkt);
+
+        double progress = (pktPtsUs - startPts) / double(endPts - startPts);
+        SendMessage(progressBar, PBM_SETPOS, (int)(progress * 100.0), 0);
+    }
+
+    av_write_trailer(outputCtx);
+    if (!(outputCtx->oformat->flags & AVFMT_NOFILE))
+        avio_closep(&outputCtx->pb);
+    avformat_free_context(outputCtx);
+    avformat_close_input(&inputCtx);
 
     SendMessage(progressBar, PBM_SETPOS, 100, 0);
 
-    return exitCode == 0;
+    return true;
 }
+
 bool VideoPlayer::InitializeD2D()
 {
   return SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2dFactory));
