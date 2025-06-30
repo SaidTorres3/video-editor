@@ -9,6 +9,7 @@
 #include <d2d1helper.h>
 #include <dxgiformat.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/pixdesc.h>
 #pragma comment(lib, "d2d1.lib")
 #include <uxtheme.h>
 #include <algorithm>
@@ -228,7 +229,10 @@ bool VideoPlayer::InitializeDecoder()
       {
         hwfmt = config->pix_fmt;
         useHW = true;
-        DebugLog("D3D11 hardware config found");
+        std::ostringstream msg;
+        msg << "D3D11 hardware config found, pixel format "
+            << av_get_pix_fmt_name(hwfmt);
+        DebugLog(msg.str());
         break;
       }
     }
@@ -271,34 +275,25 @@ bool VideoPlayer::InitializeDecoder()
 
   {
     DebugLog(std::string("Decoder opened, using ") + (useHW ? "D3D11" : "software") + " mode");
+    std::ostringstream swfmt;
+    swfmt << "Software pixel format: " << av_get_pix_fmt_name(codecContext->sw_pix_fmt);
+    DebugLog(swfmt.str());
+    if (useHW)
+    {
+      std::ostringstream hwfmtmsg;
+      hwfmtmsg << "Hardware pixel format: " << av_get_pix_fmt_name(hwPixelFormat);
+      DebugLog(hwfmtmsg.str());
+    }
   }
 
-  if (useHW && hwDeviceCtx)
+  if (useHW && codecContext->hw_frames_ctx)
   {
-    AVBufferRef *framesRef = av_hwframe_ctx_alloc(hwDeviceCtx);
-    if (!framesRef)
-    {
-      DebugLog("av_hwframe_ctx_alloc failed");
-    }
-    else
-    {
-      AVHWFramesContext *frames = (AVHWFramesContext *)framesRef->data;
-      frames->format = hwPixelFormat;
-      frames->sw_format = codecContext->sw_pix_fmt;
-      frames->width = codecContext->width;
-      frames->height = codecContext->height;
-      frames->initial_pool_size = 16;
-      if (av_hwframe_ctx_init(framesRef) < 0)
-      {
-        DebugLog("av_hwframe_ctx_init failed");
-        av_buffer_unref(&framesRef);
-      }
-      else
-      {
-        codecContext->hw_frames_ctx = av_buffer_ref(framesRef);
-        hwFramesCtx = framesRef;
-      }
-    }
+    hwFramesCtx = av_buffer_ref(codecContext->hw_frames_ctx);
+    DebugLog("Using decoder-provided hardware frames context");
+  }
+  else if (useHW)
+  {
+    DebugLog("No hardware frames context available after decoder open");
   }
 
   frameWidth = codecContext->width;
