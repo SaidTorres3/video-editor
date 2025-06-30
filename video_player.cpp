@@ -1063,59 +1063,33 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     utf8Input.resize(bufSize - 1);
 
     std::vector<int> activeTracks;
-    for (const auto &track : audioTracks) {
+    for (const auto& track : audioTracks) {
         if (!track->isMuted)
             activeTracks.push_back(track->streamIndex);
     }
 
-    // When re-encoding or merging audio, use the ffmpeg executable. The
-    // library-only path is kept for fast cuts with codec copy.
-    if (convertH264 || mergeAudio) {
-        std::wstring cmd = L"ffmpeg -y -ss " + std::to_wstring(startTime) +
-                           L" -to " + std::to_wstring(endTime) + L" -i \"" +
-                           loadedFilename + L"\" ";
+    // When re-encoding or merging audio we need to set up decoder/encoder
+    // contexts. The previous implementation only supported stream copying.
+    // Build encoder state on demand.
+    AVCodecContext* vEncCtx = nullptr;
+    AVCodecContext* vDecCtx = nullptr;
+    SwsContext*     swsCtx  = nullptr;
+    AVFrame*        encFrame = nullptr;
+    AVFrame*        decFrame = nullptr;
 
-        if (mergeAudio) {
-            if (activeTracks.empty()) {
-                DebugLog("No active audio tracks to merge", true);
-                return false;
-            }
+    struct MergeTrack {
+        int index;
+        AVCodecContext* decCtx;
+        SwrContext* swrCtx;
+        AVFrame* frame;
+        std::deque<int16_t> buffer;
+    };
+    std::vector<MergeTrack> mergeTracks;
+    AVCodecContext* aEncCtx = nullptr;
+    int encFrameSamples = 0;
+    std::vector<int16_t> mixBuffer;
 
-            if (activeTracks.size() == 1) {
-                cmd += L"-map 0:v:" + std::to_wstring(videoStreamIndex) + L" ";
-                cmd += L"-map 0:a:" + std::to_wstring(activeTracks[0]) + L" ";
-                cmd += L"-c:a aac ";
-            } else {
-                cmd += L"-filter_complex \"";
-                for (size_t i = 0; i < activeTracks.size(); ++i)
-                    cmd += L"[0:a:" + std::to_wstring(activeTracks[i]) + L"]";
-                cmd += L"amix=inputs=" + std::to_wstring(activeTracks.size()) +
-                       L":duration=longest[aout]\" ";
-                cmd += L"-map 0:v:" + std::to_wstring(videoStreamIndex) + L" ";
-                cmd += L"-map \"[aout]\" -c:a aac ";
-            }
-        } else {
-            cmd += L"-map 0:v:" + std::to_wstring(videoStreamIndex) + L" ";
-            for (int idx : activeTracks)
-                cmd += L"-map 0:a:" + std::to_wstring(idx) + L" ";
-            cmd += L"-c:a copy ";
-        }
-
-        if (convertH264) {
-            cmd += L"-c:v libx264 ";
-            if (maxBitrate > 0)
-                cmd += L"-b:v " + std::to_wstring(maxBitrate) + L"k ";
-        } else {
-            cmd += L"-c:v copy ";
-        }
-
-        cmd += L"\"" + outputFilename + L"\"";
-
-        DebugLog(std::string(cmd.begin(), cmd.end()));
-        int ret = _wsystem(cmd.c_str());
-        SendMessage(progressBar, PBM_SETPOS, 100, 0);
-        return ret == 0;
-    }
+    bool needReencode = convertH264 || mergeAudio;
 
     AVFormatContext* inputCtx = nullptr;
     if (avformat_open_input(&inputCtx, utf8Input.c_str(), nullptr, nullptr) < 0) {
@@ -1136,6 +1110,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     }
 
     std::vector<int> streamMapping(inputCtx->nb_streams, -1);
+    int mergedAudioIndex = -1;
     for (unsigned i = 0; i < inputCtx->nb_streams; ++i) {
         AVStream* inStream = inputCtx->streams[i];
         bool useStream = (inStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && i == (unsigned)videoStreamIndex);
@@ -1145,22 +1120,116 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         if (!useStream)
             continue;
 
-        AVStream* outStream = avformat_new_stream(outputCtx, nullptr);
-        if (!outStream) {
-            DebugLog("Failed to create output stream", true);
+        AVStream* outStream = nullptr;
+        if (needReencode && inStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && i == (unsigned)videoStreamIndex && convertH264) {
+            const AVCodec* vEnc = avcodec_find_encoder(AV_CODEC_ID_H264);
+            if (!vEnc) {
+                DebugLog("H.264 encoder not found", true);
+                avformat_free_context(outputCtx);
+                avformat_close_input(&inputCtx);
+                return false;
+            }
+            outStream = avformat_new_stream(outputCtx, vEnc);
+            vEncCtx = avcodec_alloc_context3(vEnc);
+            avcodec_parameters_to_context(vEncCtx, inStream->codecpar);
+            vEncCtx->codec_id = AV_CODEC_ID_H264;
+            vEncCtx->time_base = inStream->time_base;
+            vEncCtx->max_b_frames = 2;
+            vEncCtx->gop_size = 12;
+            vEncCtx->pix_fmt = AV_PIX_FMT_YUV420P;
+            if (maxBitrate > 0)
+                vEncCtx->bit_rate = maxBitrate * 1000;
+            if (avcodec_open2(vEncCtx, vEnc, nullptr) < 0) {
+                DebugLog("Failed to open H.264 encoder", true);
+                avcodec_free_context(&vEncCtx);
+                avformat_free_context(outputCtx);
+                avformat_close_input(&inputCtx);
+                return false;
+            }
+            avcodec_parameters_from_context(outStream->codecpar, vEncCtx);
+            outStream->time_base = vEncCtx->time_base;
+            vDecCtx = avcodec_alloc_context3(avcodec_find_decoder(inStream->codecpar->codec_id));
+            avcodec_parameters_to_context(vDecCtx, inStream->codecpar);
+            if (avcodec_open2(vDecCtx, avcodec_find_decoder(inStream->codecpar->codec_id), nullptr) < 0) {
+                DebugLog("Failed to open video decoder", true);
+                avcodec_free_context(&vEncCtx);
+                avcodec_free_context(&vDecCtx);
+                avformat_free_context(outputCtx);
+                avformat_close_input(&inputCtx);
+                return false;
+            }
+            swsCtx = sws_getContext(vDecCtx->width, vDecCtx->height, vDecCtx->pix_fmt,
+                                    vEncCtx->width, vEncCtx->height, vEncCtx->pix_fmt,
+                                    SWS_BILINEAR, nullptr, nullptr, nullptr);
+            encFrame = av_frame_alloc();
+            decFrame = av_frame_alloc();
+            encFrame->format = vEncCtx->pix_fmt;
+            encFrame->width = vEncCtx->width;
+            encFrame->height = vEncCtx->height;
+            av_frame_get_buffer(encFrame, 32);
+        } else if (needReencode && inStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && mergeAudio) {
+            // We'll create a single output audio stream later
+            MergeTrack mt{};
+            mt.index = i;
+            const AVCodec* dec = avcodec_find_decoder(inStream->codecpar->codec_id);
+            mt.decCtx = avcodec_alloc_context3(dec);
+            avcodec_parameters_to_context(mt.decCtx, inStream->codecpar);
+            avcodec_open2(mt.decCtx, dec, nullptr);
+            mt.swrCtx = swr_alloc();
+            av_opt_set_int(mt.swrCtx, "in_sample_rate", mt.decCtx->sample_rate, 0);
+            av_opt_set_int(mt.swrCtx, "out_sample_rate", 44100, 0);
+            av_opt_set_sample_fmt(mt.swrCtx, "in_sample_fmt", mt.decCtx->sample_fmt, 0);
+            av_opt_set_sample_fmt(mt.swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+            av_channel_layout_default(&mt.decCtx->ch_layout, mt.decCtx->channels);
+            AVChannelLayout out_ch{};
+            av_channel_layout_default(&out_ch, 2);
+            av_opt_set_chlayout(mt.swrCtx, "in_chlayout", &mt.decCtx->ch_layout, 0);
+            av_opt_set_chlayout(mt.swrCtx, "out_chlayout", &out_ch, 0);
+            swr_init(mt.swrCtx);
+            mt.frame = av_frame_alloc();
+            mergeTracks.push_back(mt);
+            continue; // output stream created later
+        } else {
+            outStream = avformat_new_stream(outputCtx, nullptr);
+            if (avcodec_parameters_copy(outStream->codecpar, inStream->codecpar) < 0) {
+                DebugLog("Failed to copy codec parameters", true);
+                avformat_free_context(outputCtx);
+                avformat_close_input(&inputCtx);
+                return false;
+            }
+            outStream->codecpar->codec_tag = 0;
+            outStream->time_base = inStream->time_base;
+        }
+        streamMapping[i] = outStream ? outStream->index : -1;
+    }
+
+    if (mergeAudio && !mergeTracks.empty()) {
+        const AVCodec* aEnc = avcodec_find_encoder(AV_CODEC_ID_AAC);
+        if (!aEnc) {
+            DebugLog("AAC encoder not found", true);
             avformat_free_context(outputCtx);
             avformat_close_input(&inputCtx);
             return false;
         }
-        if (avcodec_parameters_copy(outStream->codecpar, inStream->codecpar) < 0) {
-            DebugLog("Failed to copy codec parameters", true);
+        AVStream* aOut = avformat_new_stream(outputCtx, aEnc);
+        aEncCtx = avcodec_alloc_context3(aEnc);
+        aEncCtx->sample_rate = 44100;
+        aEncCtx->channel_layout = AV_CH_LAYOUT_STEREO;
+        aEncCtx->channels = 2;
+        aEncCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+        aEncCtx->time_base = {1, aEncCtx->sample_rate};
+        if (avcodec_open2(aEncCtx, aEnc, nullptr) < 0) {
+            DebugLog("Failed to open AAC encoder", true);
+            avcodec_free_context(&aEncCtx);
             avformat_free_context(outputCtx);
             avformat_close_input(&inputCtx);
             return false;
         }
-        outStream->codecpar->codec_tag = 0;
-        outStream->time_base = inStream->time_base;
-        streamMapping[i] = outStream->index;
+        avcodec_parameters_from_context(aOut->codecpar, aEncCtx);
+        aOut->time_base = aEncCtx->time_base;
+        encFrameSamples = aEncCtx->frame_size > 0 ? aEncCtx->frame_size : 1024;
+        mixBuffer.resize(encFrameSamples * aEncCtx->channels);
+        mergedAudioIndex = aOut->index;
     }
 
     if (!(outputCtx->oformat->flags & AVFMT_NOFILE)) {
@@ -1187,41 +1256,171 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         DebugLog("Seek failed", true);
     }
 
-    AVPacket pkt;
+    AVPacket pkt, outPkt;
     av_init_packet(&pkt);
+    int64_t audioPts = 0;
     while (av_read_frame(inputCtx, &pkt) >= 0) {
-        if (pkt.stream_index >= (int)streamMapping.size() || streamMapping[pkt.stream_index] < 0) {
-            av_packet_unref(&pkt);
-            continue;
-        }
+        bool handled = false;
         AVStream* inStream = inputCtx->streams[pkt.stream_index];
         int64_t pktPtsUs = av_rescale_q(pkt.pts, inStream->time_base, AV_TIME_BASE_Q);
-        if (pktPtsUs < startPts) {
-            av_packet_unref(&pkt);
-            continue;
-        }
-        if (pktPtsUs > endPts) {
-            av_packet_unref(&pkt);
-            break;
+        if (pktPtsUs < startPts) { av_packet_unref(&pkt); continue; }
+        if (pktPtsUs > endPts) { av_packet_unref(&pkt); break; }
+
+        if (convertH264 && pkt.stream_index == videoStreamIndex) {
+            avcodec_send_packet(vDecCtx, &pkt);
+            while (avcodec_receive_frame(vDecCtx, decFrame) == 0) {
+                sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, vDecCtx->height, encFrame->data, encFrame->linesize);
+                encFrame->pts = av_rescale_q(decFrame->pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, vEncCtx->time_base);
+                avcodec_send_frame(vEncCtx, encFrame);
+                while (avcodec_receive_packet(vEncCtx, &outPkt) == 0) {
+                    av_packet_rescale_ts(&outPkt, vEncCtx->time_base, outputCtx->streams[streamMapping[pkt.stream_index]]->time_base);
+                    outPkt.stream_index = streamMapping[pkt.stream_index];
+                    av_interleaved_write_frame(outputCtx, &outPkt);
+                    av_packet_unref(&outPkt);
+                }
+                av_frame_unref(decFrame);
+            }
+            handled = true;
+        } else if (mergeAudio) {
+            for (auto &mt : mergeTracks) {
+                if (mt.index == pkt.stream_index) {
+                    avcodec_send_packet(mt.decCtx, &pkt);
+                    while (avcodec_receive_frame(mt.decCtx, mt.frame) == 0) {
+                        int outSamples = swr_get_out_samples(mt.swrCtx, mt.frame->nb_samples);
+                        std::vector<int16_t> tmp(outSamples * 2);
+                        int conv = swr_convert(mt.swrCtx, (uint8_t**)&tmp[0], outSamples, (const uint8_t**)mt.frame->data, mt.frame->nb_samples);
+                        mt.buffer.insert(mt.buffer.end(), tmp.begin(), tmp.begin() + conv * 2);
+                    }
+                    handled = true;
+                    break;
+                }
+            }
         }
 
-        AVStream* outStream = outputCtx->streams[streamMapping[pkt.stream_index]];
-        pkt.pts = av_rescale_q(pkt.pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
-        pkt.dts = av_rescale_q(pkt.dts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
-        if (pkt.duration > 0)
-            pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
-        pkt.pos = -1;
-        pkt.stream_index = outStream->index;
-        av_interleaved_write_frame(outputCtx, &pkt);
+        if (!handled) {
+            if (pkt.stream_index >= (int)streamMapping.size() || streamMapping[pkt.stream_index] < 0) {
+                av_packet_unref(&pkt);
+                continue;
+            }
+            AVStream* outStream = outputCtx->streams[streamMapping[pkt.stream_index]];
+            pkt.pts = av_rescale_q(pkt.pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
+            pkt.dts = av_rescale_q(pkt.dts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
+            if (pkt.duration > 0)
+                pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
+            pkt.pos = -1;
+            pkt.stream_index = outStream->index;
+            av_interleaved_write_frame(outputCtx, &pkt);
+        }
+
         av_packet_unref(&pkt);
+
+        // check if we can encode audio frame
+        if (mergeAudio && !mergeTracks.empty()) {
+            bool ready = true;
+            for (auto &mt : mergeTracks)
+                if ((int)mt.buffer.size() < encFrameSamples * 2) { ready = false; break; }
+            if (ready) {
+                for (int i = 0; i < encFrameSamples * 2; ++i) {
+                    int sum = 0;
+                    for (auto &mt : mergeTracks) {
+                        sum += mt.buffer.front();
+                        mt.buffer.pop_front();
+                    }
+                    int v = sum / (int)mergeTracks.size();
+                    if (v > 32767) v = 32767;
+                    if (v < -32768) v = -32768;
+                    mixBuffer[i] = (int16_t)v;
+                }
+                AVFrame* af = av_frame_alloc();
+                af->nb_samples = encFrameSamples;
+                af->channel_layout = aEncCtx->channel_layout;
+                af->format = aEncCtx->sample_fmt;
+                af->sample_rate = aEncCtx->sample_rate;
+                av_frame_get_buffer(af, 0);
+                memcpy(af->data[0], mixBuffer.data(), mixBuffer.size() * sizeof(int16_t));
+                af->pts = audioPts;
+                audioPts += encFrameSamples;
+                avcodec_send_frame(aEncCtx, af);
+                while (avcodec_receive_packet(aEncCtx, &outPkt) == 0) {
+                    av_packet_rescale_ts(&outPkt, aEncCtx->time_base, outputCtx->streams[mergedAudioIndex]->time_base);
+                    outPkt.stream_index = mergedAudioIndex;
+                    av_interleaved_write_frame(outputCtx, &outPkt);
+                    av_packet_unref(&outPkt);
+                }
+                av_frame_free(&af);
+            }
+        }
 
         double progress = (pktPtsUs - startPts) / double(endPts - startPts);
         SendMessage(progressBar, PBM_SETPOS, (int)(progress * 100.0), 0);
     }
 
+    // Flush encoders
+    if (convertH264 && vEncCtx) {
+        avcodec_send_frame(vEncCtx, nullptr);
+        while (avcodec_receive_packet(vEncCtx, &outPkt) == 0) {
+            av_packet_rescale_ts(&outPkt, vEncCtx->time_base, outputCtx->streams[streamMapping[videoStreamIndex]]->time_base);
+            outPkt.stream_index = streamMapping[videoStreamIndex];
+            av_interleaved_write_frame(outputCtx, &outPkt);
+            av_packet_unref(&outPkt);
+        }
+    }
+    if (mergeAudio && aEncCtx) {
+        // flush remaining samples
+        while (true) {
+            bool ready = true;
+            for (auto &mt : mergeTracks)
+                if ((int)mt.buffer.size() < encFrameSamples * 2) { ready = false; break; }
+            if (!ready) break;
+            for (int i = 0; i < encFrameSamples * 2; ++i) {
+                int sum = 0;
+                for (auto &mt : mergeTracks) { sum += mt.buffer.front(); mt.buffer.pop_front(); }
+                int v = sum / (int)mergeTracks.size();
+                if (v > 32767) v = 32767;
+                if (v < -32768) v = -32768;
+                mixBuffer[i] = (int16_t)v;
+            }
+            AVFrame* af = av_frame_alloc();
+            af->nb_samples = encFrameSamples;
+            af->channel_layout = aEncCtx->channel_layout;
+            af->format = aEncCtx->sample_fmt;
+            af->sample_rate = aEncCtx->sample_rate;
+            av_frame_get_buffer(af, 0);
+            memcpy(af->data[0], mixBuffer.data(), mixBuffer.size() * sizeof(int16_t));
+            af->pts = audioPts;
+            audioPts += encFrameSamples;
+            avcodec_send_frame(aEncCtx, af);
+            while (avcodec_receive_packet(aEncCtx, &outPkt) == 0) {
+                av_packet_rescale_ts(&outPkt, aEncCtx->time_base, outputCtx->streams[mergedAudioIndex]->time_base);
+                outPkt.stream_index = mergedAudioIndex;
+                av_interleaved_write_frame(outputCtx, &outPkt);
+                av_packet_unref(&outPkt);
+            }
+            av_frame_free(&af);
+        }
+        avcodec_send_frame(aEncCtx, nullptr);
+        while (avcodec_receive_packet(aEncCtx, &outPkt) == 0) {
+            av_packet_rescale_ts(&outPkt, aEncCtx->time_base, outputCtx->streams[mergedAudioIndex]->time_base);
+            outPkt.stream_index = mergedAudioIndex;
+            av_interleaved_write_frame(outputCtx, &outPkt);
+            av_packet_unref(&outPkt);
+        }
+    }
+
     av_write_trailer(outputCtx);
     if (!(outputCtx->oformat->flags & AVFMT_NOFILE))
         avio_closep(&outputCtx->pb);
+    if (vEncCtx) avcodec_free_context(&vEncCtx);
+    if (vDecCtx) avcodec_free_context(&vDecCtx);
+    if (swsCtx) sws_freeContext(swsCtx);
+    if (encFrame) av_frame_free(&encFrame);
+    if (decFrame) av_frame_free(&decFrame);
+    if (aEncCtx) avcodec_free_context(&aEncCtx);
+    for (auto &mt : mergeTracks) {
+        if (mt.swrCtx) swr_free(&mt.swrCtx);
+        if (mt.decCtx) avcodec_free_context(&mt.decCtx);
+        if (mt.frame) av_frame_free(&mt.frame);
+    }
     avformat_free_context(outputCtx);
     avformat_close_input(&inputCtx);
 
