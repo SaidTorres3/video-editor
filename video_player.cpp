@@ -294,6 +294,41 @@ bool VideoPlayer::InitializeDecoder()
   else if (useHW)
   {
     DebugLog("No hardware frames context available after decoder open");
+    hwFramesCtx = av_hwframe_ctx_alloc(hwDeviceCtx);
+    if (!hwFramesCtx)
+    {
+      DebugLog("av_hwframe_ctx_alloc failed");
+      useHW = false;
+      codecContext->hw_frames_ctx = nullptr;
+      if (hwDeviceCtx)
+        av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
+      hwPixelFormat = AV_PIX_FMT_NONE;
+    }
+    else
+    {
+      AVHWFramesContext *frames =
+          (AVHWFramesContext *)hwFramesCtx->data;
+      frames->format = hwPixelFormat;
+      frames->sw_format = codecContext->sw_pix_fmt;
+      frames->width = codecContext->width;
+      frames->height = codecContext->height;
+      frames->initial_pool_size = 16;
+      if (av_hwframe_ctx_init(hwFramesCtx) < 0)
+      {
+        DebugLog("av_hwframe_ctx_init failed");
+        av_buffer_unref(&hwFramesCtx);
+        codecContext->hw_frames_ctx = nullptr;
+        useHW = false;
+        if (hwDeviceCtx)
+          av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
+        hwPixelFormat = AV_PIX_FMT_NONE;
+      }
+      else
+      {
+        codecContext->hw_frames_ctx = av_buffer_ref(hwFramesCtx);
+        DebugLog("Created hardware frames context");
+      }
+    }
   }
 
   frameWidth = codecContext->width;
