@@ -1089,6 +1089,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     AVCodecContext* aEncCtx = nullptr;
     int encFrameSamples = 0;
     std::vector<int16_t> mixBuffer;
+    bool headerWritten = false;
 
     bool needReencode = convertH264 || mergeAudio;
 
@@ -1150,7 +1151,11 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 avformat_close_input(&inputCtx);
                 return false;
             }
-            avcodec_parameters_from_context(outStream->codecpar, vEncCtx);
+            if (avcodec_parameters_from_context(outStream->codecpar, vEncCtx) < 0) {
+                DebugLog("Failed to copy encoder parameters", true);
+                success = false;
+                goto cleanup;
+            }
             outStream->time_base = vEncCtx->time_base;
             vDecCtx = avcodec_alloc_context3(avcodec_find_decoder(inStream->codecpar->codec_id));
             avcodec_parameters_to_context(vDecCtx, inStream->codecpar);
@@ -1168,7 +1173,11 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             encFrame->format = vEncCtx->pix_fmt;
             encFrame->width = vEncCtx->width;
             encFrame->height = vEncCtx->height;
-            av_frame_get_buffer(encFrame, 32);
+            if (av_frame_get_buffer(encFrame, 32) < 0) {
+                DebugLog("Failed to allocate buffer for encoder frame", true);
+                success = false;
+                goto cleanup;
+            }
         } else if (needReencode && inStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && mergeAudio) {
             // We'll create a single output audio stream later
             MergeTrack mt{};
@@ -1228,9 +1237,18 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             avformat_close_input(&inputCtx);
             return false;
         }
-        avcodec_parameters_from_context(aOut->codecpar, aEncCtx);
+        if (avcodec_parameters_from_context(aOut->codecpar, aEncCtx) < 0) {
+            DebugLog("Failed to copy AAC encoder parameters", true);
+            success = false;
+            goto cleanup;
+        }
         aOut->time_base = aEncCtx->time_base;
         encFrameSamples = aEncCtx->frame_size > 0 ? aEncCtx->frame_size : 1024;
+        if (aEncCtx->ch_layout.nb_channels <= 0) {
+            DebugLog("Invalid channel count in AAC encoder context", true);
+            success = false;
+            goto cleanup;
+        }
         mixBuffer.resize(encFrameSamples * aEncCtx->ch_layout.nb_channels);
         mergedAudioIndex = aOut->index;
     }
@@ -1252,6 +1270,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         avformat_close_input(&inputCtx);
         return false;
     }
+    headerWritten = true;
 
     int64_t startPts = (int64_t)(startTime * AV_TIME_BASE);
     int64_t endPts = (int64_t)(endTime * AV_TIME_BASE);
@@ -1352,7 +1371,12 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 av_channel_layout_copy(&af->ch_layout, &aEncCtx->ch_layout);
                 af->format = aEncCtx->sample_fmt;
                 af->sample_rate = aEncCtx->sample_rate;
-                av_frame_get_buffer(af, 0);
+                if (av_frame_get_buffer(af, 0) < 0) {
+                    DebugLog("Failed to allocate audio frame buffer", true);
+                    av_frame_free(&af);
+                    success = false;
+                    goto cleanup;
+                }
                 memcpy(af->data[0], mixBuffer.data(), mixBuffer.size() * sizeof(int16_t));
                 af->pts = audioPts;
                 audioPts += encFrameSamples;
@@ -1401,7 +1425,12 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             av_channel_layout_copy(&af->ch_layout, &aEncCtx->ch_layout);
             af->format = aEncCtx->sample_fmt;
             af->sample_rate = aEncCtx->sample_rate;
-            av_frame_get_buffer(af, 0);
+            if (av_frame_get_buffer(af, 0) < 0) {
+                DebugLog("Failed to allocate audio frame buffer", true);
+                av_frame_free(&af);
+                success = false;
+                goto cleanup;
+            }
             memcpy(af->data[0], mixBuffer.data(), mixBuffer.size() * sizeof(int16_t));
             af->pts = audioPts;
             audioPts += encFrameSamples;
@@ -1424,7 +1453,8 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     }
 
 cleanup:
-    av_write_trailer(outputCtx);
+    if (headerWritten)
+        av_write_trailer(outputCtx);
     if (!(outputCtx->oformat->flags & AVFMT_NOFILE))
         avio_closep(&outputCtx->pb);
     if (vEncCtx) avcodec_free_context(&vEncCtx);
