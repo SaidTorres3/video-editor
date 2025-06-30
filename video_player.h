@@ -60,6 +60,10 @@ private:
   AVCodecContext *codecContext;
   AVFrame *frame;
   AVFrame *frameRGB;
+  AVFrame *hwFrame; // Frame for hardware decoding
+  AVBufferRef *hwDeviceCtx;
+  AVPixelFormat hwPixelFormat;
+  bool useHwAccel;
   AVPacket *packet;
   struct SwsContext *swsContext;
   uint8_t *buffer;
