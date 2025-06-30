@@ -8,6 +8,7 @@
 #include <d2d1.h>
 #include <d2d1helper.h>
 #include <dxgiformat.h>
+#include <libavutil/hwcontext.h>
 #pragma comment(lib, "d2d1.lib")
 #include <uxtheme.h>
 #include <algorithm>
@@ -35,7 +36,7 @@ static void DebugLog(const std::string& msg, bool popup = false)
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
       frame(nullptr), frameRGB(nullptr), packet(nullptr), swsContext(nullptr),
-      buffer(nullptr), hwDeviceCtx(nullptr), hwPixelFormat(AV_PIX_FMT_NONE),
+      buffer(nullptr), hwDeviceCtx(nullptr), hwFramesCtx(nullptr), hwPixelFormat(AV_PIX_FMT_NONE),
       videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0), videoWindow(nullptr),
@@ -71,8 +72,10 @@ VideoPlayer::~VideoPlayer()
     DestroyWindow(videoWindow);
     originalVideoWndProc = nullptr;
   }
+  if (hwFramesCtx)
+    av_buffer_unref(&hwFramesCtx), hwFramesCtx = nullptr;
   if (hwDeviceCtx)
-    av_buffer_unref(&hwDeviceCtx);
+    av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
 }
 
 void VideoPlayer::CreateVideoWindow()
@@ -270,6 +273,34 @@ bool VideoPlayer::InitializeDecoder()
     DebugLog(std::string("Decoder opened, using ") + (useHW ? "D3D11" : "software") + " mode");
   }
 
+  if (useHW && hwDeviceCtx)
+  {
+    AVBufferRef *framesRef = av_hwframe_ctx_alloc(hwDeviceCtx);
+    if (!framesRef)
+    {
+      DebugLog("av_hwframe_ctx_alloc failed");
+    }
+    else
+    {
+      AVHWFramesContext *frames = (AVHWFramesContext *)framesRef->data;
+      frames->format = hwPixelFormat;
+      frames->sw_format = codecContext->sw_pix_fmt;
+      frames->width = codecContext->width;
+      frames->height = codecContext->height;
+      frames->initial_pool_size = 16;
+      if (av_hwframe_ctx_init(framesRef) < 0)
+      {
+        DebugLog("av_hwframe_ctx_init failed");
+        av_buffer_unref(&framesRef);
+      }
+      else
+      {
+        codecContext->hw_frames_ctx = av_buffer_ref(framesRef);
+        hwFramesCtx = framesRef;
+      }
+    }
+  }
+
   frameWidth = codecContext->width;
   frameHeight = codecContext->height;
   frame = av_frame_alloc();
@@ -316,6 +347,8 @@ void VideoPlayer::CleanupDecoder()
     av_frame_free(&frame), frame = nullptr;
   if (codecContext)
     avcodec_free_context(&codecContext), codecContext = nullptr;
+  if (hwFramesCtx)
+    av_buffer_unref(&hwFramesCtx), hwFramesCtx = nullptr;
   if (hwDeviceCtx)
     av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
   hwPixelFormat = AV_PIX_FMT_NONE;

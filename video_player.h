@@ -64,6 +64,7 @@ private:
   struct SwsContext *swsContext;
   uint8_t *buffer;
   AVBufferRef *hwDeviceCtx;
+  AVBufferRef *hwFramesCtx;
   AVPixelFormat hwPixelFormat;
   int videoStreamIndex;
   int frameWidth, frameHeight;
