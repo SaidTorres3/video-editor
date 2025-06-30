@@ -116,10 +116,14 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
 
   formatContext = avformat_alloc_context();
   if (avformat_open_input(&formatContext, utf8Filename.c_str(), nullptr, nullptr) < 0)
+  {
+    DebugLog("avformat_open_input failed");
     return false;
+  }
   if (avformat_find_stream_info(formatContext, nullptr) < 0)
   {
     avformat_close_input(&formatContext);
+    DebugLog("avformat_find_stream_info failed");
     return false;
   }
 
@@ -134,12 +138,14 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
   }
   if (videoStreamIndex < 0)
   {
+    DebugLog("No video stream found");
     avformat_close_input(&formatContext);
     return false;
   }
 
   if (!InitializeDecoder())
   {
+    DebugLog("InitializeDecoder failed");
     UnloadVideo();
     return false;
   }
@@ -205,7 +211,10 @@ bool VideoPlayer::InitializeDecoder()
   AVCodecParameters *cp = vs->codecpar;
   const AVCodec *codec = avcodec_find_decoder(cp->codec_id);
   if (!codec)
+  {
+    DebugLog("avcodec_find_decoder failed");
     return false;
+  }
 
   {
     std::ostringstream oss;
@@ -240,9 +249,13 @@ bool VideoPlayer::InitializeDecoder()
 
   codecContext = avcodec_alloc_context3(codec);
   if (!codecContext)
+  {
+    DebugLog("avcodec_alloc_context3 failed");
     return false;
+  }
   if (avcodec_parameters_to_context(codecContext, cp) < 0)
   {
+    DebugLog("avcodec_parameters_to_context failed");
     avcodec_free_context(&codecContext);
     return false;
   }
@@ -258,7 +271,7 @@ bool VideoPlayer::InitializeDecoder()
     }
     else
     {
-      DebugLog("Failed to create D3D11 device, falling back to software");
+      DebugLog("av_hwdevice_ctx_create failed, falling back to software");
       useHW = false;
       hwPixelFormat = AV_PIX_FMT_NONE;
       codecContext->get_format = nullptr;
@@ -267,6 +280,7 @@ bool VideoPlayer::InitializeDecoder()
   }
   if (avcodec_open2(codecContext, codec, nullptr) < 0)
   {
+    DebugLog("avcodec_open2 failed");
     avcodec_free_context(&codecContext);
     if (hwDeviceCtx)
       av_buffer_unref(&hwDeviceCtx);
@@ -294,40 +308,51 @@ bool VideoPlayer::InitializeDecoder()
   else if (useHW)
   {
     DebugLog("No hardware frames context available after decoder open");
-    hwFramesCtx = av_hwframe_ctx_alloc(hwDeviceCtx);
-    if (!hwFramesCtx)
+    AVBufferRef *tmp = av_hwframe_ctx_alloc(hwDeviceCtx);
+    if (!tmp)
     {
       DebugLog("av_hwframe_ctx_alloc failed");
+    }
+    else
+    {
+      AVHWFramesContext *frames = (AVHWFramesContext *)tmp->data;
+      if (avcodec_get_hw_frames_parameters(codecContext, hwDeviceCtx, 0,
+                                           frames) >= 0)
+      {
+        frames->initial_pool_size = 16;
+      }
+      else
+      {
+        DebugLog("avcodec_get_hw_frames_parameters failed, using defaults");
+        frames->format = hwPixelFormat;
+        frames->sw_format = codecContext->sw_pix_fmt;
+        frames->width = codecContext->width;
+        frames->height = codecContext->height;
+        frames->initial_pool_size = 16;
+      }
+
+      if (av_hwframe_ctx_init(tmp) < 0)
+      {
+        DebugLog("av_hwframe_ctx_init failed");
+        av_buffer_unref(&tmp);
+        tmp = nullptr;
+      }
+    }
+
+    if (tmp)
+    {
+      hwFramesCtx = tmp;
+      codecContext->hw_frames_ctx = av_buffer_ref(hwFramesCtx);
+      DebugLog("Created hardware frames context");
+    }
+    else
+    {
+      DebugLog("Falling back to software decoding");
       useHW = false;
       codecContext->hw_frames_ctx = nullptr;
       if (hwDeviceCtx)
         av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
       hwPixelFormat = AV_PIX_FMT_NONE;
-    }
-    else
-    {
-      AVHWFramesContext *frames =
-          (AVHWFramesContext *)hwFramesCtx->data;
-      frames->format = hwPixelFormat;
-      frames->sw_format = codecContext->sw_pix_fmt;
-      frames->width = codecContext->width;
-      frames->height = codecContext->height;
-      frames->initial_pool_size = 16;
-      if (av_hwframe_ctx_init(hwFramesCtx) < 0)
-      {
-        DebugLog("av_hwframe_ctx_init failed");
-        av_buffer_unref(&hwFramesCtx);
-        codecContext->hw_frames_ctx = nullptr;
-        useHW = false;
-        if (hwDeviceCtx)
-          av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
-        hwPixelFormat = AV_PIX_FMT_NONE;
-      }
-      else
-      {
-        codecContext->hw_frames_ctx = av_buffer_ref(hwFramesCtx);
-        DebugLog("Created hardware frames context");
-      }
     }
   }
 
@@ -338,6 +363,7 @@ bool VideoPlayer::InitializeDecoder()
   packet = av_packet_alloc();
   if (!frame || !frameRGB || !packet)
   {
+    DebugLog("Failed to allocate frames or packet");
     CleanupDecoder();
     return false;
   }
