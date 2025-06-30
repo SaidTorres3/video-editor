@@ -392,6 +392,8 @@ bool VideoPlayer::DecodeNextFrame()
   if (!isLoaded)
     return false;
 
+  std::lock_guard<std::mutex> lock(decodeMutex);
+
   while (true)
   {
     int ret = av_read_frame(formatContext, packet);
@@ -532,8 +534,11 @@ void VideoPlayer::SeekToTime(double seconds)
   if (!isLoaded)
     return;
 
-  AVStream *vs = formatContext->streams[videoStreamIndex];
-  int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));
+  {
+    std::lock_guard<std::mutex> lock(decodeMutex);
+
+    AVStream *vs = formatContext->streams[videoStreamIndex];
+    int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));
 
   // Seek directly to the requested timestamp. AVSEEK_FLAG_ANY allows seeking
   // to non-keyframes so the timeline jumps exactly where the user clicked
@@ -552,11 +557,16 @@ void VideoPlayer::SeekToTime(double seconds)
       tr->buffer.clear();
   }
 
-  currentFrame = (int64_t)(seconds * frameRate);
-  currentPts = seconds;
+    currentFrame = (int64_t)(seconds * frameRate);
+    currentPts = seconds;
+  }
 
-  // Decode the frame at the requested timestamp to update the preview
-  DecodeNextFrame();
+  // Decode a few frames after seeking so the display updates immediately
+  for (int i = 0; i < 3 && currentPts < seconds; ++i)
+  {
+    if (!DecodeNextFrame())
+      break;
+  }
 }
 
 double VideoPlayer::GetDuration() const

@@ -108,6 +108,7 @@ private:
   std::atomic<bool> audioThreadRunning;
   std::mutex audioMutex;
   std::condition_variable audioCondition;
+  std::mutex decodeMutex; // protects decoder during seek
   
   // Audio settings
   int audioSampleRate;
