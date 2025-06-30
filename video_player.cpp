@@ -194,6 +194,8 @@ bool VideoPlayer::InitializeDecoder()
     return false;
 
   bool useHW = false;
+  AVPixelFormat hwfmt = AV_PIX_FMT_NONE;
+  hwPixelFormat = AV_PIX_FMT_NONE;
   if (cp->codec_id == AV_CODEC_ID_H264)
   {
     for (int i = 0;; i++)
@@ -204,7 +206,7 @@ bool VideoPlayer::InitializeDecoder()
       if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
           config->device_type == AV_HWDEVICE_TYPE_D3D11VA)
       {
-        hwPixelFormat = config->pix_fmt;
+        hwfmt = config->pix_fmt;
         useHW = true;
         break;
       }
@@ -224,9 +226,17 @@ bool VideoPlayer::InitializeDecoder()
     codecContext->opaque = this;
     codecContext->get_format = GetHWFormat;
     if (av_hwdevice_ctx_create(&hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) >= 0)
+    {
       codecContext->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+      hwPixelFormat = hwfmt;
+    }
     else
+    {
       useHW = false;
+      hwPixelFormat = AV_PIX_FMT_NONE;
+      codecContext->get_format = nullptr;
+      codecContext->opaque = nullptr;
+    }
   }
   if (avcodec_open2(codecContext, codec, nullptr) < 0)
   {
@@ -282,6 +292,7 @@ void VideoPlayer::CleanupDecoder()
     avcodec_free_context(&codecContext), codecContext = nullptr;
   if (hwDeviceCtx)
     av_buffer_unref(&hwDeviceCtx), hwDeviceCtx = nullptr;
+  hwPixelFormat = AV_PIX_FMT_NONE;
 }
 
 void VideoPlayer::UnloadVideo()
@@ -410,10 +421,15 @@ bool VideoPlayer::DecodeNextFrame()
         if (frame->format == hwPixelFormat)
         {
           tmp = av_frame_alloc();
-          if (!tmp || av_hwframe_transfer_data(tmp, frame, 0) < 0)
+          if (!tmp)
+            return false;
+          tmp->format = codecContext->sw_pix_fmt;
+          tmp->width = frame->width;
+          tmp->height = frame->height;
+          if (av_frame_get_buffer(tmp, 0) < 0 ||
+              av_hwframe_transfer_data(tmp, frame, 0) < 0)
           {
-            if (tmp)
-              av_frame_free(&tmp);
+            av_frame_free(&tmp);
             return false;
           }
           src = tmp;
@@ -426,6 +442,7 @@ bool VideoPlayer::DecodeNextFrame()
             frameRGB->data, frameRGB->linesize);
         if (tmp)
           av_frame_free(&tmp);
+        av_frame_unref(frame);
         AVStream *vs = formatContext->streams[videoStreamIndex];
         double pts = 0.0;
         if (frame->best_effort_timestamp != AV_NOPTS_VALUE)
