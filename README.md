@@ -92,12 +92,13 @@ single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
    ```
    3. Build the release configuration:
       ```
-   cmake --build build --config Release
-   ```
+      cmake --build build --config Release
+      ```
    The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
+The `CutVideo` feature uses the FFmpeg libraries directly, so no external `ffmpeg` executable is needed.
 
-   Link-time optimization is automatically enabled when `USE_STATIC_FFMPEG` is
-   used to keep performance similar to the dynamic build.
+Link-time optimization is automatically enabled when `USE_STATIC_FFMPEG` is
+used to keep performance similar to the dynamic build.
 
 Alternatively you can use the provided `run.ps1` script:
 
