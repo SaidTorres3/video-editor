@@ -60,6 +60,10 @@ private:
   AVCodecContext *codecContext;
   AVFrame *frame;
   AVFrame *frameRGB;
+  AVFrame *hwFrame; // Frame for hardware decoding
+  AVBufferRef *hwDeviceCtx;
+  AVPixelFormat hwPixelFormat;
+  bool useHwAccel;
   AVPacket *packet;
   struct SwsContext *swsContext;
   uint8_t *buffer;
@@ -104,6 +108,7 @@ private:
   std::atomic<bool> audioThreadRunning;
   std::mutex audioMutex;
   std::condition_variable audioCondition;
+  std::mutex decodeMutex; // protects decoder during seek
   
   // Audio settings
   int audioSampleRate;
