@@ -83,7 +83,7 @@ single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
    1. Install FFmpeg via vcpkg using the static triplet.  You may enable
       additional codec features if desired:
       ```
-      vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib]:x64-windows-static
+      vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
       ```
    2. Configure CMake pointing `FFMPEG_ROOT` to the vcpkg installation and
       enabling static linking:
