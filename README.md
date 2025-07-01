@@ -96,6 +96,8 @@ single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
       ```
    The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
 The `CutVideo` feature uses the FFmpeg libraries directly, so no external `ffmpeg` executable is needed.
+When cutting you can optionally re-encode the video to H.264 and merge all active audio tracks; these operations are handled internally by FFmpeg.
+You may enable both options at the same time to shrink the file and maximize compatibility.
 
 Link-time optimization is automatically enabled when `USE_STATIC_FFMPEG` is
 used to keep performance similar to the dynamic build.
