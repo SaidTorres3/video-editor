@@ -1052,6 +1052,15 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         return false;
     }
 
+    {
+        std::ostringstream oss;
+        oss << "CutVideo start start=" << startTime << " end=" << endTime
+            << " mergeAudio=" << mergeAudio
+            << " convertH264=" << convertH264
+            << " maxBitrate=" << maxBitrate;
+        DebugLog(oss.str());
+    }
+
     int bufSize = WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
     std::string utf8Output(bufSize, 0);
     WideCharToMultiByte(CP_UTF8, 0, outputFilename.c_str(), -1, &utf8Output[0], bufSize, nullptr, nullptr);
@@ -1066,6 +1075,12 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     for (const auto& track : audioTracks) {
         if (!track->isMuted)
             activeTracks.push_back(track->streamIndex);
+    }
+    {
+        std::ostringstream oss;
+        oss << "Active tracks:";
+        for (int idx : activeTracks) oss << ' ' << idx;
+        DebugLog(oss.str());
     }
 
     // When re-encoding or merging audio we need to set up decoder/encoder
@@ -1099,10 +1114,16 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         DebugLog("Failed to open input file", true);
         return false;
     }
+    DebugLog("Input opened");
     if (avformat_find_stream_info(inputCtx, nullptr) < 0) {
         DebugLog("Failed to read stream info", true);
         avformat_close_input(&inputCtx);
         return false;
+    }
+    {
+        std::ostringstream oss;
+        oss << "Input streams=" << inputCtx->nb_streams;
+        DebugLog(oss.str());
     }
 
     AVFormatContext* outputCtx = nullptr;
@@ -1111,6 +1132,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         avformat_close_input(&inputCtx);
         return false;
     }
+    DebugLog("Output context allocated");
 
     std::vector<int> streamMapping(inputCtx->nb_streams, -1);
     int mergedAudioIndex = -1;
@@ -1159,7 +1181,15 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             }
             outStream->time_base = vEncCtx->time_base;
             vDecCtx = avcodec_alloc_context3(avcodec_find_decoder(inStream->codecpar->codec_id));
-            avcodec_parameters_to_context(vDecCtx, inStream->codecpar);
+            if (!vDecCtx ||
+                avcodec_parameters_to_context(vDecCtx, inStream->codecpar) < 0) {
+                DebugLog("Failed to create video decoder context", true);
+                avcodec_free_context(&vEncCtx);
+                if (vDecCtx) avcodec_free_context(&vDecCtx);
+                avformat_free_context(outputCtx);
+                avformat_close_input(&inputCtx);
+                return false;
+            }
             if (avcodec_open2(vDecCtx, avcodec_find_decoder(inStream->codecpar->codec_id), nullptr) < 0) {
                 DebugLog("Failed to open video decoder", true);
                 avcodec_free_context(&vEncCtx);
@@ -1168,6 +1198,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 avformat_close_input(&inputCtx);
                 return false;
             }
+            DebugLog("Video decoder/encoder initialized");
             swsCtx = nullptr; // initialized after first decoded frame
             encFrame = av_frame_alloc();
             decFrame = av_frame_alloc();
@@ -1227,6 +1258,12 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         }
         AVStream* aOut = avformat_new_stream(outputCtx, aEnc);
         aEncCtx = avcodec_alloc_context3(aEnc);
+        if (!aEncCtx) {
+            DebugLog("Failed to allocate AAC encoder context", true);
+            avformat_free_context(outputCtx);
+            avformat_close_input(&inputCtx);
+            return false;
+        }
         aEncCtx->sample_rate = 44100;
         av_channel_layout_default(&aEncCtx->ch_layout, 2);
         aEncCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
@@ -1238,6 +1275,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             avformat_close_input(&inputCtx);
             return false;
         }
+        DebugLog("AAC encoder initialized");
         if (avcodec_parameters_from_context(aOut->codecpar, aEncCtx) < 0) {
             DebugLog("Failed to copy AAC encoder parameters", true);
             success = false;
@@ -1285,6 +1323,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         avformat_close_input(&inputCtx);
         return false;
     }
+    DebugLog("Header written");
     headerWritten = true;
 
     int64_t startPts = (int64_t)(startTime * AV_TIME_BASE);
@@ -1417,6 +1456,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     }
 
     // Flush encoders
+    DebugLog("Flushing encoders");
     if (convertH264 && vEncCtx) {
         avcodec_send_frame(vEncCtx, nullptr);
         while (avcodec_receive_packet(vEncCtx, &outPkt) == 0) {
@@ -1480,6 +1520,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     }
 
 cleanup:
+    DebugLog("Entering cleanup");
     if (headerWritten)
         av_write_trailer(outputCtx);
     if (!(outputCtx->oformat->flags & AVFMT_NOFILE))
@@ -1500,6 +1541,8 @@ cleanup:
     avformat_close_input(&inputCtx);
 
     SendMessage(progressBar, PBM_SETPOS, 100, 0);
+
+    DebugLog("CutVideo finished");
 
     return success;
 }
