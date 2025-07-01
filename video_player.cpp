@@ -1202,6 +1202,11 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             swsCtx = nullptr; // initialized after first decoded frame
             encFrame = av_frame_alloc();
             decFrame = av_frame_alloc();
+            if (!encFrame || !decFrame) {
+                DebugLog("Failed to allocate frames", true);
+                success = false;
+                goto cleanup;
+            }
             encFrame->format = vEncCtx->pix_fmt;
             encFrame->width = vEncCtx->width;
             encFrame->height = vEncCtx->height;
@@ -1325,6 +1330,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     }
     DebugLog("Header written");
     headerWritten = true;
+    DebugLog("Beginning packet processing");
 
     int64_t startPts = (int64_t)(startTime * AV_TIME_BASE);
     int64_t endPts = (int64_t)(endTime * AV_TIME_BASE);
@@ -1334,6 +1340,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
 
     AVPacket pkt, outPkt;
     av_init_packet(&pkt);
+    av_init_packet(&outPkt); // ensure fields are zeroed before use
     int64_t audioPts = 0;
     while (av_read_frame(inputCtx, &pkt) >= 0) {
         bool handled = false;
