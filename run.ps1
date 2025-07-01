@@ -4,7 +4,7 @@ param(
 )
 
 # Se recomienda instalar FFmpeg con:
-# vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib]:x64-windows-static
+# vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
 # Si piden build estática y no cambiaron la ruta por defecto,
 # intentamos adivinar la ubicación de vcpkg estático.
 if ($Static -and $FFmpegPath -eq "C:\Program Files\ffmpeg") {
