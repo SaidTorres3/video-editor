@@ -1089,6 +1089,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     AVCodecContext* aEncCtx = nullptr;
     int encFrameSamples = 0;
     std::vector<int16_t> mixBuffer;
+    SwrContext* mixSwr = nullptr;
     bool headerWritten = false;
 
     bool needReencode = convertH264 || mergeAudio;
@@ -1250,6 +1251,20 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             goto cleanup;
         }
         mixBuffer.resize(encFrameSamples * aEncCtx->ch_layout.nb_channels);
+        mixSwr = swr_alloc();
+        AVChannelLayout stereo;
+        av_channel_layout_default(&stereo, 2);
+        av_opt_set_int   (mixSwr, "in_sample_rate", 44100, 0);
+        av_opt_set_sample_fmt(mixSwr, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+        av_opt_set_chlayout  (mixSwr, "in_chlayout", &stereo, 0);
+        av_opt_set_int   (mixSwr, "out_sample_rate", aEncCtx->sample_rate, 0);
+        av_opt_set_sample_fmt(mixSwr, "out_sample_fmt", aEncCtx->sample_fmt, 0);
+        av_opt_set_chlayout  (mixSwr, "out_chlayout", &aEncCtx->ch_layout, 0);
+        if (swr_init(mixSwr) < 0) {
+            DebugLog("Failed to init mix resampler", true);
+            success = false;
+            goto cleanup;
+        }
         mergedAudioIndex = aOut->index;
     }
 
@@ -1377,7 +1392,13 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                     success = false;
                     goto cleanup;
                 }
-                memcpy(af->data[0], mixBuffer.data(), mixBuffer.size() * sizeof(int16_t));
+                const uint8_t* inBuf[1] = { (const uint8_t*)mixBuffer.data() };
+                if (swr_convert(mixSwr, af->data, encFrameSamples, inBuf, encFrameSamples) < 0) {
+                    DebugLog("Failed to convert mixed samples", true);
+                    av_frame_free(&af);
+                    success = false;
+                    goto cleanup;
+                }
                 af->pts = audioPts;
                 audioPts += encFrameSamples;
                 avcodec_send_frame(aEncCtx, af);
@@ -1431,7 +1452,13 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 success = false;
                 goto cleanup;
             }
-            memcpy(af->data[0], mixBuffer.data(), mixBuffer.size() * sizeof(int16_t));
+            const uint8_t* inBuf[1] = { (const uint8_t*)mixBuffer.data() };
+            if (swr_convert(mixSwr, af->data, encFrameSamples, inBuf, encFrameSamples) < 0) {
+                DebugLog("Failed to convert mixed samples", true);
+                av_frame_free(&af);
+                success = false;
+                goto cleanup;
+            }
             af->pts = audioPts;
             audioPts += encFrameSamples;
             avcodec_send_frame(aEncCtx, af);
@@ -1463,6 +1490,7 @@ cleanup:
     if (encFrame) av_frame_free(&encFrame);
     if (decFrame) av_frame_free(&decFrame);
     if (aEncCtx) avcodec_free_context(&aEncCtx);
+    if (mixSwr) swr_free(&mixSwr);
     for (auto &mt : mergeTracks) {
         if (mt.swrCtx) swr_free(&mt.swrCtx);
         if (mt.decCtx) avcodec_free_context(&mt.decCtx);
