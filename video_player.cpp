@@ -1167,13 +1167,17 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 vEncCtx->bit_rate = maxBitrate * 1000;
             if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)
                 vEncCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-            if (avcodec_open2(vEncCtx, vEnc, nullptr) < 0) {
+            AVDictionary* encOpts = nullptr;
+            av_dict_set(&encOpts, "preset", "fast", 0);
+            if (avcodec_open2(vEncCtx, vEnc, &encOpts) < 0) {
                 DebugLog("Failed to open H.264 encoder", true);
                 avcodec_free_context(&vEncCtx);
                 avformat_free_context(outputCtx);
                 avformat_close_input(&inputCtx);
+                av_dict_free(&encOpts);
                 return false;
             }
+            av_dict_free(&encOpts);
             if (avcodec_parameters_from_context(outStream->codecpar, vEncCtx) < 0) {
                 DebugLog("Failed to copy encoder parameters", true);
                 success = false;
@@ -1273,6 +1277,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         av_channel_layout_default(&aEncCtx->ch_layout, 2);
         aEncCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
         aEncCtx->time_base = {1, aEncCtx->sample_rate};
+        aEncCtx->bit_rate = 128000; // match ffmpeg default
         if (avcodec_open2(aEncCtx, aEnc, nullptr) < 0) {
             DebugLog("Failed to open AAC encoder", true);
             avcodec_free_context(&aEncCtx);
@@ -1384,8 +1389,12 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                     while (avcodec_receive_frame(mt.decCtx, mt.frame) == 0) {
                         int outSamples = swr_get_out_samples(mt.swrCtx, mt.frame->nb_samples);
                         std::vector<int16_t> tmp(outSamples * 2);
-                        int conv = swr_convert(mt.swrCtx, (uint8_t**)&tmp[0], outSamples, (const uint8_t**)mt.frame->data, mt.frame->nb_samples);
-                        mt.buffer.insert(mt.buffer.end(), tmp.begin(), tmp.begin() + conv * 2);
+                        uint8_t* outArr[1] = { reinterpret_cast<uint8_t*>(tmp.data()) };
+                        int conv = swr_convert(mt.swrCtx, outArr, outSamples,
+                                              (const uint8_t**)mt.frame->data,
+                                              mt.frame->nb_samples);
+                        mt.buffer.insert(mt.buffer.end(), tmp.begin(),
+                                          tmp.begin() + conv * 2);
                     }
                     handled = true;
                     break;
