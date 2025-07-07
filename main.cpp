@@ -15,6 +15,7 @@
 #include <string>
 #include <cstdlib>
 #include <cstdio> // For swprintf_s
+#include <thread>
 
 // Control IDs
 #define ID_BUTTON_OPEN 1001
@@ -39,6 +40,7 @@
 #define ID_EDIT_BITRATE 1017
 #define ID_EDIT_START_TIME 1018
 #define ID_EDIT_END_TIME 1019
+#define WM_APP_CUT_DONE (WM_APP + 1)
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
@@ -280,6 +282,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_SIZE:
     {
         RepositionControls(hwnd);
+    }
+    break;
+
+    case WM_APP_CUT_DONE:
+    {
+        CloseProgressWindow();
+        EnableWindow(hwnd, TRUE);
+        bool success = wParam != 0;
+        MessageBoxW(hwnd, success ? L"Video successfully cut and saved." : L"Failed to cut the video.",
+                    success ? L"Success" : L"Error", MB_OK | (success ? MB_ICONINFORMATION : MB_ICONERROR));
+        UpdateControls();
     }
     break;
 
@@ -916,15 +929,14 @@ void OnCutClicked(HWND hwnd)
         int bitrate = _wtoi(bitrateText);
 
         ShowProgressWindow(hwnd);
-        bool success = g_videoPlayer->CutVideo(std::wstring(szFile), g_cutStartTime, g_cutEndTime,
-                                              mergeAudio, convertH264, bitrate, g_hProgressBar);
-        CloseProgressWindow();
-
-        EnableWindow(hwnd, TRUE); // Re-enable UI
-
-        MessageBoxW(hwnd, success ? L"Video successfully cut and saved." : L"Failed to cut the video.",
-                    success ? L"Success" : L"Error", MB_OK | (success ? MB_ICONINFORMATION : MB_ICONERROR));
-        UpdateControls();
+        std::wstring outFile = szFile;
+        double start = g_cutStartTime;
+        double end = g_cutEndTime;
+        std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, start, end]() {
+            bool ok = g_videoPlayer->CutVideo(outFile, start, end,
+                                             mergeAudio, convertH264, bitrate, g_hProgressBar);
+            PostMessage(hwnd, WM_APP_CUT_DONE, ok ? 1 : 0, 0);
+        }).detach();
     }
 }
 
