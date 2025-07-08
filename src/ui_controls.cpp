@@ -250,7 +250,7 @@ void CreateControls(HWND hwnd)
 
     g_hRadioCopyCodec = CreateWindow(
         L"BUTTON", L"Copy Codec",
-        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
         340, 515, 100, 20,
         hwnd, (HMENU)ID_RADIO_COPY_CODEC,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
@@ -267,7 +267,7 @@ void CreateControls(HWND hwnd)
 
     g_hRadioUseBitrate = CreateWindow(
         L"BUTTON", L"Specify Bitrate",
-        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
         340, 540, 100, 20,
         hwnd, (HMENU)ID_RADIO_USE_BITRATE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
