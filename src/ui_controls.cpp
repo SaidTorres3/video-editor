@@ -29,6 +29,8 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_LABEL_BITRATE 1021
 #define ID_EDIT_TARGETSIZE 1022
 #define ID_LABEL_TARGETSIZE 1023
+#define ID_RADIO_USE_BITRATE 1024
+#define ID_RADIO_USE_SIZE 1025
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -40,6 +42,7 @@ extern HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 extern HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 extern HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
 extern HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize;
+extern HWND g_hRadioUseBitrate, g_hRadioUseSize;
 extern HWND g_hLabelBitrate, g_hLabelTargetSize;
 extern HWND g_hEditStartTime, g_hEditEndTime;
 extern HWND g_hLabelCutInfo;
@@ -262,10 +265,27 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hRadioH264);
 
+    g_hRadioUseBitrate = CreateWindow(
+        L"BUTTON", L"Specify Bitrate",
+        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+        340, 540, 100, 20,
+        hwnd, (HMENU)ID_RADIO_USE_BITRATE,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hRadioUseBitrate);
+    SendMessage(g_hRadioUseBitrate, BM_SETCHECK, BST_CHECKED, 0);
+
+    g_hRadioUseSize = CreateWindow(
+        L"BUTTON", L"Target Size",
+        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+        445, 540, 100, 20,
+        hwnd, (HMENU)ID_RADIO_USE_SIZE,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hRadioUseSize);
+
     g_hLabelBitrate = CreateWindow(
         L"STATIC", L"Bitrate KBPS",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 540, 200, 20,
+        340, 565, 200, 20,
         hwnd, (HMENU)ID_LABEL_BITRATE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hLabelBitrate);
@@ -273,7 +293,7 @@ void CreateControls(HWND hwnd)
     g_hEditBitrate = CreateWindow(
         L"EDIT", L"8000",
         WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
-        340, 560, 200, 20,
+        340, 585, 200, 20,
         hwnd, (HMENU)ID_EDIT_BITRATE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hEditBitrate);
@@ -281,7 +301,7 @@ void CreateControls(HWND hwnd)
     g_hLabelTargetSize = CreateWindow(
         L"STATIC", L"Target Size MB",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 585, 200, 20,
+        340, 565, 200, 20,
         hwnd, (HMENU)ID_LABEL_TARGETSIZE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hLabelTargetSize);
@@ -289,7 +309,7 @@ void CreateControls(HWND hwnd)
     g_hEditTargetSize = CreateWindow(
         L"EDIT", L"0",
         WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
-        340, 605, 200, 20,
+        340, 585, 200, 20,
         hwnd, (HMENU)ID_EDIT_TARGETSIZE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hEditTargetSize);
@@ -312,9 +332,17 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hCheckboxMergeAudio, FALSE);
     EnableWindow(g_hRadioCopyCodec, FALSE);
     EnableWindow(g_hRadioH264, FALSE);
+    EnableWindow(g_hRadioUseBitrate, FALSE);
+    EnableWindow(g_hRadioUseSize, FALSE);
     EnableWindow(g_hEditBitrate, FALSE);
     EnableWindow(g_hLabelTargetSize, FALSE);
     EnableWindow(g_hEditTargetSize, FALSE);
+    ShowWindow(g_hRadioUseBitrate, SW_HIDE);
+    ShowWindow(g_hRadioUseSize, SW_HIDE);
+    ShowWindow(g_hLabelBitrate, SW_HIDE);
+    ShowWindow(g_hEditBitrate, SW_HIDE);
+    ShowWindow(g_hLabelTargetSize, SW_HIDE);
+    ShowWindow(g_hEditTargetSize, SW_HIDE);
 }
 
 void RepositionControls(HWND hwnd)
@@ -360,10 +388,12 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 160, 200, 25, TRUE);
     MoveWindow(g_hRadioCopyCodec, audioControlsX, editingControlsY + 190, 100, 20, TRUE);
     MoveWindow(g_hRadioH264, audioControlsX + 105, editingControlsY + 190, 100, 20, TRUE);
-    MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 215, 200, 20, TRUE);
-    MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 235, 200, 20, TRUE);
-    MoveWindow(g_hLabelTargetSize, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
-    MoveWindow(g_hEditTargetSize, audioControlsX, editingControlsY + 280, 200, 20, TRUE);
+    MoveWindow(g_hRadioUseBitrate, audioControlsX, editingControlsY + 215, 100, 20, TRUE);
+    MoveWindow(g_hRadioUseSize, audioControlsX + 105, editingControlsY + 215, 100, 20, TRUE);
+    MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
+    MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
+    MoveWindow(g_hLabelTargetSize, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
+    MoveWindow(g_hEditTargetSize, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
 
     // Video area (takes up remaining space)
     int videoSectionWidth = clientRect.right - audioControlsWidth - 30;

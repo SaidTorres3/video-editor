@@ -72,15 +72,18 @@ void OnCutClicked(HWND hwnd)
         wchar_t bitrateText[32];
         GetWindowTextW(GetDlgItem(hwnd, 1017), bitrateText, 32); // ID_EDIT_BITRATE
         int bitrate = _wtoi(bitrateText);
+
         wchar_t sizeText[32];
         GetWindowTextW(GetDlgItem(hwnd, 1022), sizeText, 32); // ID_EDIT_TARGETSIZE
         int targetSize = _wtoi(sizeText);
 
-        double start = g_cutStartTime;
-        double end = g_cutEndTime;
+        bool useSize = SendMessage(GetDlgItem(hwnd, 1025), BM_GETCHECK, 0, 0) == BST_CHECKED; // ID_RADIO_USE_SIZE
 
-        if (convertH264 && targetSize > 0) {
-            double duration = end - start;
+        double startTime = g_cutStartTime;
+        double endTime = g_cutEndTime;
+
+        if (convertH264 && useSize && targetSize > 0) {
+            double duration = endTime - startTime;
             int audioKbps = 0;
             if (mergeAudio) {
                 audioKbps = 128; // single AAC track
@@ -98,8 +101,8 @@ void OnCutClicked(HWND hwnd)
 
         ShowProgressWindow(hwnd);
         std::wstring outFile = szFile;
-        std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, start, end]() {
-            bool ok = g_videoPlayer->CutVideo(outFile, start, end,
+        std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
+            bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             PostMessage(hwnd, (WM_APP + 1), ok ? 1 : 0, 0); // WM_APP_CUT_DONE
