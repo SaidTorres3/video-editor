@@ -67,6 +67,7 @@ add_executable(VideoEditor WIN32
     src/main.cpp
     src/video_player.cpp
     src/options_window.cpp
+    src/progress_window.cpp
 )
 
 # Headers live in src/
