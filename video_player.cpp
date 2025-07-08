@@ -1058,7 +1058,8 @@ void VideoPlayer::PlaybackThreadFunction()
 
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
-                           bool useNvenc, int maxBitrate, HWND progressBar)
+                           bool useNvenc, int maxBitrate, HWND progressBar,
+                           std::atomic<bool>* cancelFlag)
 {
     if (!isLoaded) {
         DebugLog("CutVideo called but no video loaded", true);
@@ -1364,6 +1365,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     av_init_packet(&outPkt); // ensure fields are zeroed before use
     int64_t audioPts = 0;
     while (av_read_frame(inputCtx, &pkt) >= 0) {
+        if (cancelFlag && *cancelFlag) { success = false; goto cleanup; }
         bool handled = false;
         AVStream* inStream = inputCtx->streams[pkt.stream_index];
         int64_t pktPtsUs = av_rescale_q(pkt.pts, inStream->time_base, AV_TIME_BASE_Q);
@@ -1484,7 +1486,8 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         }
 
         double progress = (pktPtsUs - startPts) / double(endPts - startPts);
-        SendMessage(progressBar, PBM_SETPOS, (int)(progress * 100.0), 0);
+        if (progressBar && IsWindow(progressBar))
+            SendMessage(progressBar, PBM_SETPOS, (int)(progress * 100.0), 0);
     }
 
     // Flush encoders
@@ -1501,6 +1504,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     if (mergeAudio && aEncCtx) {
         // flush remaining samples
         while (true) {
+            if (cancelFlag && *cancelFlag) { success = false; goto cleanup; }
             bool ready = true;
             for (auto &mt : mergeTracks)
                 if ((int)mt.buffer.size() < encFrameSamples * 2) { ready = false; break; }
@@ -1572,7 +1576,8 @@ cleanup:
     avformat_free_context(outputCtx);
     avformat_close_input(&inputCtx);
 
-    SendMessage(progressBar, PBM_SETPOS, 100, 0);
+    if (progressBar && IsWindow(progressBar))
+        SendMessage(progressBar, PBM_SETPOS, 100, 0);
 
     DebugLog("CutVideo finished");
 
