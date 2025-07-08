@@ -14,6 +14,7 @@ extern VideoPlayer *g_videoPlayer;
 extern double g_cutStartTime, g_cutEndTime;
 extern HWND g_hStatusText, g_hProgressBar;
 extern bool g_useNvenc;
+bool g_lastOperationWasExport = false;
 
 void OnSetStartClicked(HWND hwnd)
 {
@@ -43,6 +44,7 @@ void OnSetEndClicked(HWND hwnd)
 
 void OnCutClicked(HWND hwnd)
 {
+    g_lastOperationWasExport = false;
     if (!g_videoPlayer || g_cutStartTime < 0 || g_cutEndTime <= g_cutStartTime)
     {
         MessageBoxW(hwnd, L"Please set valid start and end points for the cut.", L"Error", MB_OK | MB_ICONERROR);
@@ -106,6 +108,73 @@ void OnCutClicked(HWND hwnd)
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             PostMessage(hwnd, (WM_APP + 1), ok ? 1 : 0, 0); // WM_APP_CUT_DONE
+        }).detach();
+    }
+}
+
+void OnExportClicked(HWND hwnd)
+{
+    g_lastOperationWasExport = true;
+    if (!g_videoPlayer)
+        return;
+
+    OPENFILENAMEW ofn;
+    wchar_t szFile[260] = { 0 };
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
+    ofn.lpstrFilter = L"MP4 Video\0*.mp4\0All Files\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    ofn.lpstrDefExt = L"mp4";
+
+    if (GetSaveFileNameW(&ofn))
+    {
+        SetWindowTextW(g_hStatusText, L"Exporting video... Please wait.");
+        EnableWindow(hwnd, FALSE);
+
+        bool mergeAudio = IsDlgButtonChecked(hwnd, 1014) == BST_CHECKED;
+        bool convertH264 = SendMessage(GetDlgItem(hwnd, 1016), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        wchar_t bitrateText[32];
+        GetWindowTextW(GetDlgItem(hwnd, 1017), bitrateText, 32);
+        int bitrate = _wtoi(bitrateText);
+
+        wchar_t sizeText[32];
+        GetWindowTextW(GetDlgItem(hwnd, 1022), sizeText, 32);
+        int targetSize = _wtoi(sizeText);
+
+        bool useSize = SendMessage(GetDlgItem(hwnd, 1025), BM_GETCHECK, 0, 0) == BST_CHECKED;
+
+        double startTime = 0.0;
+        double endTime = g_videoPlayer->GetDuration();
+
+        if (convertH264 && useSize && targetSize > 0) {
+            double duration = endTime - startTime;
+            int audioKbps = 0;
+            if (mergeAudio) {
+                audioKbps = 128;
+            } else {
+                for (const auto& track : g_videoPlayer->audioTracks) {
+                    if (track->isMuted) continue;
+                    AVCodecParameters* par = g_videoPlayer->formatContext->streams[track->streamIndex]->codecpar;
+                    int br = par->bit_rate > 0 ? par->bit_rate : 128000;
+                    audioKbps += br / 1000;
+                }
+            }
+            int totalKbps = static_cast<int>((targetSize * 8192) / duration);
+            bitrate = totalKbps > audioKbps ? (totalKbps - audioKbps) : totalKbps / 2;
+        }
+
+        ShowProgressWindow(hwnd);
+        std::wstring outFile = szFile;
+        std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
+            bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
+                                             mergeAudio, convertH264, g_useNvenc,
+                                             bitrate, g_hProgressBar, &g_cancelExport);
+            PostMessage(hwnd, (WM_APP + 1), ok ? 1 : 0, 0);
         }).detach();
     }
 }

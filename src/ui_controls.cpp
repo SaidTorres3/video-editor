@@ -232,7 +232,7 @@ void CreateControls(HWND hwnd)
     ApplyDarkTheme(g_hLabelCutInfo);
 
     g_hButtonCut = CreateWindow(
-        L"BUTTON", L"Cut & Save",
+        L"BUTTON", L"Export Video",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         340, 450, 200, 30, // Placeholder
         hwnd, (HMENU)ID_BUTTON_CUT,
