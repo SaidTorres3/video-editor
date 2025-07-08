@@ -14,7 +14,7 @@ void UpdateTimeline();
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
-extern HWND g_hStatusText, g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
+extern HWND g_hStatusText, g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hLabelTargetSize, g_hRadioUseBitrate, g_hRadioUseSize;
 extern double g_cutStartTime, g_cutEndTime;
 
 void OpenVideoFile(HWND hwnd)
@@ -68,7 +68,8 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         EnableWindow(g_hCheckboxMergeAudio, TRUE);
         EnableWindow(g_hRadioCopyCodec, TRUE);
         EnableWindow(g_hRadioH264, TRUE);
-        EnableWindow(g_hEditBitrate, TRUE);
+        EnableWindow(g_hRadioUseBitrate, TRUE);
+        EnableWindow(g_hRadioUseSize, TRUE);
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
         UpdateCutInfoLabel(hwnd);

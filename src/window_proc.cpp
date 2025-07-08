@@ -28,7 +28,7 @@ void UpdateCutTimeEdits();
 
 
 extern VideoPlayer *g_videoPlayer;
-extern HWND g_hEditStartTime, g_hEditEndTime, g_hListBoxAudioTracks, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hRadioH264, g_hEditBitrate;
+extern HWND g_hEditStartTime, g_hEditEndTime, g_hListBoxAudioTracks, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize;
 extern double g_cutStartTime;
 extern double g_cutEndTime;
 extern HBRUSH g_hbrBackground;
@@ -103,7 +103,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case 1015: // ID_RADIO_COPY_CODEC
         case 1016: // ID_RADIO_H264
-            EnableWindow(g_hEditBitrate, SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED);
+        case 1024: // ID_RADIO_USE_BITRATE
+        case 1025: // ID_RADIO_USE_SIZE
+            UpdateControls();
             break;
         }
 

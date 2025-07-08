@@ -73,12 +73,36 @@ void OnCutClicked(HWND hwnd)
         GetWindowTextW(GetDlgItem(hwnd, 1017), bitrateText, 32); // ID_EDIT_BITRATE
         int bitrate = _wtoi(bitrateText);
 
+        wchar_t sizeText[32];
+        GetWindowTextW(GetDlgItem(hwnd, 1022), sizeText, 32); // ID_EDIT_TARGETSIZE
+        int targetSize = _wtoi(sizeText);
+
+        bool useSize = SendMessage(GetDlgItem(hwnd, 1025), BM_GETCHECK, 0, 0) == BST_CHECKED; // ID_RADIO_USE_SIZE
+
+        double startTime = g_cutStartTime;
+        double endTime = g_cutEndTime;
+
+        if (convertH264 && useSize && targetSize > 0) {
+            double duration = endTime - startTime;
+            int audioKbps = 0;
+            if (mergeAudio) {
+                audioKbps = 128; // single AAC track
+            } else {
+                for (const auto& track : g_videoPlayer->audioTracks) {
+                    if (track->isMuted) continue;
+                    AVCodecParameters* par = g_videoPlayer->formatContext->streams[track->streamIndex]->codecpar;
+                    int br = par->bit_rate > 0 ? par->bit_rate : 128000;
+                    audioKbps += br / 1000;
+                }
+            }
+            int totalKbps = static_cast<int>((targetSize * 8192) / duration);
+            bitrate = totalKbps > audioKbps ? (totalKbps - audioKbps) : totalKbps / 2;
+        }
+
         ShowProgressWindow(hwnd);
         std::wstring outFile = szFile;
-        double start = g_cutStartTime;
-        double end = g_cutEndTime;
-        std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, start, end]() {
-            bool ok = g_videoPlayer->CutVideo(outFile, start, end,
+        std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
+            bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             PostMessage(hwnd, (WM_APP + 1), ok ? 1 : 0, 0); // WM_APP_CUT_DONE

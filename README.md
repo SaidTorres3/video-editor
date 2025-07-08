@@ -38,7 +38,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Set Start/End Points**: Mark the portion of the video to export
 - **Merge Audio Tracks**: Combine all unmuted tracks into one output stream
 - **Codec Options**: Copy video/audio codecs for a fast cut or convert to H.264
-- **Bitrate Limit**: Specify a max bitrate when converting to H.264
+- **Bitrate or Target Size**: When converting to H.264 you can either set a bitrate or specify a desired final size; only the chosen option is shown
 - **Progress Window**: A small window shows export progress in real time
 
 ## Technical Implementation
