@@ -302,8 +302,29 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         CloseProgressWindow();
         EnableWindow(hwnd, TRUE);
         bool success = wParam != 0;
-        MessageBoxW(hwnd, success ? L"Video successfully cut and saved." : L"Failed to cut the video.",
-                    success ? L"Success" : L"Error", MB_OK | (success ? MB_ICONINFORMATION : MB_ICONERROR));
+        const wchar_t* msg;
+        const wchar_t* title;
+        UINT flags;
+        if (success)
+        {
+            msg = L"Video successfully cut and saved.";
+            title = L"Success";
+            flags = MB_OK | MB_ICONINFORMATION;
+        }
+        else if (g_cancelExport)
+        {
+            msg = L"Export canceled.";
+            title = L"Canceled";
+            flags = MB_OK | MB_ICONINFORMATION;
+        }
+        else
+        {
+            msg = L"Failed to cut the video.";
+            title = L"Error";
+            flags = MB_OK | MB_ICONERROR;
+        }
+        MessageBoxW(hwnd, msg, title, flags);
+        g_cancelExport = false;
         UpdateControls();
     }
     break;
