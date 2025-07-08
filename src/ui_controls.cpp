@@ -258,9 +258,9 @@ void CreateControls(HWND hwnd)
     SendMessage(g_hRadioCopyCodec, BM_SETCHECK, BST_CHECKED, 0);
 
     g_hRadioH264 = CreateWindow(
-        L"BUTTON", L"Convert H264",
+        L"BUTTON", L"Convert to H264",
         WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
-        445, 515, 100, 20,
+        445, 515, 160, 20, // ← Aumenta esto
         hwnd, (HMENU)ID_RADIO_H264,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hRadioH264);
@@ -387,7 +387,7 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 125, 200, 30, TRUE);
     MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 160, 200, 25, TRUE);
     MoveWindow(g_hRadioCopyCodec, audioControlsX, editingControlsY + 190, 100, 20, TRUE);
-    MoveWindow(g_hRadioH264, audioControlsX + 105, editingControlsY + 190, 100, 20, TRUE);
+    MoveWindow(g_hRadioH264, audioControlsX + 105, editingControlsY + 190, 150, 20, TRUE);
     MoveWindow(g_hRadioUseBitrate, audioControlsX, editingControlsY + 215, 100, 20, TRUE);
     MoveWindow(g_hRadioUseSize, audioControlsX + 105, editingControlsY + 215, 100, 20, TRUE);
     MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
