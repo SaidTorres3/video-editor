@@ -129,11 +129,22 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
     return false;
   }
 
-  // Use the video stream's start time as the timeline origin
+  // Determine the earliest stream start time for synchronization
   startTimeOffset = 0.0;
+  double minStart = std::numeric_limits<double>::max();
+  for (unsigned i = 0; i < formatContext->nb_streams; ++i)
+  {
+    AVStream *s = formatContext->streams[i];
+    if (s->start_time != AV_NOPTS_VALUE)
+    {
+      double t = s->start_time * av_q2d(s->time_base);
+      if (t < minStart)
+        minStart = t;
+    }
+  }
+  if (minStart != std::numeric_limits<double>::max())
+    startTimeOffset = minStart;
   AVStream *vs = formatContext->streams[videoStreamIndex];
-  if (vs->start_time != AV_NOPTS_VALUE)
-    startTimeOffset = vs->start_time * av_q2d(vs->time_base);
 
   // Initialize audio tracks
   if (!InitializeAudioTracks())
@@ -904,21 +915,15 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
   else if (track->frame->pts != AV_NOPTS_VALUE)
     absPts = track->frame->pts * av_q2d(as->time_base);
 
-  if (!track->startOffsetSet) {
-    track->startOffset = absPts - startTimeOffset;
+  if (!track->startOffsetSet)
+  {
+    track->startOffset = absPts - track->nextPts - startTimeOffset;
     track->startOffsetSet = true;
-    if (track->startOffset > track->nextPts) {
-      int silenceSamples = static_cast<int>((track->startOffset - track->nextPts) * audioSampleRate + 0.5);
-      if (silenceSamples > 0) {
-        track->buffer.insert(track->buffer.end(), silenceSamples * audioChannels, 0);
-        track->nextPts += static_cast<double>(silenceSamples) / audioSampleRate;
-      }
-    }
   }
 
-  double framePts = absPts - startTimeOffset; // align to video timeline
-  if (framePts < 0.0)
-    return true; // drop audio before playback start
+  double framePts = absPts - startTimeOffset - track->startOffset;
+  if (framePts + 1e-6 < track->nextPts)
+    return true; // drop audio before the desired time
 
   // Resample audio
   int outSamples = swr_get_out_samples(track->swrContext, track->frame->nb_samples);
