@@ -41,13 +41,24 @@ bool AudioPlayer::Initialize() {
     m_player->audioFormat->nAvgBytesPerSec = m_player->audioFormat->nSamplesPerSec * m_player->audioFormat->nBlockAlign;
     m_player->audioFormat->cbSize = 0;
 
-    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
+    const REFERENCE_TIME buffer100ms = 1000000; // 100 ms
+    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
+                                          AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                          buffer100ms,
+                                          0,
+                                          m_player->audioFormat,
+                                          nullptr);
     if (FAILED(hr))
     {
         // Try with device format if our format fails
         CoTaskMemFree(m_player->audioFormat);
         m_player->audioFormat = deviceFormat;
-        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
+        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
+                                              AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                              buffer100ms,
+                                              0,
+                                              m_player->audioFormat,
+                                              nullptr);
         if (FAILED(hr))
             return false;
     }
@@ -64,7 +75,13 @@ bool AudioPlayer::Initialize() {
     if (FAILED(hr))
         return false;
 
-    hr = m_player->audioClient->GetService(__uuidof(IAudioRenderClient), (void**)&m_player->renderClient);
+    hr = m_player->audioClient->GetService(__uuidof(IAudioRenderClient),
+                                          (void**)&m_player->renderClient);
+    if (FAILED(hr))
+        return false;
+
+    hr = m_player->audioClient->GetService(__uuidof(IAudioClock),
+                                          (void**)&m_player->audioClock);
     if (FAILED(hr))
         return false;
 
@@ -85,6 +102,11 @@ void AudioPlayer::Cleanup() {
     {
         m_player->renderClient->Release();
         m_player->renderClient = nullptr;
+    }
+    if (m_player->audioClock)
+    {
+        m_player->audioClock->Release();
+        m_player->audioClock = nullptr;
     }
     if (m_player->audioClient)
     {
@@ -214,7 +236,12 @@ void AudioPlayer::CleanupTracks() {
 void AudioPlayer::StartThread() {
     if (!m_player->audioTracks.empty() && m_player->audioInitialized)
     {
-        HRESULT hr = m_player->audioClient->Start();
+        HRESULT hr = m_player->audioClient->Reset();
+        if (FAILED(hr))
+        {
+            // Continue without audio or handle error appropriately
+        }
+        hr = m_player->audioClient->Start();
         if (FAILED(hr))
         {
             // Continue without audio or handle error appropriately
@@ -232,6 +259,16 @@ void AudioPlayer::StopThread() {
         if (m_player->audioThread.joinable())
             m_player->audioThread.join();
     }
+}
+
+void AudioPlayer::ResetClient()
+{
+    if (!m_player->audioClient)
+        return;
+
+    m_player->audioClient->Stop();
+    m_player->audioClient->Reset();
+    m_player->audioClient->Start();
 }
 
 void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {

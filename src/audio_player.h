@@ -15,6 +15,7 @@ public:
     void CleanupTracks();
     void StartThread();
     void StopThread();
+    void ResetClient();
     void ProcessFrame(AVPacket* packet);
     void SetMasterVolume(float volume);
 

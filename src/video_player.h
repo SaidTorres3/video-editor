@@ -110,6 +110,7 @@ public:
     IMMDevice *audioDevice;
     IAudioClient *audioClient;
     IAudioRenderClient *renderClient;
+    IAudioClock *audioClock;
     WAVEFORMATEX *audioFormat;
     UINT32 bufferFrameCount;
     bool audioInitialized;
@@ -153,6 +154,7 @@ public:
 
     double GetDuration() const;
     double GetCurrentTime() const;
+    double GetAudioClock() const;
     int64_t GetCurrentFrame() const { return currentFrame; }
     int64_t GetTotalFrames() const { return totalFrames; }
 

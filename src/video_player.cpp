@@ -56,6 +56,11 @@ VideoPlayer::~VideoPlayer()
         DestroyWindow(videoWindow);
         originalVideoWndProc = nullptr;
     }
+    if (audioClock)
+    {
+        audioClock->Release();
+        audioClock = nullptr;
+    }
 }
 
 void VideoPlayer::CreateVideoWindow()
@@ -244,6 +249,7 @@ void VideoPlayer::Stop()
             tr->buffer.clear();
             tr->nextPts = 0.0;
         }
+        m_audioPlayer->ResetClient();
     }
 }
 
@@ -285,6 +291,7 @@ void VideoPlayer::SeekToTime(double seconds)
                 tr->buffer.clear();
                 tr->nextPts = seconds;
             }
+            m_audioPlayer->ResetClient();
         }
 
         currentFrame = (int64_t)(seconds * frameRate);
@@ -309,6 +316,19 @@ double VideoPlayer::GetDuration() const
 double VideoPlayer::GetCurrentTime() const
 {
     return currentPts;
+}
+
+double VideoPlayer::GetAudioClock() const
+{
+    if (!audioClock)
+        return 0.0;
+
+    UINT64 pos = 0;
+    UINT64 qpc = 0;
+    if (FAILED(audioClock->GetPosition(&pos, &qpc)))
+        return 0.0;
+
+    return static_cast<double>(pos) / audioSampleRate;
 }
 
 void VideoPlayer::SetPosition(int x, int y, int width, int height)
@@ -378,18 +398,25 @@ void VideoPlayer::SetMasterVolume(float volume)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
-    auto startTime = std::chrono::high_resolution_clock::now();
-    double startPts = currentPts;
     while (playbackThreadRunning)
     {
         if (!m_decoder->DecodeNextFrame(false))
             break;
 
-        double target = currentPts - startPts;
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
-        double delay = target - elapsed;
-        if (delay > 0)
-            std::this_thread::sleep_for(std::chrono::duration<double>(delay));
+        double audioTime = GetAudioClock();
+        double diff = currentPts - audioTime;
+        const double syncThreshold = 0.04;
+
+        if (diff > syncThreshold)
+        {
+            DWORD ms = static_cast<DWORD>((diff - syncThreshold) * 1000);
+            if (ms > 0)
+                Sleep(ms);
+        }
+        else if (diff < -syncThreshold)
+        {
+            continue; // drop frame
+        }
     }
     isPlaying = false;
 }
