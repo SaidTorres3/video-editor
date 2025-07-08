@@ -57,6 +57,7 @@ HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
 HWND g_hEditStartTime, g_hEditEndTime;
 HWND g_hLabelCutInfo;
 HWND g_hProgressWnd, g_hProgressBar;
+std::atomic<bool> g_cancelExport{false};
 HWND g_hButtonOptions, g_hOptionsWnd;
 bool g_useNvenc = false;
 double g_cutStartTime = -1.0;
@@ -95,6 +96,7 @@ void ApplyDarkTheme(HWND hwnd);
 void ShowProgressWindow(HWND parent);
 void UpdateProgress(int percent);
 void CloseProgressWindow();
+LRESULT CALLBACK ProgressProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void ShowOptionsWindow(HWND parent);
 LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -953,7 +955,7 @@ void OnCutClicked(HWND hwnd)
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, start, end]() {
             bool ok = g_videoPlayer->CutVideo(outFile, start, end,
                                              mergeAudio, convertH264, g_useNvenc,
-                                             bitrate, g_hProgressBar);
+                                             bitrate, g_hProgressBar, &g_cancelExport);
             PostMessage(hwnd, WM_APP_CUT_DONE, ok ? 1 : 0, 0);
         }).detach();
     }
@@ -1027,9 +1029,11 @@ void ShowProgressWindow(HWND parent)
 {
     INITCOMMONCONTROLSEX ic = {sizeof(ic), ICC_PROGRESS_CLASS};
     InitCommonControlsEx(&ic);
-    g_hProgressWnd = CreateWindowEx(WS_EX_TOPMOST, L"#32770", L"Exporting", WS_CAPTION | WS_POPUPWINDOW,
+    g_cancelExport = false;
+    g_hProgressWnd = CreateWindowEx(WS_EX_TOPMOST, L"ProgressClass", L"Exporting", WS_CAPTION | WS_POPUPWINDOW,
                                    CW_USEDEFAULT, CW_USEDEFAULT, 300, 100,
                                    parent, nullptr, (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hProgressWnd);
     g_hProgressBar = CreateWindowEx(0, PROGRESS_CLASS, nullptr,
                                    WS_CHILD | WS_VISIBLE, 20, 30, 260, 20,
                                    g_hProgressWnd, nullptr, (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
@@ -1052,6 +1056,25 @@ void CloseProgressWindow()
         g_hProgressWnd = nullptr;
         g_hProgressBar = nullptr;
     }
+}
+
+LRESULT CALLBACK ProgressProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_CLOSE:
+        g_cancelExport = true;
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        if (hwnd == g_hProgressWnd)
+        {
+            g_hProgressWnd = nullptr;
+            g_hProgressBar = nullptr;
+        }
+        break;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 void ShowOptionsWindow(HWND parent)
@@ -1326,6 +1349,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     owc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     owc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClass(&owc);
+
+    WNDCLASS pwc = {};
+    pwc.lpfnWndProc = ProgressProc;
+    pwc.hInstance = hInstance;
+    pwc.lpszClassName = L"ProgressClass";
+    pwc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    pwc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&pwc);
 
     HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"Video Editor - Preview",
