@@ -395,7 +395,7 @@ bool VideoPlayer::DecodeNextFrame(bool updateDisplay)
   if (!isLoaded)
     return false;
 
-  std::lock_guard<std::mutex> lock(decodeMutex);
+  std::unique_lock<std::mutex> lock(decodeMutex);
 
   while (true)
   {
@@ -446,6 +446,13 @@ bool VideoPlayer::DecodeNextFrame(bool updateDisplay)
             (uint8_t const *const *)swFrame->data, swFrame->linesize,
             0, frameHeight,
             frameRGB->data, frameRGB->linesize);
+
+        av_frame_unref(hwFrame);
+        if (swFrame != hwFrame)
+          av_frame_unref(swFrame);
+
+        lock.unlock();
+
         if (updateDisplay)
         {
           UpdateDisplay();
@@ -455,9 +462,6 @@ bool VideoPlayer::DecodeNextFrame(bool updateDisplay)
           InvalidateRect(videoWindow, nullptr, FALSE);
         }
 
-        av_frame_unref(hwFrame);
-        if (swFrame != hwFrame)
-          av_frame_unref(swFrame);
         return true;
       }
     }
