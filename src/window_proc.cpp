@@ -21,6 +21,7 @@ void OnMasterVolumeChanged();
 void OnSetStartClicked(HWND hwnd);
 void OnSetEndClicked(HWND hwnd);
 void OnCutClicked(HWND hwnd);
+void OnExportClicked(HWND hwnd);
 void OnAudioTrackSelectionChanged();
 double ParseTimeString(const std::wstring& str);
 void UpdateCutInfoLabel(HWND hwnd);
@@ -31,6 +32,7 @@ extern VideoPlayer *g_videoPlayer;
 extern HWND g_hEditStartTime, g_hEditEndTime, g_hListBoxAudioTracks, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize;
 extern double g_cutStartTime;
 extern double g_cutEndTime;
+extern bool g_lastOperationWasExport;
 extern HBRUSH g_hbrBackground;
 extern HFONT g_hFont;
 extern COLORREF g_textColor;
@@ -99,7 +101,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             OnSetEndClicked(hwnd);
             break;
         case 1013: // ID_BUTTON_CUT
-            OnCutClicked(hwnd);
+            if (g_cutStartTime < 0 && g_cutEndTime < 0)
+                OnExportClicked(hwnd);
+            else
+                OnCutClicked(hwnd);
             break;
         case 1015: // ID_RADIO_COPY_CODEC
         case 1016: // ID_RADIO_H264
@@ -113,12 +118,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             wchar_t buf[64];
             GetWindowTextW(g_hEditStartTime, buf, 64);
-            double t = ParseTimeString(buf);
-            if (t >= 0)
+            if (wcslen(buf) == 0)
             {
-                g_cutStartTime = t;
-                if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
-                    g_cutEndTime = -1.0;
+                g_cutStartTime = -1.0;
+            }
+            else
+            {
+                double t = ParseTimeString(buf);
+                if (t >= 0)
+                {
+                    g_cutStartTime = t;
+                    if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
+                        g_cutEndTime = -1.0;
+                }
+                else
+                {
+                    g_cutStartTime = -1.0;
+                }
             }
             UpdateCutInfoLabel(hwnd);
             UpdateCutTimeEdits();
@@ -128,12 +144,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             wchar_t buf[64];
             GetWindowTextW(g_hEditEndTime, buf, 64);
-            double t = ParseTimeString(buf);
-            if (t >= 0)
+            if (wcslen(buf) == 0)
             {
-                g_cutEndTime = t;
-                if (g_cutStartTime >= 0 && g_cutEndTime <= g_cutStartTime)
+                g_cutEndTime = -1.0;
+            }
+            else
+            {
+                double t = ParseTimeString(buf);
+                if (t >= 0)
+                {
+                    g_cutEndTime = t;
+                    if (g_cutStartTime >= 0 && g_cutEndTime <= g_cutStartTime)
+                        g_cutEndTime = -1.0;
+                }
+                else
+                {
                     g_cutEndTime = -1.0;
+                }
             }
             UpdateCutInfoLabel(hwnd);
             UpdateCutTimeEdits();
@@ -232,37 +259,37 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
     break;
 
-    case (WM_APP + 1): // WM_APP_CUT_DONE
-    {
-        CloseProgressWindow();
-        EnableWindow(hwnd, TRUE);
-        bool success = wParam != 0;
-        const wchar_t* msg;
-        const wchar_t* title;
-        UINT flags;
-        if (success)
+        case (WM_APP + 1): // WM_APP_CUT_DONE
         {
-            msg = L"Video successfully cut and saved.";
-            title = L"Success";
-            flags = MB_OK | MB_ICONINFORMATION;
+            CloseProgressWindow();
+            EnableWindow(hwnd, TRUE);
+            bool success = wParam != 0;
+            const wchar_t* msg;
+            const wchar_t* title;
+            UINT flags;
+            if (success)
+            {
+                msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                title = L"Success";
+                flags = MB_OK | MB_ICONINFORMATION;
+            }
+            else if (g_cancelExport)
+            {
+                msg = L"Export canceled.";
+                title = L"Canceled";
+                flags = MB_OK | MB_ICONINFORMATION;
+            }
+            else
+            {
+                msg = g_lastOperationWasExport ? L"Failed to export the video." : L"Failed to cut the video.";
+                title = L"Error";
+                flags = MB_OK | MB_ICONERROR;
+            }
+            MessageBoxW(hwnd, msg, title, flags);
+            g_cancelExport = false;
+            UpdateControls();
         }
-        else if (g_cancelExport)
-        {
-            msg = L"Export canceled.";
-            title = L"Canceled";
-            flags = MB_OK | MB_ICONINFORMATION;
-        }
-        else
-        {
-            msg = L"Failed to cut the video.";
-            title = L"Error";
-            flags = MB_OK | MB_ICONERROR;
-        }
-        MessageBoxW(hwnd, msg, title, flags);
-        g_cancelExport = false;
-        UpdateControls();
-    }
-    break;
+        break;
 
     case WM_CLOSE:
         DestroyWindow(hwnd);

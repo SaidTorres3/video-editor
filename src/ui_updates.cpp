@@ -36,7 +36,18 @@ void UpdateControls()
     EnableWindow(g_hButtonSetEnd, isLoaded);
     EnableWindow(g_hEditStartTime, isLoaded);
     EnableWindow(g_hEditEndTime, isLoaded);
-    EnableWindow(g_hButtonCut, isLoaded && g_cutStartTime >= 0 && g_cutEndTime > g_cutStartTime);
+    bool hasStart = g_cutStartTime >= 0;
+    bool hasEnd = g_cutEndTime >= 0;
+    if (!hasStart && !hasEnd)
+    {
+        SetWindowTextW(g_hButtonCut, L"Export Video");
+        EnableWindow(g_hButtonCut, isLoaded);
+    }
+    else
+    {
+        SetWindowTextW(g_hButtonCut, L"Cut Video");
+        EnableWindow(g_hButtonCut, isLoaded && hasStart && hasEnd && g_cutEndTime > g_cutStartTime);
+    }
 
    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
    EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
