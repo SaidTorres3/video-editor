@@ -26,6 +26,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
+      audioClock(nullptr),
       originalVideoWndProc(nullptr)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
@@ -398,13 +399,21 @@ void VideoPlayer::SetMasterVolume(float volume)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
+    auto startTime = std::chrono::high_resolution_clock::now();
+    double startPts = currentPts;
+
     while (playbackThreadRunning)
     {
         if (!m_decoder->DecodeNextFrame(false))
             break;
 
-        double audioTime = GetAudioClock();
-        double diff = currentPts - audioTime;
+        double reference = 0.0;
+        if (audioClock)
+            reference = GetAudioClock();
+        else
+            reference = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
+
+        double diff = (currentPts - startPts) - reference;
         const double syncThreshold = 0.04;
 
         if (diff > syncThreshold)
