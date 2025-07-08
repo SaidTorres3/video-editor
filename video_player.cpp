@@ -129,21 +129,11 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
     return false;
   }
 
-  // Determine the earliest stream start time for synchronization
+  // Use the video stream start time as our base offset
   startTimeOffset = 0.0;
-  double minStart = std::numeric_limits<double>::max();
-  for (unsigned i = 0; i < formatContext->nb_streams; ++i)
-  {
-    AVStream *s = formatContext->streams[i];
-    if (s->start_time != AV_NOPTS_VALUE)
-    {
-      double t = s->start_time * av_q2d(s->time_base);
-      if (t < minStart)
-        minStart = t;
-    }
-  }
-  if (minStart != std::numeric_limits<double>::max())
-    startTimeOffset = minStart;
+  AVStream *vsBase = formatContext->streams[videoStreamIndex];
+  if (vsBase->start_time != AV_NOPTS_VALUE)
+    startTimeOffset = vsBase->start_time * av_q2d(vsBase->time_base);
 
   // Initialize audio tracks
   if (!InitializeAudioTracks())
@@ -845,6 +835,13 @@ bool VideoPlayer::InitializeAudioTracks()
         continue;
       }
 
+      // Record the stream start time relative to the container
+      if (formatContext->streams[i]->start_time != AV_NOPTS_VALUE)
+        track->startOffset = formatContext->streams[i]->start_time *
+                             av_q2d(formatContext->streams[i]->time_base);
+      else
+        track->startOffset = 0.0;
+
       // Set track name
       AVDictionaryEntry *title = av_dict_get(formatContext->streams[i]->metadata, "title", nullptr, 0);
       if (title)
@@ -907,9 +904,15 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
     framePts = track->frame->best_effort_timestamp * av_q2d(as->time_base);
   else if (track->frame->pts != AV_NOPTS_VALUE)
     framePts = track->frame->pts * av_q2d(as->time_base);
-  framePts -= startTimeOffset;
+
+  framePts -= startTimeOffset; // align to video start
+
+  double shift = track->startOffset - startTimeOffset;
+  if (shift > 0.0)
+    framePts -= shift; // audio starts after video, shift earlier
+
   if (framePts < 0.0)
-    return true; // Drop early audio
+    return true; // Drop audio before playback start
 
   // Resample audio
   int outSamples = swr_get_out_samples(track->swrContext, track->frame->nb_samples);

@@ -49,9 +49,11 @@ struct AudioTrack {
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
     double nextPts;
+    double startOffset;
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f), nextPts(0.0) {}
+                   frame(nullptr), isMuted(false), volume(1.0f), nextPts(0.0),
+                   startOffset(0.0) {}
 };
 
 class VideoPlayer
