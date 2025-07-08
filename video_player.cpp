@@ -1058,7 +1058,7 @@ void VideoPlayer::PlaybackThreadFunction()
 
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
-                           int maxBitrate, HWND progressBar)
+                           bool useNvenc, int maxBitrate, HWND progressBar)
 {
     if (!isLoaded) {
         DebugLog("CutVideo called but no video loaded", true);
@@ -1070,6 +1070,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         oss << "CutVideo start start=" << startTime << " end=" << endTime
             << " mergeAudio=" << mergeAudio
             << " convertH264=" << convertH264
+            << " useNvenc=" << useNvenc
             << " maxBitrate=" << maxBitrate;
         DebugLog(oss.str());
     }
@@ -1160,7 +1161,9 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
 
         AVStream* outStream = nullptr;
         if (needReencode && inStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && i == (unsigned)videoStreamIndex && convertH264) {
-            const AVCodec* vEnc = avcodec_find_encoder(AV_CODEC_ID_H264);
+            const AVCodec* vEnc = useNvenc ?
+                avcodec_find_encoder_by_name("h264_nvenc") :
+                avcodec_find_encoder(AV_CODEC_ID_H264);
             if (!vEnc) {
                 DebugLog("H.264 encoder not found", true);
                 avformat_free_context(outputCtx);

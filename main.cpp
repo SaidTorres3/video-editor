@@ -40,6 +40,9 @@
 #define ID_EDIT_BITRATE 1017
 #define ID_EDIT_START_TIME 1018
 #define ID_EDIT_END_TIME 1019
+#define ID_BUTTON_OPTIONS 1020
+#define ID_RADIO_ENCODER_LIBX264 1021
+#define ID_RADIO_ENCODER_NVENC 1022
 #define WM_APP_CUT_DONE (WM_APP + 1)
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
@@ -54,6 +57,8 @@ HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
 HWND g_hEditStartTime, g_hEditEndTime;
 HWND g_hLabelCutInfo;
 HWND g_hProgressWnd, g_hProgressBar;
+HWND g_hButtonOptions, g_hOptionsWnd;
+bool g_useNvenc = false;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
 bool g_isTimelineDragging = false;
@@ -90,6 +95,8 @@ void ApplyDarkTheme(HWND hwnd);
 void ShowProgressWindow(HWND parent);
 void UpdateProgress(int percent);
 void CloseProgressWindow();
+void ShowOptionsWindow(HWND parent);
+LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 
@@ -143,6 +150,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 UpdateControls();
                 UpdateTimeline();
             }
+            break;
+        case ID_BUTTON_OPTIONS:
+            ShowOptionsWindow(hwnd);
             break;
         case ID_BUTTON_MUTE_TRACK:
             OnMuteTrackClicked();
@@ -365,6 +375,14 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_STOP,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonStop);
+
+    g_hButtonOptions = CreateWindow(
+        L"BUTTON", L"Options",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        330, 10, 80, 30,
+        hwnd, (HMENU)ID_BUTTON_OPTIONS,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonOptions);
 
     // Timeline
     g_hTimeline = CreateWindow(
@@ -934,7 +952,8 @@ void OnCutClicked(HWND hwnd)
         double end = g_cutEndTime;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, start, end]() {
             bool ok = g_videoPlayer->CutVideo(outFile, start, end,
-                                             mergeAudio, convertH264, bitrate, g_hProgressBar);
+                                             mergeAudio, convertH264, g_useNvenc,
+                                             bitrate, g_hProgressBar);
             PostMessage(hwnd, WM_APP_CUT_DONE, ok ? 1 : 0, 0);
         }).detach();
     }
@@ -954,6 +973,7 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonPlay, 120, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonPause, 190, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonStop, 260, mainControlsY, 60, mainControlsHeight, TRUE);
+    MoveWindow(g_hButtonOptions, 330, mainControlsY, 80, mainControlsHeight, TRUE);
 
     // Audio controls (aligned to the right)
     int audioControlsWidth = 220;
@@ -1032,6 +1052,76 @@ void CloseProgressWindow()
         g_hProgressWnd = nullptr;
         g_hProgressBar = nullptr;
     }
+}
+
+void ShowOptionsWindow(HWND parent)
+{
+    if (g_hOptionsWnd)
+    {
+        SetForegroundWindow(g_hOptionsWnd);
+        return;
+    }
+    g_hOptionsWnd = CreateWindowEx(0, L"OptionsClass", L"Options",
+                                   WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 220, 150,
+                                   parent, nullptr,
+                                   (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hOptionsWnd);
+    CreateWindow(L"STATIC", L"Encode H264:", WS_CHILD | WS_VISIBLE,
+                 10, 10, 120, 20, g_hOptionsWnd, nullptr,
+                 (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
+    HWND hLib = CreateWindow(L"BUTTON", L"libx264",
+                             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                             10, 40, 100, 20, g_hOptionsWnd,
+                             (HMENU)ID_RADIO_ENCODER_LIBX264,
+                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
+    HWND hNv = CreateWindow(L"BUTTON", L"NVENC h264",
+                            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                            10, 65, 120, 20, g_hOptionsWnd,
+                            (HMENU)ID_RADIO_ENCODER_NVENC,
+                            (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(hLib);
+    ApplyDarkTheme(hNv);
+    HWND hOk = CreateWindow(L"BUTTON", L"OK",
+                            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                            30, 100, 70, 25, g_hOptionsWnd,
+                            (HMENU)IDOK,
+                            (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
+    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                110, 100, 70, 25, g_hOptionsWnd,
+                                (HMENU)IDCANCEL,
+                                (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(hOk);
+    ApplyDarkTheme(hCancel);
+    SendMessage(hLib, BM_SETCHECK, g_useNvenc ? BST_UNCHECKED : BST_CHECKED, 0);
+    SendMessage(hNv, BM_SETCHECK, g_useNvenc ? BST_CHECKED : BST_UNCHECKED, 0);
+}
+
+LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+        {
+            HWND hNv = GetDlgItem(hwnd, ID_RADIO_ENCODER_NVENC);
+            g_useNvenc = SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            DestroyWindow(hwnd);
+        }
+        break;
+    case WM_CLOSE:
+        {
+            HWND hNv = GetDlgItem(hwnd, ID_RADIO_ENCODER_NVENC);
+            g_useNvenc = SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            DestroyWindow(hwnd);
+        }
+        break;
+    case WM_DESTROY:
+        g_hOptionsWnd = nullptr;
+        break;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -1228,6 +1318,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     twc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     twc.hbrBackground = nullptr; // custom paint
     RegisterClass(&twc);
+
+    WNDCLASS owc = {};
+    owc.lpfnWndProc = OptionsProc;
+    owc.hInstance = hInstance;
+    owc.lpszClassName = L"OptionsClass";
+    owc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    owc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&owc);
 
     HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"Video Editor - Preview",
