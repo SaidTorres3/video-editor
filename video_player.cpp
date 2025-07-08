@@ -694,13 +694,14 @@ bool VideoPlayer::InitializeAudio()
   audioFormat->nAvgBytesPerSec = audioFormat->nSamplesPerSec * audioFormat->nBlockAlign;
   audioFormat->cbSize = 0;
 
-  hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, audioFormat, nullptr);
+  // Use a smaller buffer to minimize latency (200 ms)
+  hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 2000000, 0, audioFormat, nullptr);
   if (FAILED(hr))
   {
     // Try with device format if our format fails
     CoTaskMemFree(audioFormat);
     audioFormat = deviceFormat;
-    hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, audioFormat, nullptr);
+    hr = audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 2000000, 0, audioFormat, nullptr);
     if (FAILED(hr))
       return false;
   }
