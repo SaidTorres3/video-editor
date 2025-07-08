@@ -1208,8 +1208,8 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             if (tryCuda) {
                 vDec = avcodec_find_decoder_by_name("h264_cuvid");
                 if (!vDec) {
-                    DebugLog("CUDA decoder not found; using CPU", true);
-                    tryCuda = false;
+                    DebugLog("CUDA decoder not found; trying generic hardware decode", true);
+                    vDec = avcodec_find_decoder(inStream->codecpar->codec_id);
                 }
             }
             if (!vDec)
@@ -1238,22 +1238,42 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             }
             if (avcodec_open2(vDecCtx, vDec, nullptr) < 0) {
                 if (tryCuda) {
-                    DebugLog("Failed to open CUDA decoder, falling back to CPU", true);
-                    if (hwDecDevice) { av_buffer_unref(&hwDecDevice); hwDecDevice = nullptr; }
+                    DebugLog("Failed to open CUDA decoder, trying generic hardware decode", true);
                     avcodec_free_context(&vDecCtx);
                     vDec = avcodec_find_decoder(inStream->codecpar->codec_id);
                     vDecCtx = avcodec_alloc_context3(vDec);
                     if (!vDecCtx ||
-                        avcodec_parameters_to_context(vDecCtx, inStream->codecpar) < 0 ||
-                        avcodec_open2(vDecCtx, vDec, nullptr) < 0) {
-                        DebugLog("Failed to open video decoder", true);
+                        avcodec_parameters_to_context(vDecCtx, inStream->codecpar) < 0) {
+                        DebugLog("Failed to create video decoder context", true);
                         avcodec_free_context(&vEncCtx);
                         if (vDecCtx) avcodec_free_context(&vDecCtx);
+                        if (hwDecDevice) av_buffer_unref(&hwDecDevice);
                         avformat_free_context(outputCtx);
                         avformat_close_input(&inputCtx);
                         return false;
                     }
-                    useHwDecode = false;
+                    if (hwDecDevice) {
+                        vDecCtx->thread_count = 1;
+                        vDecCtx->get_format = [](AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) {
+                            for (const enum AVPixelFormat* p = pix_fmts; *p != -1; ++p)
+                                if (*p == AV_PIX_FMT_CUDA)
+                                    return *p;
+                            return pix_fmts[0];
+                        };
+                        vDecCtx->hw_device_ctx = av_buffer_ref(hwDecDevice);
+                        useHwDecode = true;
+                    } else {
+                        useHwDecode = false;
+                    }
+                    if (avcodec_open2(vDecCtx, vDec, nullptr) < 0) {
+                        DebugLog("Failed to open video decoder", true);
+                        avcodec_free_context(&vEncCtx);
+                        avcodec_free_context(&vDecCtx);
+                        if (hwDecDevice) av_buffer_unref(&hwDecDevice);
+                        avformat_free_context(outputCtx);
+                        avformat_close_input(&inputCtx);
+                        return false;
+                    }
                 } else {
                     DebugLog("Failed to open video decoder", true);
                     avcodec_free_context(&vEncCtx);
