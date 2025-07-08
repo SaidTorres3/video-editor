@@ -1063,7 +1063,7 @@ void ShowOptionsWindow(HWND parent)
     }
     g_hOptionsWnd = CreateWindowEx(0, L"OptionsClass", L"Options",
                                    WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 220, 150,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 220, 200,
                                    parent, nullptr,
                                    (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hOptionsWnd);
