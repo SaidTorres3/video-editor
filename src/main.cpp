@@ -14,6 +14,7 @@
 #include "video_player.h"
 #include "options_window.h"
 #include <string>
+#include "progress_window.h"
 #include <cstdlib>
 #include <cstdio> // For swprintf_s
 #include <thread>
@@ -55,8 +56,6 @@ HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
 HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
 HWND g_hEditStartTime, g_hEditEndTime;
 HWND g_hLabelCutInfo;
-HWND g_hProgressWnd, g_hProgressBar;
-std::atomic<bool> g_cancelExport{false};
 HWND g_hButtonOptions;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
@@ -91,10 +90,6 @@ double ParseTimeString(const std::wstring& str);
 void UpdateCutTimeEdits();
 void RepositionControls(HWND hwnd);
 void ApplyDarkTheme(HWND hwnd);
-void ShowProgressWindow(HWND parent);
-void UpdateProgress(int percent);
-void CloseProgressWindow();
-LRESULT CALLBACK ProgressProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 
@@ -1041,59 +1036,6 @@ void RepositionControls(HWND hwnd)
     // Redraw all controls
     InvalidateRect(hwnd, NULL, TRUE);
 }
-
-void ShowProgressWindow(HWND parent)
-{
-    INITCOMMONCONTROLSEX ic = {sizeof(ic), ICC_PROGRESS_CLASS};
-    InitCommonControlsEx(&ic);
-    g_cancelExport = false;
-    g_hProgressWnd = CreateWindowEx(WS_EX_TOPMOST, L"ProgressClass", L"Exporting", WS_CAPTION | WS_POPUPWINDOW,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 300, 100,
-                                   parent, nullptr, (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hProgressWnd);
-    g_hProgressBar = CreateWindowEx(0, PROGRESS_CLASS, nullptr,
-                                   WS_CHILD | WS_VISIBLE, 20, 30, 260, 20,
-                                   g_hProgressWnd, nullptr, (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-    ShowWindow(g_hProgressWnd, SW_SHOW);
-    UpdateWindow(g_hProgressWnd);
-}
-
-void UpdateProgress(int percent)
-{
-    if (g_hProgressBar)
-        SendMessage(g_hProgressBar, PBM_SETPOS, percent, 0);
-}
-
-void CloseProgressWindow()
-{
-    if (g_hProgressWnd)
-    {
-        DestroyWindow(g_hProgressWnd);
-        g_hProgressWnd = nullptr;
-        g_hProgressBar = nullptr;
-    }
-}
-
-LRESULT CALLBACK ProgressProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    switch (msg)
-    {
-    case WM_CLOSE:
-        g_cancelExport = true;
-        DestroyWindow(hwnd);
-        return 0;
-    case WM_DESTROY:
-        if (hwnd == g_hProgressWnd)
-        {
-            g_hProgressWnd = nullptr;
-            g_hProgressBar = nullptr;
-        }
-        break;
-    }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
-
 
 LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
