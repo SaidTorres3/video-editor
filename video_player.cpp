@@ -129,21 +129,11 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
     return false;
   }
 
-  // Determine the earliest stream start time for synchronization
+  // Use the video stream's start time as the timeline origin
   startTimeOffset = 0.0;
-  double minStart = std::numeric_limits<double>::max();
-  for (unsigned i = 0; i < formatContext->nb_streams; ++i)
-  {
-    AVStream *s = formatContext->streams[i];
-    if (s->start_time != AV_NOPTS_VALUE)
-    {
-      double t = s->start_time * av_q2d(s->time_base);
-      if (t < minStart)
-        minStart = t;
-    }
-  }
-  if (minStart != std::numeric_limits<double>::max())
-    startTimeOffset = minStart;
+  AVStream *vs = formatContext->streams[videoStreamIndex];
+  if (vs->start_time != AV_NOPTS_VALUE)
+    startTimeOffset = vs->start_time * av_q2d(vs->time_base);
 
   // Initialize audio tracks
   if (!InitializeAudioTracks())
@@ -383,12 +373,12 @@ void VideoPlayer::Stop()
         avcodec_flush_buffers(track->codecContext);
     }
     
-    // Clear audio buffers
+    // Reset audio buffers and offsets
     std::lock_guard<std::mutex> lock(audioMutex);
     for (auto& tr : audioTracks) {
       tr->buffer.clear();
-      // Resume from the beginning while keeping the original offset
-      tr->nextPts = tr->startOffset;
+      tr->nextPts = 0.0;
+      tr->startOffsetSet = false;
     }
   }
 }
@@ -561,8 +551,8 @@ void VideoPlayer::SeekToTime(double seconds)
     std::lock_guard<std::mutex> lock(audioMutex);
     for (auto& tr : audioTracks) {
       tr->buffer.clear();
-      // Preserve the original offset relative to the video timeline
-      tr->nextPts = seconds + tr->startOffset;
+      tr->nextPts = seconds;
+      tr->startOffsetSet = false;
     }
   }
 
