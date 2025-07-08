@@ -378,6 +378,7 @@ void VideoPlayer::Stop()
     for (auto& tr : audioTracks) {
       tr->buffer.clear();
       tr->nextPts = 0.0;
+      tr->startOffsetSet = false;
     }
   }
 }
@@ -551,6 +552,7 @@ void VideoPlayer::SeekToTime(double seconds)
     for (auto& tr : audioTracks) {
       tr->buffer.clear();
       tr->nextPts = seconds;
+      tr->startOffsetSet = false;
     }
   }
 
@@ -836,11 +838,8 @@ bool VideoPlayer::InitializeAudioTracks()
       }
 
       // Record the stream start time relative to the container
-      if (formatContext->streams[i]->start_time != AV_NOPTS_VALUE)
-        track->startOffset = formatContext->streams[i]->start_time *
-                             av_q2d(formatContext->streams[i]->time_base);
-      else
-        track->startOffset = 0.0;
+      track->startOffset = 0.0;
+      track->startOffsetSet = false;
 
       // Set track name
       AVDictionaryEntry *title = av_dict_get(formatContext->streams[i]->metadata, "title", nullptr, 0);
@@ -899,13 +898,18 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
     return false;
 
   AVStream *as = formatContext->streams[track->streamIndex];
-  double framePts = 0.0;
+  double absPts = 0.0;
   if (track->frame->best_effort_timestamp != AV_NOPTS_VALUE)
-    framePts = track->frame->best_effort_timestamp * av_q2d(as->time_base);
+    absPts = track->frame->best_effort_timestamp * av_q2d(as->time_base);
   else if (track->frame->pts != AV_NOPTS_VALUE)
-    framePts = track->frame->pts * av_q2d(as->time_base);
+    absPts = track->frame->pts * av_q2d(as->time_base);
 
-  framePts -= startTimeOffset; // align to video start
+  if (!track->startOffsetSet) {
+    track->startOffset = absPts;
+    track->startOffsetSet = true;
+  }
+
+  double framePts = absPts - startTimeOffset; // align to video start
 
   double shift = track->startOffset - startTimeOffset;
   if (shift > 0.0)

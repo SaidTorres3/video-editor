@@ -50,10 +50,11 @@ struct AudioTrack {
     std::vector<int16_t> resampleBuffer;
     double nextPts;
     double startOffset;
+    bool   startOffsetSet;
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
                    frame(nullptr), isMuted(false), volume(1.0f), nextPts(0.0),
-                   startOffset(0.0) {}
+                   startOffset(0.0), startOffsetSet(false) {}
 };
 
 class VideoPlayer
