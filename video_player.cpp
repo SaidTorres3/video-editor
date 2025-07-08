@@ -378,7 +378,6 @@ void VideoPlayer::Stop()
     for (auto& tr : audioTracks) {
       tr->buffer.clear();
       tr->nextPts = 0.0;
-      tr->startOffsetSet = false;
     }
   }
 }
@@ -551,8 +550,7 @@ void VideoPlayer::SeekToTime(double seconds)
     std::lock_guard<std::mutex> lock(audioMutex);
     for (auto& tr : audioTracks) {
       tr->buffer.clear();
-      tr->nextPts = seconds;
-      tr->startOffsetSet = false;
+      tr->nextPts = 0.0;
     }
   }
 
@@ -910,14 +908,7 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
     track->startOffsetSet = true;
   }
 
-  double framePts = absPts - startTimeOffset; // align to video start
-
-  double shift = track->startOffset - startTimeOffset;
-  if (shift > 0.0)
-    framePts -= shift; // audio starts after video, shift earlier
-
-  if (framePts < 0.0)
-    return true; // Drop audio before playback start
+  double framePts = absPts - track->startOffset; // relative to first audio frame
 
   // Resample audio
   int outSamples = swr_get_out_samples(track->swrContext, track->frame->nb_samples);
