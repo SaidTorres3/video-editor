@@ -1,5 +1,6 @@
 // video_player.cpp
 #include "video_player.h"
+#include "options_window.h"
 #include <iostream>
 #include <sstream>
 #include <cstdlib>
@@ -15,13 +16,16 @@
 #include <chrono>
 
 // Simple debug logging helper that also writes to a file and can show popups
+
 static std::ofstream g_debugFile;
 static void DebugLog(const std::string& msg, bool popup = false)
 {
-    if (!g_debugFile.is_open())
-        g_debugFile.open("debug.log", std::ios::app);
-    if (g_debugFile.is_open())
-        g_debugFile << msg << std::endl;
+    if (g_logToFile) {
+        if (!g_debugFile.is_open())
+            g_debugFile.open("debug.log", std::ios::app);
+        if (g_debugFile.is_open())
+            g_debugFile << msg << std::endl;
+    }
 
     OutputDebugStringA((msg + "\n").c_str());
     if (popup)
