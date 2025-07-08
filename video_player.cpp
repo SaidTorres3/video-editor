@@ -143,7 +143,6 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
 
   isLoaded = true;
   currentFrame = 0;
-  AVStream *vs = formatContext->streams[videoStreamIndex];
   AVRational guessed = av_guess_frame_rate(formatContext, vs, nullptr);
   frameRate = guessed.num && guessed.den ? av_q2d(guessed) : 0.0;
   if (frameRate <= 0.0)
