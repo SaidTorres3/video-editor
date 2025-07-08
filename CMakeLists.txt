@@ -63,7 +63,14 @@ find_library(SWRESAMPLE_LIBRARY
 )
 
 # Create the executable
-add_executable(VideoEditor WIN32 main.cpp video_player.cpp options_window.cpp video_player.h)
+add_executable(VideoEditor WIN32
+    src/main.cpp
+    src/video_player.cpp
+    src/options_window.cpp
+)
+
+# Headers live in src/
+target_include_directories(VideoEditor PRIVATE src)
 
 # Include FFmpeg headers
 if(FFMPEG_INCLUDE_DIR)
