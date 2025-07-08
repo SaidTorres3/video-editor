@@ -1204,8 +1204,14 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             }
             outStream->time_base = vEncCtx->time_base;
             const AVCodec* vDec = nullptr;
-            if (useNvenc)
+            bool tryCuda = useNvenc;
+            if (tryCuda) {
                 vDec = avcodec_find_decoder_by_name("h264_cuvid");
+                if (!vDec) {
+                    DebugLog("CUDA decoder not found; using CPU", true);
+                    tryCuda = false;
+                }
+            }
             if (!vDec)
                 vDec = avcodec_find_decoder(inStream->codecpar->codec_id);
             vDecCtx = avcodec_alloc_context3(vDec);
@@ -1218,7 +1224,8 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 avformat_close_input(&inputCtx);
                 return false;
             }
-            if (useNvenc) {
+            if (tryCuda) {
+                vDecCtx->thread_count = 1; // required by cuvid
                 vDecCtx->get_format = [](AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) {
                     for (const enum AVPixelFormat* p = pix_fmts; *p != -1; ++p)
                         if (*p == AV_PIX_FMT_CUDA)
@@ -1230,7 +1237,7 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 useHwDecode = hwDecDevice != nullptr;
             }
             if (avcodec_open2(vDecCtx, vDec, nullptr) < 0) {
-                if (useNvenc) {
+                if (tryCuda) {
                     DebugLog("Failed to open CUDA decoder, falling back to CPU", true);
                     if (hwDecDevice) { av_buffer_unref(&hwDecDevice); hwDecDevice = nullptr; }
                     avcodec_free_context(&vDecCtx);
