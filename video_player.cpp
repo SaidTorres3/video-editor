@@ -385,8 +385,10 @@ void VideoPlayer::Stop()
     
     // Clear audio buffers
     std::lock_guard<std::mutex> lock(audioMutex);
-    for (auto& tr : audioTracks)
+    for (auto& tr : audioTracks) {
       tr->buffer.clear();
+      tr->nextPts = 0.0;
+    }
   }
 }
 
@@ -556,8 +558,10 @@ void VideoPlayer::SeekToTime(double seconds)
   }
   {
     std::lock_guard<std::mutex> lock(audioMutex);
-    for (auto& tr : audioTracks)
+    for (auto& tr : audioTracks) {
       tr->buffer.clear();
+      tr->nextPts = seconds;
+    }
   }
 
     currentFrame = (int64_t)(seconds * frameRate);
@@ -903,7 +907,8 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
     framePts = track->frame->best_effort_timestamp * av_q2d(as->time_base);
   else if (track->frame->pts != AV_NOPTS_VALUE)
     framePts = track->frame->pts * av_q2d(as->time_base);
-  if (framePts - startTimeOffset < 0.0)
+  framePts -= startTimeOffset;
+  if (framePts < 0.0)
     return true; // Drop early audio
 
   // Resample audio
@@ -918,12 +923,25 @@ bool VideoPlayer::ProcessAudioFrame(AVPacket *audioPacket)
   if (convertedSamples < 0)
     return false;
 
-  // Store raw samples in track buffer
+  // Store raw samples in track buffer with synchronization
   {
     std::lock_guard<std::mutex> lock(audioMutex);
+
+    // Insert silence if there's a gap before this frame
+    if (framePts > track->nextPts)
+    {
+      int silenceSamples = static_cast<int>((framePts - track->nextPts) * audioSampleRate + 0.5);
+      if (silenceSamples > 0)
+      {
+        track->buffer.insert(track->buffer.end(), silenceSamples * audioChannels, 0);
+        track->nextPts += static_cast<double>(silenceSamples) / audioSampleRate;
+      }
+    }
+
     track->buffer.insert(track->buffer.end(),
                          outPtr,
                          outPtr + convertedSamples * audioChannels);
+    track->nextPts += static_cast<double>(convertedSamples) / audioSampleRate;
   }
   audioCondition.notify_one();
 
