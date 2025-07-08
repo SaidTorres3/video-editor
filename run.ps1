@@ -77,7 +77,7 @@ function Find-MSBuild {
     )
     foreach ($p in $vsPaths) { if (Test-Path $p) { return $p } }
     $found = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022" -Recurse -Filter "MSBuild.exe" -ErrorAction SilentlyContinue
-    return $found ? $found[0].FullName : $null
+    if ($found) { return $found[0].FullName } else { return $null }
 }
 
 $msbuildPath = Find-MSBuild
@@ -152,7 +152,7 @@ foreach ($p in $required) {
 Write-Host "FFmpeg validado en: $FFmpegPath" -ForegroundColor Green
 
 # 5) Configurar/reconfigurar CMake
-$staticFlag = $Static.IsPresent ? "ON" : "OFF"
+$staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
 if (-not (Test-Path ".\build")) {
     Write-Host "Configurando CMake..." -ForegroundColor Yellow
     cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag
