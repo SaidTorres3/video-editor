@@ -390,7 +390,7 @@ void VideoPlayer::Stop()
   }
 }
 
-bool VideoPlayer::DecodeNextFrame()
+bool VideoPlayer::DecodeNextFrame(bool updateDisplay)
 {
   if (!isLoaded)
     return false;
@@ -446,7 +446,14 @@ bool VideoPlayer::DecodeNextFrame()
             (uint8_t const *const *)swFrame->data, swFrame->linesize,
             0, frameHeight,
             frameRGB->data, frameRGB->linesize);
-        UpdateDisplay();
+        if (updateDisplay)
+        {
+          UpdateDisplay();
+        }
+        else
+        {
+          InvalidateRect(videoWindow, nullptr, FALSE);
+        }
 
         av_frame_unref(hwFrame);
         if (swFrame != hwFrame)
@@ -475,6 +482,8 @@ void VideoPlayer::UpdateDisplay()
 {
   if (!d2dRenderTarget || !frameRGB->data[0])
     return;
+
+  std::lock_guard<std::mutex> lock(decodeMutex);
 
   if (!d2dBitmap)
   {
@@ -567,7 +576,7 @@ void VideoPlayer::SeekToTime(double seconds)
   // Decode a few frames after seeking so the display updates immediately
   for (int i = 0; i < 3; ++i)
   {
-    if (!DecodeNextFrame())
+    if (!DecodeNextFrame(true))
       break;
     if (currentPts >= seconds)
       break;
@@ -600,20 +609,20 @@ void VideoPlayer::SetPosition(int x, int y, int width, int height)
 void VideoPlayer::Render()
 {
   if (isLoaded && !isPlaying)
-    DecodeNextFrame();
+    DecodeNextFrame(true);
 }
 
 void CALLBACK VideoPlayer::TimerProc(HWND hwnd, UINT, UINT_PTR, DWORD)
 {
   VideoPlayer *player = (VideoPlayer *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
   if (player && player->isPlaying)
-    player->DecodeNextFrame();
+    player->DecodeNextFrame(true);
 }
 
 void VideoPlayer::OnTimer()
 {
   if (isPlaying)
-    DecodeNextFrame();
+    DecodeNextFrame(true);
 }
 
 // Audio track management methods
@@ -1030,7 +1039,7 @@ void VideoPlayer::PlaybackThreadFunction()
   double startPts = currentPts;
   while (playbackThreadRunning)
   {
-    if (!DecodeNextFrame())
+    if (!DecodeNextFrame(false))
       break;
 
     double target = currentPts - startPts;

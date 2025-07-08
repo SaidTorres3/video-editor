@@ -159,7 +159,7 @@ public:
 private:
   bool InitializeDecoder();
   void CleanupDecoder();
-  bool DecodeNextFrame();
+  bool DecodeNextFrame(bool updateDisplay = true);
   void UpdateDisplay();
   void CreateVideoWindow();
   
