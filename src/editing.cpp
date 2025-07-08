@@ -76,6 +76,9 @@ void OnCutClicked(HWND hwnd)
         GetWindowTextW(GetDlgItem(hwnd, 1022), sizeText, 32); // ID_EDIT_TARGETSIZE
         int targetSize = _wtoi(sizeText);
 
+        double start = g_cutStartTime;
+        double end = g_cutEndTime;
+
         if (convertH264 && targetSize > 0) {
             double duration = end - start;
             int audioKbps = 0;
@@ -95,8 +98,6 @@ void OnCutClicked(HWND hwnd)
 
         ShowProgressWindow(hwnd);
         std::wstring outFile = szFile;
-        double start = g_cutStartTime;
-        double end = g_cutEndTime;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, start, end]() {
             bool ok = g_videoPlayer->CutVideo(outFile, start, end,
                                              mergeAudio, convertH264, g_useNvenc,
