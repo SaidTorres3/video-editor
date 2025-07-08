@@ -26,6 +26,7 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_EDIT_START_TIME 1018
 #define ID_EDIT_END_TIME 1019
 #define ID_BUTTON_OPTIONS 1020
+#define ID_LABEL_BITRATE 1021
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -37,6 +38,7 @@ extern HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 extern HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 extern HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
 extern HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
+extern HWND g_hLabelBitrate;
 extern HWND g_hEditStartTime, g_hEditEndTime;
 extern HWND g_hLabelCutInfo;
 extern HWND g_hButtonOptions;
@@ -56,7 +58,7 @@ void CreateControls(HWND hwnd)
 
     // Play button
     g_hButtonPlay = CreateWindow(
-        L"BUTTON", L"Play",
+        L"BUTTON", L"\x25B6",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         120, 10, 60, 30,
         hwnd, (HMENU)ID_BUTTON_PLAY,
@@ -65,7 +67,7 @@ void CreateControls(HWND hwnd)
 
     // Pause button
     g_hButtonPause = CreateWindow(
-        L"BUTTON", L"Pause",
+        L"BUTTON", L"\x23F8",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         190, 10, 60, 30,
         hwnd, (HMENU)ID_BUTTON_PAUSE,
@@ -74,7 +76,7 @@ void CreateControls(HWND hwnd)
 
     // Stop button
     g_hButtonStop = CreateWindow(
-        L"BUTTON", L"Stop",
+        L"BUTTON", L"\x23F9",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         260, 10, 60, 30,
         hwnd, (HMENU)ID_BUTTON_STOP,
@@ -258,10 +260,18 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hRadioH264);
 
-    g_hEditBitrate = CreateWindow(
-        L"EDIT", L"2000",
-        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
+    g_hLabelBitrate = CreateWindow(
+        L"STATIC", L"Bitrate KBPS",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
         340, 540, 200, 20,
+        hwnd, (HMENU)ID_LABEL_BITRATE,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelBitrate);
+
+    g_hEditBitrate = CreateWindow(
+        L"EDIT", L"8000",
+        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
+        340, 560, 200, 20,
         hwnd, (HMENU)ID_EDIT_BITRATE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hEditBitrate);
@@ -330,11 +340,13 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 160, 200, 25, TRUE);
     MoveWindow(g_hRadioCopyCodec, audioControlsX, editingControlsY + 190, 100, 20, TRUE);
     MoveWindow(g_hRadioH264, audioControlsX + 105, editingControlsY + 190, 100, 20, TRUE);
-    MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 215, 200, 20, TRUE);
+    MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 215, 200, 20, TRUE);
+    MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 235, 200, 20, TRUE);
 
     // Video area (takes up remaining space)
     int videoSectionWidth = clientRect.right - audioControlsWidth - 30;
     int bottomControlsHeight = 100;
+
     g_videoPlayer->SetPosition(
         10,
         mainControlsY + mainControlsHeight + 10,
