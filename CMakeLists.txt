@@ -64,7 +64,7 @@ find_library(SWRESAMPLE_LIBRARY
 
 # Create the executable
 add_executable(VideoEditor WIN32
-    src/main.cpp
+    src/main.cpp src/window_proc.cpp src/ui_controls.cpp src/file_handling.cpp src/ui_updates.cpp src/timeline.cpp src/editing.cpp src/utils.cpp src/video_decoder.cpp src/audio_player.cpp src/video_renderer.cpp src/video_cutter.cpp
     src/video_player.cpp
     src/options_window.cpp
     src/progress_window.cpp
