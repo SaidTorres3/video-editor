@@ -38,6 +38,8 @@ HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEdi
 HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
 HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
 HWND g_hLabelBitrate;
+HWND g_hEditTargetSize;
+HWND g_hLabelTargetSize;
 HWND g_hEditStartTime, g_hEditEndTime;
 HWND g_hLabelCutInfo;
 HWND g_hButtonOptions;

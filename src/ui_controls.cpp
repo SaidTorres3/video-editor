@@ -27,6 +27,8 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_EDIT_END_TIME 1019
 #define ID_BUTTON_OPTIONS 1020
 #define ID_LABEL_BITRATE 1021
+#define ID_EDIT_TARGETSIZE 1022
+#define ID_LABEL_TARGETSIZE 1023
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -37,8 +39,8 @@ extern HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
 extern HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 extern HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 extern HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
-extern HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
-extern HWND g_hLabelBitrate;
+extern HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize;
+extern HWND g_hLabelBitrate, g_hLabelTargetSize;
 extern HWND g_hEditStartTime, g_hEditEndTime;
 extern HWND g_hLabelCutInfo;
 extern HWND g_hButtonOptions;
@@ -276,6 +278,22 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hEditBitrate);
 
+    g_hLabelTargetSize = CreateWindow(
+        L"STATIC", L"Target Size MB",
+        WS_VISIBLE | WS_CHILD | SS_LEFT,
+        340, 585, 200, 20,
+        hwnd, (HMENU)ID_LABEL_TARGETSIZE,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hLabelTargetSize);
+
+    g_hEditTargetSize = CreateWindow(
+        L"EDIT", L"0",
+        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
+        340, 605, 200, 20,
+        hwnd, (HMENU)ID_EDIT_TARGETSIZE,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hEditTargetSize);
+
 
     // Disable controls until video is loaded
     EnableWindow(g_hButtonPlay, FALSE);
@@ -295,6 +313,8 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hRadioCopyCodec, FALSE);
     EnableWindow(g_hRadioH264, FALSE);
     EnableWindow(g_hEditBitrate, FALSE);
+    EnableWindow(g_hLabelTargetSize, FALSE);
+    EnableWindow(g_hEditTargetSize, FALSE);
 }
 
 void RepositionControls(HWND hwnd)
@@ -342,6 +362,8 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hRadioH264, audioControlsX + 105, editingControlsY + 190, 100, 20, TRUE);
     MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 215, 200, 20, TRUE);
     MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 235, 200, 20, TRUE);
+    MoveWindow(g_hLabelTargetSize, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
+    MoveWindow(g_hEditTargetSize, audioControlsX, editingControlsY + 280, 200, 20, TRUE);
 
     // Video area (takes up remaining space)
     int videoSectionWidth = clientRect.right - audioControlsWidth - 30;

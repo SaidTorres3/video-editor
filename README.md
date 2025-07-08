@@ -39,6 +39,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Merge Audio Tracks**: Combine all unmuted tracks into one output stream
 - **Codec Options**: Copy video/audio codecs for a fast cut or convert to H.264
 - **Bitrate Limit**: Specify a max bitrate when converting to H.264
+- **Target Size**: Enter a desired final file size and the app adjusts bitrate automatically
 - **Progress Window**: A small window shows export progress in real time
 
 ## Technical Implementation

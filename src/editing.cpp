@@ -72,6 +72,26 @@ void OnCutClicked(HWND hwnd)
         wchar_t bitrateText[32];
         GetWindowTextW(GetDlgItem(hwnd, 1017), bitrateText, 32); // ID_EDIT_BITRATE
         int bitrate = _wtoi(bitrateText);
+        wchar_t sizeText[32];
+        GetWindowTextW(GetDlgItem(hwnd, 1022), sizeText, 32); // ID_EDIT_TARGETSIZE
+        int targetSize = _wtoi(sizeText);
+
+        if (convertH264 && targetSize > 0) {
+            double duration = end - start;
+            int audioKbps = 0;
+            if (mergeAudio) {
+                audioKbps = 128; // single AAC track
+            } else {
+                for (const auto& track : g_videoPlayer->audioTracks) {
+                    if (track->isMuted) continue;
+                    AVCodecParameters* par = g_videoPlayer->formatContext->streams[track->streamIndex]->codecpar;
+                    int br = par->bit_rate > 0 ? par->bit_rate : 128000;
+                    audioKbps += br / 1000;
+                }
+            }
+            int totalKbps = static_cast<int>((targetSize * 8192) / duration);
+            bitrate = totalKbps > audioKbps ? (totalKbps - audioKbps) : totalKbps / 2;
+        }
 
         ShowProgressWindow(hwnd);
         std::wstring outFile = szFile;

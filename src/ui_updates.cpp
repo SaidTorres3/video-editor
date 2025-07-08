@@ -9,7 +9,7 @@ std::wstring FormatTime(double totalSeconds, bool showMilliseconds);
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
-extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hStatusText, g_hLabelCutInfo;
+extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hStatusText, g_hLabelCutInfo;
 extern double g_cutStartTime, g_cutEndTime;
 
 void UpdateControls()
@@ -43,6 +43,7 @@ void UpdateControls()
    EnableWindow(g_hRadioCopyCodec, isLoaded);
    EnableWindow(g_hRadioH264, isLoaded);
    EnableWindow(g_hEditBitrate, isLoaded && (SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED));
+   EnableWindow(g_hEditTargetSize, isLoaded && (SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED));
 
 
     if (isLoaded)
