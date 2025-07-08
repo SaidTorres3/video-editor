@@ -182,6 +182,8 @@ bool AudioPlayer::InitializeTracks() {
                 continue;
             }
 
+            track->nextPts = 0.0;
+
             // Set track name
             AVDictionaryEntry *title = av_dict_get(m_player->formatContext->streams[i]->metadata, "title", nullptr, 0);
             if (title)
@@ -265,7 +267,8 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
         framePts = track->frame->best_effort_timestamp * av_q2d(as->time_base);
     else if (track->frame->pts != AV_NOPTS_VALUE)
         framePts = track->frame->pts * av_q2d(as->time_base);
-    if (framePts - m_player->startTimeOffset < 0.0)
+    double adjustedPts = framePts - m_player->startTimeOffset;
+    if (adjustedPts < 0.0)
         return; // Drop early audio
 
     // Resample audio
@@ -280,12 +283,28 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
     if (convertedSamples < 0)
         return;
 
-    // Store raw samples in track buffer
     {
         std::lock_guard<std::mutex> lock(m_player->audioMutex);
+
+        // Insert silence if this frame is ahead of the expected playback time
+        double diff = adjustedPts - track->nextPts;
+        if (diff > 0.0001)
+        {
+            int silenceSamples = static_cast<int>(diff * m_player->audioSampleRate + 0.5);
+            size_t neededSilence = static_cast<size_t>(silenceSamples * m_player->audioChannels);
+            track->buffer.insert(track->buffer.end(), neededSilence, 0);
+            track->nextPts += silenceSamples / static_cast<double>(m_player->audioSampleRate);
+        }
+        else if (diff < -0.1)
+        {
+            // If audio is too far behind, drop to catch up
+            track->nextPts = adjustedPts;
+        }
+
         track->buffer.insert(track->buffer.end(),
                              outPtr,
                              outPtr + convertedSamples * m_player->audioChannels);
+        track->nextPts += convertedSamples / static_cast<double>(m_player->audioSampleRate);
     }
     m_player->audioCondition.notify_one();
 }

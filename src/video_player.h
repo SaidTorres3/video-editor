@@ -52,9 +52,11 @@ struct AudioTrack {
     std::string name;
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
-    
-    AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f) {}
+    double nextPts;
+
+    AudioTrack()
+        : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
+          frame(nullptr), isMuted(false), volume(1.0f), nextPts(0.0) {}
 };
 
 class VideoPlayer
