@@ -129,11 +129,21 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
     return false;
   }
 
-  // Use the video stream start time as our base offset
+  // Determine the earliest stream start time for synchronization
   startTimeOffset = 0.0;
-  AVStream *vsBase = formatContext->streams[videoStreamIndex];
-  if (vsBase->start_time != AV_NOPTS_VALUE)
-    startTimeOffset = vsBase->start_time * av_q2d(vsBase->time_base);
+  double minStart = std::numeric_limits<double>::max();
+  for (unsigned i = 0; i < formatContext->nb_streams; ++i)
+  {
+    AVStream *s = formatContext->streams[i];
+    if (s->start_time != AV_NOPTS_VALUE)
+    {
+      double t = s->start_time * av_q2d(s->time_base);
+      if (t < minStart)
+        minStart = t;
+    }
+  }
+  if (minStart != std::numeric_limits<double>::max())
+    startTimeOffset = minStart;
 
   // Initialize audio tracks
   if (!InitializeAudioTracks())
