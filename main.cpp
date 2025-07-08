@@ -1063,7 +1063,7 @@ void ShowOptionsWindow(HWND parent)
     }
     g_hOptionsWnd = CreateWindowEx(0, L"OptionsClass", L"Options",
                                    WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 220, 150,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 220, 180,
                                    parent, nullptr,
                                    (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hOptionsWnd);
@@ -1084,12 +1084,12 @@ void ShowOptionsWindow(HWND parent)
     ApplyDarkTheme(hNv);
     HWND hOk = CreateWindow(L"BUTTON", L"OK",
                             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            30, 100, 70, 25, g_hOptionsWnd,
+                            30, 130, 70, 25, g_hOptionsWnd,
                             (HMENU)IDOK,
                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                110, 100, 70, 25, g_hOptionsWnd,
+                                110, 130, 70, 25, g_hOptionsWnd,
                                 (HMENU)IDCANCEL,
                                 (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(hOk);

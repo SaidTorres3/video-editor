@@ -1106,6 +1106,9 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     SwsContext*     swsCtx  = nullptr;
     AVFrame*        encFrame = nullptr;
     AVFrame*        decFrame = nullptr;
+    AVFrame*        hwTmpFrame = nullptr;
+    AVBufferRef*    hwDecDevice = nullptr;
+    bool            useHwDecode = false;
 
     struct MergeTrack {
         int index;
@@ -1200,7 +1203,12 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 goto cleanup;
             }
             outStream->time_base = vEncCtx->time_base;
-            vDecCtx = avcodec_alloc_context3(avcodec_find_decoder(inStream->codecpar->codec_id));
+            const AVCodec* vDec = nullptr;
+            if (useNvenc)
+                vDec = avcodec_find_decoder_by_name("h264_cuvid");
+            if (!vDec)
+                vDec = avcodec_find_decoder(inStream->codecpar->codec_id);
+            vDecCtx = avcodec_alloc_context3(vDec);
             if (!vDecCtx ||
                 avcodec_parameters_to_context(vDecCtx, inStream->codecpar) < 0) {
                 DebugLog("Failed to create video decoder context", true);
@@ -1210,10 +1218,22 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                 avformat_close_input(&inputCtx);
                 return false;
             }
-            if (avcodec_open2(vDecCtx, avcodec_find_decoder(inStream->codecpar->codec_id), nullptr) < 0) {
+            if (useNvenc) {
+                vDecCtx->get_format = [](AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) {
+                    for (const enum AVPixelFormat* p = pix_fmts; *p != -1; ++p)
+                        if (*p == AV_PIX_FMT_CUDA)
+                            return *p;
+                    return pix_fmts[0];
+                };
+                if (av_hwdevice_ctx_create(&hwDecDevice, AV_HWDEVICE_TYPE_CUDA, nullptr, nullptr, 0) >= 0)
+                    vDecCtx->hw_device_ctx = av_buffer_ref(hwDecDevice);
+                useHwDecode = hwDecDevice != nullptr;
+            }
+            if (avcodec_open2(vDecCtx, vDec, nullptr) < 0) {
                 DebugLog("Failed to open video decoder", true);
                 avcodec_free_context(&vEncCtx);
                 avcodec_free_context(&vDecCtx);
+                if (hwDecDevice) av_buffer_unref(&hwDecDevice);
                 avformat_free_context(outputCtx);
                 avformat_close_input(&inputCtx);
                 return false;
@@ -1222,7 +1242,9 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
             swsCtx = nullptr; // initialized after first decoded frame
             encFrame = av_frame_alloc();
             decFrame = av_frame_alloc();
-            if (!encFrame || !decFrame) {
+            if (useHwDecode)
+                hwTmpFrame = av_frame_alloc();
+            if (!encFrame || !decFrame || (useHwDecode && !hwTmpFrame)) {
                 DebugLog("Failed to allocate frames", true);
                 success = false;
                 goto cleanup;
@@ -1373,9 +1395,19 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
         if (convertH264 && pkt.stream_index == videoStreamIndex) {
             avcodec_send_packet(vDecCtx, &pkt);
             while (avcodec_receive_frame(vDecCtx, decFrame) == 0) {
+                AVFrame* srcFrame = decFrame;
+                if (useHwDecode && decFrame->format == AV_PIX_FMT_CUDA) {
+                    if (av_hwframe_transfer_data(hwTmpFrame, decFrame, 0) < 0) {
+                        DebugLog("Failed to transfer frame from GPU", true);
+                        av_packet_unref(&pkt);
+                        success = false;
+                        goto cleanup;
+                    }
+                    srcFrame = hwTmpFrame;
+                }
                 if (!swsCtx) {
                     swsCtx = sws_getContext(vDecCtx->width, vDecCtx->height,
-                                            (AVPixelFormat)decFrame->format,
+                                            (AVPixelFormat)srcFrame->format,
                                             vEncCtx->width, vEncCtx->height,
                                             vEncCtx->pix_fmt, SWS_BILINEAR,
                                             nullptr, nullptr, nullptr);
@@ -1386,8 +1418,8 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                         goto cleanup;
                     }
                 }
-                sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, vDecCtx->height, encFrame->data, encFrame->linesize);
-                encFrame->pts = av_rescale_q(decFrame->pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, vEncCtx->time_base);
+                sws_scale(swsCtx, srcFrame->data, srcFrame->linesize, 0, vDecCtx->height, encFrame->data, encFrame->linesize);
+                encFrame->pts = av_rescale_q(srcFrame->pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, vEncCtx->time_base);
                 avcodec_send_frame(vEncCtx, encFrame);
                 while (avcodec_receive_packet(vEncCtx, &outPkt) == 0) {
                     av_packet_rescale_ts(&outPkt, vEncCtx->time_base, outputCtx->streams[streamMapping[pkt.stream_index]]->time_base);
@@ -1396,6 +1428,8 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                     av_packet_unref(&outPkt);
                 }
                 av_frame_unref(decFrame);
+                if (useHwDecode)
+                    av_frame_unref(hwTmpFrame);
             }
             handled = true;
         } else if (mergeAudio) {
@@ -1562,6 +1596,8 @@ cleanup:
     if (swsCtx) sws_freeContext(swsCtx);
     if (encFrame) av_frame_free(&encFrame);
     if (decFrame) av_frame_free(&decFrame);
+    if (hwTmpFrame) av_frame_free(&hwTmpFrame);
+    if (hwDecDevice) av_buffer_unref(&hwDecDevice);
     if (aEncCtx) avcodec_free_context(&aEncCtx);
     if (mixSwr) swr_free(&mixSwr);
     for (auto &mt : mergeTracks) {
