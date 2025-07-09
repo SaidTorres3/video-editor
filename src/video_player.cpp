@@ -24,6 +24,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioThreadRunning(false),
+      audioClock(nullptr), audioEvent(nullptr),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
       originalVideoWndProc(nullptr)
@@ -372,18 +373,26 @@ void VideoPlayer::SetMasterVolume(float volume)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
-    auto startTime = std::chrono::high_resolution_clock::now();
-    double startPts = currentPts;
+    if (!audioClock) { isPlaying = false; return; }
+
+    UINT64 devPos0 = 0, qpc0 = 0;
+    audioClock->GetPosition(&devPos0, &qpc0);
+    double audioStartTime = static_cast<double>(devPos0) / audioSampleRate;
+
     while (playbackThreadRunning)
     {
+        UINT64 devPos = 0, qpc = 0;
+        audioClock->GetPosition(&devPos, &qpc);
+        double audioTime = static_cast<double>(devPos) / audioSampleRate;
+
+        double diff = currentPts - startTimeOffset - audioTime;
+        if (diff > 0.020)
+        {
+            std::this_thread::sleep_for(std::chrono::duration<double>(diff));
+        }
+
         if (!m_decoder->DecodeNextFrame(false))
             break;
-
-        double target = currentPts - startPts;
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
-        double delay = target - elapsed;
-        if (delay > 0)
-            std::this_thread::sleep_for(std::chrono::duration<double>(delay));
     }
     isPlaying = false;
 }

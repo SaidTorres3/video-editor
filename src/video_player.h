@@ -111,6 +111,8 @@ public:
     WAVEFORMATEX *audioFormat;
     UINT32 bufferFrameCount;
     bool audioInitialized;
+    IAudioClock* audioClock;
+    HANDLE audioEvent;
     
     // Audio threading
     std::thread audioThread;

@@ -41,13 +41,26 @@ bool AudioPlayer::Initialize() {
     m_player->audioFormat->nAvgBytesPerSec = m_player->audioFormat->nSamplesPerSec * m_player->audioFormat->nBlockAlign;
     m_player->audioFormat->cbSize = 0;
 
-    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
+    const REFERENCE_TIME hnsBufferDuration = 1'000'000; // 100 ms
+    hr = m_player->audioClient->Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            hnsBufferDuration,
+            0,
+            m_player->audioFormat,
+            nullptr);
     if (FAILED(hr))
     {
-        // Try with device format if our format fails
+        // fallback al formato del dispositivo si falla el nuestro
         CoTaskMemFree(m_player->audioFormat);
         m_player->audioFormat = deviceFormat;
-        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
+        hr = m_player->audioClient->Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                hnsBufferDuration,
+                0,
+                m_player->audioFormat,
+                nullptr);
         if (FAILED(hr))
             return false;
     }
@@ -55,6 +68,17 @@ bool AudioPlayer::Initialize() {
     {
         CoTaskMemFree(deviceFormat);
     }
+
+    hr = m_player->audioClient->GetService(__uuidof(IAudioClock), (void**)&m_player->audioClock);
+    if (FAILED(hr))
+        return false;
+
+    m_player->audioEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (!m_player->audioEvent)
+        return false;
+    hr = m_player->audioClient->SetEventHandle(m_player->audioEvent);
+    if (FAILED(hr))
+        return false;
 
     // Update audio configuration to match the initialized format
     m_player->audioSampleRate = m_player->audioFormat->nSamplesPerSec;
@@ -86,6 +110,8 @@ void AudioPlayer::Cleanup() {
         m_player->renderClient->Release();
         m_player->renderClient = nullptr;
     }
+    if (m_player->audioClock) { m_player->audioClock->Release(); m_player->audioClock = nullptr; }
+    if (m_player->audioEvent)  { CloseHandle(m_player->audioEvent); m_player->audioEvent = nullptr; }
     if (m_player->audioClient)
     {
         m_player->audioClient->Release();
@@ -212,11 +238,6 @@ void AudioPlayer::CleanupTracks() {
 void AudioPlayer::StartThread() {
     if (!m_player->audioTracks.empty() && m_player->audioInitialized)
     {
-        HRESULT hr = m_player->audioClient->Start();
-        if (FAILED(hr))
-        {
-            // Continue without audio or handle error appropriately
-        }
         m_player->audioThreadRunning = true;
         m_player->audioThread = std::thread(&AudioPlayer::AudioThreadFunction, this);
     }
@@ -302,47 +323,32 @@ void AudioPlayer::AudioThreadFunction() {
     if (!m_player->audioClient || !m_player->renderClient)
         return;
 
-    HRESULT hr; // Declare hr here
+    m_player->audioClient->Start();
 
+    HRESULT hr;
     while (m_player->audioThreadRunning)
     {
-        std::unique_lock<std::mutex> lock(m_player->audioMutex);
-        m_player->audioCondition.wait(lock, [this] { return HasBufferedAudio() || !m_player->audioThreadRunning; });
-
-        if (!m_player->audioThreadRunning)
-            break;
-
-        if (!HasBufferedAudio())
+        DWORD waitRes = WaitForSingleObject(m_player->audioEvent, 100);
+        if (waitRes != WAIT_OBJECT_0)
             continue;
 
-        // Get available buffer space
-        UINT32 numFramesPadding;
-        hr = m_player->audioClient->GetCurrentPadding(&numFramesPadding);
+        UINT32 padding = 0;
+        UINT32 availFrames;
+        hr = m_player->audioClient->GetCurrentPadding(&padding);
         if (FAILED(hr))
             continue;
 
-        UINT32 numFramesAvailable = m_player->bufferFrameCount - numFramesPadding;
-        if (numFramesAvailable == 0)
-        {
-            lock.unlock();
-            Sleep(1);
+        availFrames = m_player->bufferFrameCount - padding;
+        if (availFrames == 0)
             continue;
-        }
 
-        // Get render buffer
-        BYTE *pData;
-        hr = m_player->renderClient->GetBuffer(numFramesAvailable, &pData);
+        BYTE* pData;
+        hr = m_player->renderClient->GetBuffer(availFrames, &pData);
         if (FAILED(hr))
             continue;
 
-        // Mix audio from all tracks
-        MixAudioTracks(pData, numFramesAvailable);
-
-        hr = m_player->renderClient->ReleaseBuffer(numFramesAvailable, 0);
-        if (FAILED(hr))
-            continue;
-
-        lock.unlock();
+        MixAudioTracks(pData, availFrames);
+        m_player->renderClient->ReleaseBuffer(availFrames, 0);
     }
 
     m_player->audioClient->Stop();
