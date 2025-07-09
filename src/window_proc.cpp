@@ -6,7 +6,9 @@
 #include "file_handling.h"
 #include "ui_updates.h"
 #include "editing.h"
+#ifdef HAVE_BACKBLAZE_UPLOAD
 #include "b2_upload.h"
+#endif
 #include "utils.h"
 
 // Forward declarations for functions in other files
@@ -271,6 +273,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             UINT flags;
             if (success)
             {
+#ifdef HAVE_BACKBLAZE_UPLOAD
                 if(g_lastOperationWasExport) {
                     std::wstring url;
                     if(UploadToBackblaze(g_lastExportedFilename, url)) {
@@ -278,6 +281,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         MessageBoxW(hwnd, m.c_str(), L"Upload Complete", MB_OK | MB_ICONINFORMATION);
                     }
                 }
+#endif
                 msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
                 title = L"Success";
                 flags = MB_OK | MB_ICONINFORMATION;

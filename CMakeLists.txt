@@ -8,6 +8,7 @@ project(VideoEditor CXX)
 
 # Option to link FFmpeg statically
 option(USE_STATIC_FFMPEG "Link FFmpeg statically" OFF)
+option(USE_BACKBLAZE_UPLOAD "Enable Backblaze B2 upload support" OFF)
 
 if(MSVC AND USE_STATIC_FFMPEG)
     # Link the MSVC runtime statically when building a portable executable
@@ -62,8 +63,21 @@ find_library(SWRESAMPLE_LIBRARY
     NO_DEFAULT_PATH
 )
 
-# libcurl is required for Backblaze uploads
-find_package(CURL REQUIRED)
+
+# Optional Backblaze support
+set(B2_SOURCES "")
+set(B2_LIBS "")
+if(USE_BACKBLAZE_UPLOAD)
+    find_package(CURL)
+    if(CURL_FOUND)
+        list(APPEND B2_SOURCES src/b2_upload.cpp)
+        list(APPEND B2_LIBS ${CURL_LIBRARIES})
+        add_compile_definitions(HAVE_BACKBLAZE_UPLOAD)
+        target_include_directories(VideoEditor PRIVATE ${CURL_INCLUDE_DIRS})
+    else()
+        message(WARNING "libcurl not found; Backblaze upload disabled")
+    endif()
+endif()
 
 # Create the executable
 add_executable(VideoEditor WIN32
@@ -71,7 +85,7 @@ add_executable(VideoEditor WIN32
     src/video_player.cpp
     src/options_window.cpp
     src/progress_window.cpp
-    src/b2_upload.cpp
+    ${B2_SOURCES}
 )
 
 # Headers live in src/
@@ -82,9 +96,6 @@ if(FFMPEG_INCLUDE_DIR)
     target_include_directories(VideoEditor PRIVATE ${FFMPEG_INCLUDE_DIR})
 endif()
 
-if(CURL_FOUND)
-    target_include_directories(VideoEditor PRIVATE ${CURL_INCLUDE_DIRS})
-endif()
 
 # Link libraries
 set(FFMPEG_EXTRA_LIBS "")
@@ -122,7 +133,7 @@ target_link_libraries(VideoEditor PRIVATE
     ${AVUTIL_LIBRARY}
     ${SWSCALE_LIBRARY}
     ${SWRESAMPLE_LIBRARY}
-    ${CURL_LIBRARIES}
+    ${B2_LIBS}
     ${FFMPEG_EXTRA_LIBS}
 )
 
