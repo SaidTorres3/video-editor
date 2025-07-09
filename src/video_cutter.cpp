@@ -157,20 +157,6 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 vEncCtx->rc_max_rate    = br;
                 vEncCtx->rc_min_rate    = br;
                 vEncCtx->rc_buffer_size = br * 2;
-                if (vEncCtx->priv_data) {
-                    av_opt_set_int(vEncCtx->priv_data, "bitrate", br, 0);
-                    av_opt_set_int(vEncCtx->priv_data, "b", br, 0);
-                    av_opt_set_int(vEncCtx->priv_data, "maxrate", br, 0);
-                    av_opt_set_int(vEncCtx->priv_data, "minrate", br, 0);
-                    av_opt_set_int(vEncCtx->priv_data, "bufsize", br * 2, 0);
-                    av_opt_set       (vEncCtx->priv_data, "nal-hrd", "cbr", 0);
-                    if (useNvenc) {
-                        av_opt_set(vEncCtx->priv_data, "rc", "cbr", 0);
-                        av_opt_set(vEncCtx->priv_data, "cbr", "1", 0);
-                        av_opt_set(vEncCtx->priv_data, "cbr_padding", "1", 0);
-                        av_opt_set(vEncCtx->priv_data, "strict_gop", "1", 0);
-                    }
-                }
             }
             if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)
                 vEncCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -191,6 +177,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                     av_dict_set(&encOpts, "cbr", "1", 0);
                     av_dict_set(&encOpts, "cbr_padding", "1", 0);
                     av_dict_set(&encOpts, "strict_gop", "1", 0);
+                    av_dict_set(&encOpts, "profile", "high", 0);
+                    av_dict_set(&encOpts, "rc-lookahead", "0", 0);
                 }
             }
             if (avcodec_open2(vEncCtx, vEnc, &encOpts) < 0) {
