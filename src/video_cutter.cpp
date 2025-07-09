@@ -164,8 +164,12 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                     av_opt_set_int(vEncCtx->priv_data, "minrate", br, 0);
                     av_opt_set_int(vEncCtx->priv_data, "bufsize", br * 2, 0);
                     av_opt_set       (vEncCtx->priv_data, "nal-hrd", "cbr", 0);
-                    if (useNvenc)
+                    if (useNvenc) {
                         av_opt_set(vEncCtx->priv_data, "rc", "cbr", 0);
+                        av_opt_set(vEncCtx->priv_data, "cbr", "1", 0);
+                        av_opt_set(vEncCtx->priv_data, "cbr_padding", "1", 0);
+                        av_opt_set(vEncCtx->priv_data, "strict_gop", "1", 0);
+                    }
                 }
             }
             if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)
@@ -182,8 +186,12 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 snprintf(bufStr, sizeof(bufStr), "%dk", maxBitrate * 2);
                 av_dict_set(&encOpts, "bufsize", bufStr, 0);
                 av_dict_set(&encOpts, "nal-hrd", "cbr", 0);
-                if (useNvenc)
+                if (useNvenc) {
                     av_dict_set(&encOpts, "rc", "cbr", 0);
+                    av_dict_set(&encOpts, "cbr", "1", 0);
+                    av_dict_set(&encOpts, "cbr_padding", "1", 0);
+                    av_dict_set(&encOpts, "strict_gop", "1", 0);
+                }
             }
             if (avcodec_open2(vEncCtx, vEnc, &encOpts) < 0) {
                 DebugLog("Failed to open H.264 encoder", true);
