@@ -382,6 +382,7 @@ void AudioPlayer::MixSynchronizedAudio(uint8_t* outputBuffer, int frameCount,
                                        double startTime, double frameDuration) {
     memset(outputBuffer, 0, frameCount * m_player->audioChannels * sizeof(int16_t));
     int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
+    const double SYNC_THRESHOLD = 0.05; // 50ms tolerance
 
     for (int frame = 0; frame < frameCount; ++frame) {
         double targetTime = startTime + frame * frameDuration;
@@ -390,12 +391,20 @@ void AudioPlayer::MixSynchronizedAudio(uint8_t* outputBuffer, int frameCount,
             if (track->isMuted || track->timedBuffer.empty())
                 continue;
 
-            if (track->timedBuffer.front().timestamp <= targetTime) {
-                AudioSample s = track->timedBuffer.front();
+            // Drop any samples that are in the past relative to the target
+            while (track->timedBuffer.size() > 1 &&
+                   track->timedBuffer[1].timestamp <= targetTime) {
                 track->timedBuffer.pop_front();
-                mix[0] += static_cast<int32_t>(s.left * track->volume);
-                if (m_player->audioChannels > 1)
-                    mix[1] += static_cast<int32_t>(s.right * track->volume);
+            }
+
+            if (!track->timedBuffer.empty()) {
+                const AudioSample& s = track->timedBuffer.front();
+                if (std::abs(s.timestamp - targetTime) <= SYNC_THRESHOLD) {
+                    track->timedBuffer.pop_front();
+                    mix[0] += static_cast<int32_t>(s.left * track->volume);
+                    if (m_player->audioChannels > 1)
+                        mix[1] += static_cast<int32_t>(s.right * track->volume);
+                }
             }
         }
         for (int ch = 0; ch < m_player->audioChannels; ++ch) {

@@ -114,12 +114,24 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
         return false;
     }
 
-    // Align playback so that the first video frame starts at time zero. Any
-    // audio that occurs before the first video frame will be dropped.
+    // Determine the earliest stream start time so audio and video begin
+    // together.  Any samples before this time will be discarded.
     startTimeOffset = 0.0;
+    double minStart = std::numeric_limits<double>::max();
+    for (unsigned i = 0; i < formatContext->nb_streams; ++i)
+    {
+        AVStream *s = formatContext->streams[i];
+        if (s->start_time != AV_NOPTS_VALUE)
+        {
+            double t = s->start_time * av_q2d(s->time_base);
+            if (t < minStart)
+                minStart = t;
+        }
+    }
+    if (minStart != std::numeric_limits<double>::max())
+        startTimeOffset = minStart;
+
     AVStream* vs = formatContext->streams[videoStreamIndex];
-    if (vs->start_time != AV_NOPTS_VALUE)
-        startTimeOffset = vs->start_time * av_q2d(vs->time_base);
 
     // Initialize audio tracks
     if (!m_audioPlayer->InitializeTracks())
