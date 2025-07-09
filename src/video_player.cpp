@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+#include <cmath>
 
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
