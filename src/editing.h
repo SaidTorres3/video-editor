@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <string>
 
 void OnSetStartClicked(HWND hwnd);
 void OnSetEndClicked(HWND hwnd);
