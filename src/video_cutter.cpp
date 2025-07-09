@@ -151,8 +151,17 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             vEncCtx->pix_fmt = AV_PIX_FMT_YUV420P;
             vEncCtx->max_b_frames = 2;
             vEncCtx->gop_size = 12;
-            if (maxBitrate > 0)
-                vEncCtx->bit_rate = maxBitrate * 1000;
+            if (maxBitrate > 0) {
+                int br = maxBitrate * 1000;
+                vEncCtx->bit_rate      = br;
+                vEncCtx->rc_max_rate   = br;
+                vEncCtx->rc_min_rate   = br;
+                vEncCtx->rc_buffer_size= br;
+                if (vEncCtx->priv_data) {
+                    av_opt_set_int(vEncCtx->priv_data, "bitrate", br, 0);
+                    av_opt_set_int(vEncCtx->priv_data, "b", br, 0);
+                }
+            }
             if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)
                 vEncCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             AVDictionary* encOpts = nullptr;
