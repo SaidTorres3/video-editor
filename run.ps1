@@ -132,13 +132,17 @@ if (-not $Static.IsPresent) {
 if ($Static.IsPresent) {
     $required = @(
         "$FFmpegPath\include\libavcodec\avcodec.h",
-        "$FFmpegPath\lib\avcodec.lib"
+        "$FFmpegPath\lib\avcodec.lib",
+        "$FFmpegPath\include\curl\curl.h",
+        "$FFmpegPath\lib\libcurl_a.lib"
     )
 } else {
     $required = @(
         "$FFmpegPath\include\libavcodec\avcodec.h",
         "$FFmpegPath\lib\avcodec.lib",
-        "$FFmpegPath\bin\ffmpeg.exe"
+        "$FFmpegPath\bin\ffmpeg.exe",
+        "$FFmpegPath\include\curl\curl.h",
+        "$FFmpegPath\lib\libcurl.lib"
     )
 }
 

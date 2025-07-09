@@ -86,6 +86,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     owc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClass(&owc);
 
+    WNDCLASS b2c = {};
+    b2c.lpfnWndProc = B2ConfigProc;
+    b2c.hInstance = hInstance;
+    b2c.lpszClassName = L"B2ConfigClass";
+    b2c.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    b2c.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&b2c);
+
     WNDCLASS pwc = {};
     pwc.lpfnWndProc = ProgressProc;
     pwc.hInstance = hInstance;

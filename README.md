@@ -40,6 +40,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Codec Options**: Copy video/audio codecs for a fast cut or convert to H.264
 - **Bitrate or Target Size**: When converting to H.264 you can either set a bitrate or specify a desired final size; only the chosen option is shown
 - **Progress Window**: A small window shows export progress in real time
+- **Optional B2 Upload**: When credentials are configured the exported file is uploaded to Backblaze B2 automatically and the download URL is shown
 
 ## Technical Implementation
 
@@ -86,6 +87,7 @@ single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
       additional codec features if desired:
       ```
       vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
+      vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
       ```
    2. Configure CMake pointing `FFMPEG_ROOT` to the vcpkg installation and
       enabling static linking:
@@ -139,6 +141,9 @@ using `-FFmpegPath`.
 3. **Track Volume**: Adjust the "Track Volume" slider for the selected track
 4. **Master Volume**: Use the "Master Volume" slider to control overall audio level
 
+### Backblaze Settings
+Open **Options** and click **B2 Settings** to enter your Backblaze account credentials. Enable *Auto upload* to have videos uploaded automatically after export.
+
 ### Audio Track Features
 - **Multiple Tracks**: All audio tracks play simultaneously by default
 - **Individual Control**: Each track can be muted or have its volume adjusted independently
@@ -161,6 +166,11 @@ The application supports all audio formats that FFmpeg can decode, including:
 - Low-latency audio output using WASAPI shared mode
 - Efficient audio mixing with minimal CPU overhead
 - Automatic format conversion handles different audio specifications
+
+### Backblaze B2 Upload
+Configure your B2 credentials under **Options > B2 Settings**. When `Auto upload`
+is enabled the exported video is automatically uploaded to Backblaze B2 and the
+download URL is shown after completion.
 
 ## Troubleshooting
 

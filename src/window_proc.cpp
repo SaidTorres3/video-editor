@@ -33,6 +33,9 @@ extern HWND g_hEditStartTime, g_hEditEndTime, g_hListBoxAudioTracks, g_hSliderTr
 extern double g_cutStartTime;
 extern double g_cutEndTime;
 extern bool g_lastOperationWasExport;
+extern bool g_uploadSuccess;
+extern std::wstring g_uploadedUrl;
+extern bool g_autoUpload;
 extern HBRUSH g_hbrBackground;
 extern HFONT g_hFont;
 extern COLORREF g_textColor;
@@ -269,7 +272,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             UINT flags;
             if (success)
             {
-                msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                if (g_lastOperationWasExport && g_autoUpload) {
+                    std::wstring m = L"Video successfully exported.";
+                    if (g_uploadSuccess)
+                        m += L"\nUploaded to B2:\n" + g_uploadedUrl;
+                    else
+                        m += L"\nFailed to upload to B2.";
+                    msg = m.c_str();
+                } else {
+                    msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                }
                 title = L"Success";
                 flags = MB_OK | MB_ICONINFORMATION;
             }

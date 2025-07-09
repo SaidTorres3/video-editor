@@ -62,12 +62,22 @@ find_library(SWRESAMPLE_LIBRARY
     NO_DEFAULT_PATH
 )
 
+find_path(CURL_INCLUDE_DIR
+    NAMES curl/curl.h
+    PATHS ${FFMPEG_ROOT}/include
+    NO_DEFAULT_PATH)
+find_library(CURL_LIBRARY
+    NAMES libcurl_a libcurl
+    PATHS ${FFMPEG_ROOT}/lib
+    NO_DEFAULT_PATH)
+
 # Create the executable
 add_executable(VideoEditor WIN32
     src/main.cpp src/window_proc.cpp src/ui_controls.cpp src/file_handling.cpp src/ui_updates.cpp src/timeline.cpp src/editing.cpp src/utils.cpp src/video_decoder.cpp src/audio_player.cpp src/video_renderer.cpp src/video_cutter.cpp
     src/video_player.cpp
     src/options_window.cpp
     src/progress_window.cpp
+    src/b2_upload.cpp
 )
 
 # Headers live in src/
@@ -76,6 +86,9 @@ target_include_directories(VideoEditor PRIVATE src)
 # Include FFmpeg headers
 if(FFMPEG_INCLUDE_DIR)
     target_include_directories(VideoEditor PRIVATE ${FFMPEG_INCLUDE_DIR})
+endif()
+if(CURL_INCLUDE_DIR)
+    target_include_directories(VideoEditor PRIVATE ${CURL_INCLUDE_DIR})
 endif()
 
 # Link libraries
@@ -114,6 +127,7 @@ target_link_libraries(VideoEditor PRIVATE
     ${AVUTIL_LIBRARY}
     ${SWSCALE_LIBRARY}
     ${SWRESAMPLE_LIBRARY}
+    ${CURL_LIBRARY}
     ${FFMPEG_EXTRA_LIBS}
 )
 
