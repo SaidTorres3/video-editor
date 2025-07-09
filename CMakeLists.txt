@@ -67,13 +67,14 @@ find_library(SWRESAMPLE_LIBRARY
 # Optional Backblaze support
 set(B2_SOURCES "")
 set(B2_LIBS "")
+set(B2_INCLUDES "")
 if(USE_BACKBLAZE_UPLOAD)
     find_package(CURL)
     if(CURL_FOUND)
         list(APPEND B2_SOURCES src/b2_upload.cpp)
         list(APPEND B2_LIBS ${CURL_LIBRARIES})
         add_compile_definitions(HAVE_BACKBLAZE_UPLOAD)
-        target_include_directories(VideoEditor PRIVATE ${CURL_INCLUDE_DIRS})
+        list(APPEND B2_INCLUDES ${CURL_INCLUDE_DIRS})
     else()
         message(WARNING "libcurl not found; Backblaze upload disabled")
     endif()
@@ -90,6 +91,10 @@ add_executable(VideoEditor WIN32
 
 # Headers live in src/
 target_include_directories(VideoEditor PRIVATE src)
+
+if(B2_INCLUDES)
+    target_include_directories(VideoEditor PRIVATE ${B2_INCLUDES})
+endif()
 
 # Include FFmpeg headers
 if(FFMPEG_INCLUDE_DIR)
