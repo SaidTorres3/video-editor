@@ -161,7 +161,7 @@ if ($Backblaze.IsPresent) {
     $curlInc = Join-Path $FFmpegPath "include"
     $curlLib = Get-ChildItem (Join-Path $FFmpegPath "lib") -Filter "libcurl*.lib" | Select-Object -First 1
     if ($curlLib) {
-        $curlArgs = "-DCURL_LIBRARY=\"$($curlLib.FullName)\" -DCURL_INCLUDE_DIR=\"$curlInc\""
+        $curlArgs = "-DCURL_LIBRARY=`"$($curlLib.FullName)`" -DCURL_INCLUDE_DIR=`"$curlInc`""
     } else {
         $curlArgs = ""
     }
