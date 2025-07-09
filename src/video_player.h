@@ -25,6 +25,7 @@ extern "C"
 #include <vector>
 #include <memory>
 #include <thread>
+#include <chrono>
 #include <mutex>
 #include <condition_variable>
 #include <deque>
@@ -41,6 +42,12 @@ class AudioPlayer;
 class VideoRenderer;
 class VideoCutter;
 
+struct AudioSample {
+    double timestamp;
+    int16_t left;
+    int16_t right;
+};
+
 // Audio track structure
 struct AudioTrack {
     int streamIndex;
@@ -50,7 +57,7 @@ struct AudioTrack {
     bool isMuted;
     float volume;
     std::string name;
-    std::deque<int16_t> buffer;
+    std::deque<AudioSample> timedBuffer;
     std::vector<int16_t> resampleBuffer;
     
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
@@ -124,6 +131,11 @@ public:
     int audioChannels;
     AVSampleFormat audioSampleFormat;
 
+    // Master clock for sync
+    mutable std::mutex m_timingMutex;
+    std::chrono::high_resolution_clock::time_point m_playbackStartTime;
+    double m_masterClockOffset{0.0};
+
     // Currently loaded file path
     std::wstring loadedFilename;
 
@@ -165,6 +177,8 @@ public:
     float GetAudioTrackVolume(int trackIndex) const;
     void SetAudioTrackVolume(int trackIndex, float volume);
     void SetMasterVolume(float volume);
+    double GetMasterClockTime() const;
+    void SetMasterClock(double time);
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, bool useNvenc,
                   int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
@@ -176,5 +190,4 @@ public:
 private:
     void CreateVideoWindow();
     void PlaybackThreadFunction();
-    static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-};
+    static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);};
