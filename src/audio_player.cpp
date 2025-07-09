@@ -41,13 +41,14 @@ bool AudioPlayer::Initialize() {
     m_player->audioFormat->nAvgBytesPerSec = m_player->audioFormat->nSamplesPerSec * m_player->audioFormat->nBlockAlign;
     m_player->audioFormat->cbSize = 0;
 
-    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
+    // Use a smaller buffer duration (100ms) to reduce playback latency
+    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 1000000, 0, m_player->audioFormat, nullptr);
     if (FAILED(hr))
     {
         // Try with device format if our format fails
         CoTaskMemFree(m_player->audioFormat);
         m_player->audioFormat = deviceFormat;
-        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
+        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 1000000, 0, m_player->audioFormat, nullptr);
         if (FAILED(hr))
             return false;
     }
@@ -355,7 +356,11 @@ void AudioPlayer::AudioThreadFunction() {
         // Mix audio from all tracks using master clock
         double masterTime = m_player->GetMasterClockTime();
         double frameDuration = 1.0 / m_player->audioSampleRate;
-        MixSynchronizedAudio(pData, numFramesAvailable, masterTime, frameDuration);
+
+        // Account for existing samples already queued in the device
+        double latency = static_cast<double>(numFramesPadding) / m_player->audioSampleRate;
+
+        MixSynchronizedAudio(pData, numFramesAvailable, masterTime + latency, frameDuration);
 
         hr = m_player->renderClient->ReleaseBuffer(numFramesAvailable, 0);
         if (FAILED(hr))
@@ -374,12 +379,12 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount) {
 }
 
 void AudioPlayer::MixSynchronizedAudio(uint8_t* outputBuffer, int frameCount,
-                                       double masterTime, double frameDuration) {
+                                       double startTime, double frameDuration) {
     memset(outputBuffer, 0, frameCount * m_player->audioChannels * sizeof(int16_t));
     int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
 
     for (int frame = 0; frame < frameCount; ++frame) {
-        double targetTime = masterTime + frame * frameDuration;
+        double targetTime = startTime + frame * frameDuration;
         std::vector<int32_t> mix(m_player->audioChannels, 0);
         for (auto& track : m_player->audioTracks) {
             if (track->isMuted || track->timedBuffer.empty())
