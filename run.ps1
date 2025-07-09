@@ -157,24 +157,32 @@ Write-Host "FFmpeg validado en: $FFmpegPath" -ForegroundColor Green
 # 5) Configurar/reconfigurar CMake
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
 $b2Flag = if ($Backblaze.IsPresent) { "ON" } else { "OFF" }
+
+$cmakeArgs = @(
+    "-S", ".",
+    "-B", "build",
+    "-DFFMPEG_ROOT=$FFmpegPath",
+    "-DUSE_STATIC_FFMPEG=$staticFlag",
+    "-DUSE_BACKBLAZE_UPLOAD=$b2Flag"
+)
+
 if ($Backblaze.IsPresent) {
     $curlInc = Join-Path $FFmpegPath "include"
     $curlLib = Get-ChildItem (Join-Path $FFmpegPath "lib") -Filter "libcurl*.lib" | Select-Object -First 1
     if ($curlLib) {
-        $curlArgs = "-DCURL_LIBRARY=`"$($curlLib.FullName)`" -DCURL_INCLUDE_DIR=`"$curlInc`""
+        $cmakeArgs += "-DCURL_LIBRARY=$($curlLib.FullName)"
+        $cmakeArgs += "-DCURL_INCLUDE_DIR=$curlInc"
     } else {
-        $curlArgs = ""
+        Write-Warning "libcurl library not found under $FFmpegPath; Backblaze upload may fail"
     }
-} else {
-    $curlArgs = ""
 }
+
 if (-not (Test-Path ".\build")) {
     Write-Host "Configurando CMake..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag -DUSE_BACKBLAZE_UPLOAD=$b2Flag $curlArgs
 } else {
     Write-Host "Reconfigurando CMake con nuevos parámetros..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag -DUSE_BACKBLAZE_UPLOAD=$b2Flag $curlArgs
 }
+cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { Write-Error "Fallo la configuración de CMake."; exit 1 }
 
 # 6) Compilar el proyecto
@@ -207,5 +215,4 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
-Write-Host "`n✅ Build completada. Ejecutando Video Editor..." -ForegroundColor Green
-Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe -Parent)
+Write-Host "`n✅ Build completada. Ejecutando Video Editor..." -ForegroundColor GreenStart-Process -FilePath $exe -WorkingDirectory (Split-Path $exe -Parent)
