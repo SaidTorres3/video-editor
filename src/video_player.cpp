@@ -388,9 +388,18 @@ void VideoPlayer::SetMasterVolume(float volume)
 void VideoPlayer::PlaybackThreadFunction()
 {
     const double threshold = 0.02; // 20ms tolerance
+    auto wallClockStart = std::chrono::high_resolution_clock::now();
     while (playbackThreadRunning)
     {
         double audioTime = GetCurrentAudioTime();
+
+        // Fallback to wall clock time until audio clock begins advancing
+        if (audioTime <= 0.0)
+        {
+            audioTime = std::chrono::duration<double>(
+                std::chrono::high_resolution_clock::now() - wallClockStart).count();
+        }
+
         double targetPts = audioTime;
 
         while (currentPts < targetPts - threshold && playbackThreadRunning)
