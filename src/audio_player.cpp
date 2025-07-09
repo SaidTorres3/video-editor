@@ -68,6 +68,10 @@ bool AudioPlayer::Initialize() {
     if (FAILED(hr))
         return false;
 
+    hr = m_player->audioClient->GetService(__uuidof(IAudioClock), (void**)&m_player->audioClock);
+    if (FAILED(hr))
+        return false;
+
     m_player->audioInitialized = true;
     return true;
 }
@@ -85,6 +89,11 @@ void AudioPlayer::Cleanup() {
     {
         m_player->renderClient->Release();
         m_player->renderClient = nullptr;
+    }
+    if (m_player->audioClock)
+    {
+        m_player->audioClock->Release();
+        m_player->audioClock = nullptr;
     }
     if (m_player->audioClient)
     {

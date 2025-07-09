@@ -22,7 +22,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0), videoWindow(nullptr),
       d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
-      renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
+      renderClient(nullptr), audioClock(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
@@ -305,6 +305,21 @@ double VideoPlayer::GetCurrentTime() const
     return currentPts;
 }
 
+double VideoPlayer::GetCurrentAudioTime() const
+{
+    if (!audioClock || !audioInitialized)
+        return 0.0;
+
+    UINT64 deviceFrequency;
+    UINT64 currentPosition;
+    if (FAILED(audioClock->GetFrequency(&deviceFrequency)))
+        return 0.0;
+    if (FAILED(audioClock->GetPosition(&currentPosition, nullptr)))
+        return 0.0;
+
+    return static_cast<double>(currentPosition) / deviceFrequency;
+}
+
 void VideoPlayer::SetPosition(int x, int y, int width, int height)
 {
     m_renderer->SetPosition(x, y, width, height);
@@ -372,18 +387,32 @@ void VideoPlayer::SetMasterVolume(float volume)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
-    auto startTime = std::chrono::high_resolution_clock::now();
-    double startPts = currentPts;
+    const double threshold = 0.02; // 20ms tolerance
     while (playbackThreadRunning)
     {
-        if (!m_decoder->DecodeNextFrame(false))
-            break;
+        double audioTime = GetCurrentAudioTime();
+        double targetPts = audioTime;
 
-        double target = currentPts - startPts;
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
-        double delay = target - elapsed;
-        if (delay > 0)
-            std::this_thread::sleep_for(std::chrono::duration<double>(delay));
+        while (currentPts < targetPts - threshold && playbackThreadRunning)
+        {
+            if (!m_decoder->DecodeNextFrame(false))
+            {
+                playbackThreadRunning = false;
+                break;
+            }
+        }
+
+        if (std::abs(currentPts - targetPts) < threshold)
+        {
+            m_renderer->Render();
+        }
+        else if (currentPts > targetPts + threshold)
+        {
+            double sleepTime = currentPts - targetPts;
+            std::this_thread::sleep_for(std::chrono::duration<double>(sleepTime));
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     isPlaying = false;
 }
