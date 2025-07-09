@@ -155,31 +155,22 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 int br = maxBitrate * 1000;
                 vEncCtx->bit_rate       = br;
                 vEncCtx->rc_max_rate    = br;
-                vEncCtx->rc_min_rate    = br;
                 vEncCtx->rc_buffer_size = br * 2;
             }
             if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)
                 vEncCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             AVDictionary* encOpts = nullptr;
             av_dict_set(&encOpts, "preset", "fast", 0);
+            if (useNvenc)
+                av_dict_set(&encOpts, "profile", "high", 0);
             if (maxBitrate > 0) {
                 char brStr[32];
                 snprintf(brStr, sizeof(brStr), "%dk", maxBitrate);
                 av_dict_set(&encOpts, "b", brStr, 0);
-                av_dict_set(&encOpts, "minrate", brStr, 0);
                 av_dict_set(&encOpts, "maxrate", brStr, 0);
                 char bufStr[32];
                 snprintf(bufStr, sizeof(bufStr), "%dk", maxBitrate * 2);
                 av_dict_set(&encOpts, "bufsize", bufStr, 0);
-                av_dict_set(&encOpts, "nal-hrd", "cbr", 0);
-                if (useNvenc) {
-                    av_dict_set(&encOpts, "rc", "cbr", 0);
-                    av_dict_set(&encOpts, "cbr", "1", 0);
-                    av_dict_set(&encOpts, "cbr_padding", "1", 0);
-                    av_dict_set(&encOpts, "strict_gop", "1", 0);
-                    av_dict_set(&encOpts, "profile", "high", 0);
-                    av_dict_set(&encOpts, "rc-lookahead", "0", 0);
-                }
             }
             if (avcodec_open2(vEncCtx, vEnc, &encOpts) < 0) {
                 DebugLog("Failed to open H.264 encoder", true);
