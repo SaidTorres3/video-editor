@@ -105,10 +105,10 @@ You may enable both options at the same time to shrink the file and maximize com
 Link-time optimization is automatically enabled when `USE_STATIC_FFMPEG` is
 used to keep performance similar to the dynamic build.
 
-Alternatively you can use the provided `run.ps1` script:
+Alternatively you can use the provided `run.ps1` script. Pass `-Backblaze` if you want to build with automatic uploads enabled:
 
 ```powershell
-./run.ps1 -Static
+./run.ps1 -Static -Backblaze
 ```
 
 When `-Static` is used the script looks for FFmpeg in
@@ -181,7 +181,7 @@ working directory. Critical errors will also be shown in popup windows during
 export operations.
 
 ### Backblaze B2 Upload
-To enable automatic uploads set the CMake option `USE_BACKBLAZE_UPLOAD` to `ON` (requires libcurl). When built with this option and the environment variables `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_ID`, and `B2_BUCKET_NAME` defined, the exported video will be uploaded to the specified bucket. After the upload finishes a message box shows the download URL.
+To enable automatic uploads set the CMake option `USE_BACKBLAZE_UPLOAD` to `ON` (requires libcurl). When built with this option and the environment variables `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_ID`, and `B2_BUCKET_NAME` defined, the exported video will be uploaded to the specified bucket. After the upload finishes a message box shows the download URL. The `run.ps1` script exposes this flag via the `-Backblaze` switch.
 
 ## Future Enhancements
 - Audio effects and filters

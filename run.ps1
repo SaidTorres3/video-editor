@@ -1,7 +1,10 @@
 param(
     [string]$FFmpegPath = "C:\Program Files\ffmpeg",
-    [switch]$Static
+    [switch]$Static,
+    [switch]$Backblaze
 )
+# Usa -Backblaze para compilar con soporte opcional de subida a Backblaze B2
+# (requiere libcurl disponible en el sistema y variables de entorno B2_*)
 
 # Se recomienda instalar FFmpeg con:
 # vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
@@ -153,12 +156,13 @@ Write-Host "FFmpeg validado en: $FFmpegPath" -ForegroundColor Green
 
 # 5) Configurar/reconfigurar CMake
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
+$b2Flag = if ($Backblaze.IsPresent) { "ON" } else { "OFF" }
 if (-not (Test-Path ".\build")) {
     Write-Host "Configurando CMake..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag
+    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag -DUSE_BACKBLAZE_UPLOAD=$b2Flag
 } else {
     Write-Host "Reconfigurando CMake con nuevos parámetros..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag
+    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag -DUSE_BACKBLAZE_UPLOAD=$b2Flag
 }
 if ($LASTEXITCODE -ne 0) { Write-Error "Fallo la configuración de CMake."; exit 1 }
 
