@@ -395,7 +395,7 @@ void VideoPlayer::PlaybackThreadFunction()
         double audioTime = GetCurrentAudioTime();
 
         // Fallback to wall clock time until audio clock begins advancing
-        if (audioTime <= 0.0)
+        if (audioTime < 1e-6)
         {
             audioTime = std::chrono::duration<double>(
                 std::chrono::high_resolution_clock::now() - wallClockStart).count();
