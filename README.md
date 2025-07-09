@@ -40,6 +40,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Codec Options**: Copy video/audio codecs for a fast cut or convert to H.264
 - **Bitrate or Target Size**: When converting to H.264 you can either set a bitrate or specify a desired final size; only the chosen option is shown
 - **Progress Window**: A small window shows export progress in real time
+- **Automatic B2 Upload**: After exporting, the video is uploaded to Backblaze B2 when credentials are set
 
 ## Technical Implementation
 
@@ -178,6 +179,9 @@ The application supports all audio formats that FFmpeg can decode, including:
 All diagnostic output from the application is written to `debug.log` in the
 working directory. Critical errors will also be shown in popup windows during
 export operations.
+
+### Backblaze B2 Upload
+If the environment variables `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_ID`, and `B2_BUCKET_NAME` are defined, the exported video will be automatically uploaded to the specified Backblaze bucket. After the upload finishes a message box shows the download URL.
 
 ## Future Enhancements
 - Audio effects and filters

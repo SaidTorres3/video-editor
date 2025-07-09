@@ -15,6 +15,7 @@ extern double g_cutStartTime, g_cutEndTime;
 extern HWND g_hStatusText, g_hProgressBar;
 extern bool g_useNvenc;
 bool g_lastOperationWasExport = false;
+std::wstring g_lastExportedFilename;
 
 void OnSetStartClicked(HWND hwnd)
 {
@@ -102,6 +103,7 @@ void OnCutClicked(HWND hwnd)
         }
 
         ShowProgressWindow(hwnd);
+        g_lastExportedFilename = szFile;
         std::wstring outFile = szFile;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
@@ -169,6 +171,7 @@ void OnExportClicked(HWND hwnd)
         }
 
         ShowProgressWindow(hwnd);
+        g_lastExportedFilename = szFile;
         std::wstring outFile = szFile;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,

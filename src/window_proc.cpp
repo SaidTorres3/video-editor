@@ -6,6 +6,7 @@
 #include "file_handling.h"
 #include "ui_updates.h"
 #include "editing.h"
+#include "b2_upload.h"
 #include "utils.h"
 
 // Forward declarations for functions in other files
@@ -33,6 +34,7 @@ extern HWND g_hEditStartTime, g_hEditEndTime, g_hListBoxAudioTracks, g_hSliderTr
 extern double g_cutStartTime;
 extern double g_cutEndTime;
 extern bool g_lastOperationWasExport;
+extern std::wstring g_lastExportedFilename;
 extern HBRUSH g_hbrBackground;
 extern HFONT g_hFont;
 extern COLORREF g_textColor;
@@ -269,6 +271,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             UINT flags;
             if (success)
             {
+                if(g_lastOperationWasExport) {
+                    std::wstring url;
+                    if(UploadToBackblaze(g_lastExportedFilename, url)) {
+                        std::wstring m = L"Video exported and uploaded.\nURL: " + url;
+                        MessageBoxW(hwnd, m.c_str(), L"Upload Complete", MB_OK | MB_ICONINFORMATION);
+                    }
+                }
                 msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
                 title = L"Success";
                 flags = MB_OK | MB_ICONINFORMATION;

@@ -8,3 +8,4 @@ void OnCutClicked(HWND hwnd);
 void OnExportClicked(HWND hwnd);
 
 extern bool g_lastOperationWasExport;
+extern std::wstring g_lastExportedFilename;
