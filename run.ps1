@@ -157,12 +157,23 @@ Write-Host "FFmpeg validado en: $FFmpegPath" -ForegroundColor Green
 # 5) Configurar/reconfigurar CMake
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
 $b2Flag = if ($Backblaze.IsPresent) { "ON" } else { "OFF" }
+if ($Backblaze.IsPresent) {
+    $curlInc = Join-Path $FFmpegPath "include"
+    $curlLib = Get-ChildItem (Join-Path $FFmpegPath "lib") -Filter "libcurl*.lib" | Select-Object -First 1
+    if ($curlLib) {
+        $curlArgs = "-DCURL_LIBRARY=\"$($curlLib.FullName)\" -DCURL_INCLUDE_DIR=\"$curlInc\""
+    } else {
+        $curlArgs = ""
+    }
+} else {
+    $curlArgs = ""
+}
 if (-not (Test-Path ".\build")) {
     Write-Host "Configurando CMake..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag -DUSE_BACKBLAZE_UPLOAD=$b2Flag
+    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag -DUSE_BACKBLAZE_UPLOAD=$b2Flag $curlArgs
 } else {
     Write-Host "Reconfigurando CMake con nuevos parámetros..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag -DUSE_BACKBLAZE_UPLOAD=$b2Flag
+    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag -DUSE_BACKBLAZE_UPLOAD=$b2Flag $curlArgs
 }
 if ($LASTEXITCODE -ne 0) { Write-Error "Fallo la configuración de CMake."; exit 1 }
 
