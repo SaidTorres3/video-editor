@@ -182,6 +182,8 @@ bool VideoPlayer::Play()
         return false;
     isPlaying = true;
 
+    SetMasterClock(currentPts);
+
     m_audioPlayer->StartThread();
     playbackThreadRunning = true;
     playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
@@ -229,7 +231,7 @@ void VideoPlayer::Stop()
         // Clear audio buffers
         std::lock_guard<std::mutex> lock(audioMutex);
         for (auto& tr : audioTracks)
-            tr->buffer.clear();
+            tr->timedBuffer.clear();
     }
 }
 
@@ -246,6 +248,10 @@ void VideoPlayer::SeekToTime(double seconds)
 {
     if (!isLoaded)
         return;
+
+    bool wasPlaying = isPlaying;
+    if (wasPlaying)
+        Pause();
 
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
@@ -267,7 +273,7 @@ void VideoPlayer::SeekToTime(double seconds)
         {
             std::lock_guard<std::mutex> lock(audioMutex);
             for (auto& tr : audioTracks)
-                tr->buffer.clear();
+                tr->timedBuffer.clear();
         }
 
         currentFrame = (int64_t)(seconds * frameRate);
@@ -282,6 +288,9 @@ void VideoPlayer::SeekToTime(double seconds)
         if (currentPts >= seconds)
             break;
     }
+
+    if (wasPlaying)
+        Play();
 }
 
 double VideoPlayer::GetDuration() const
@@ -361,18 +370,15 @@ void VideoPlayer::SetMasterVolume(float volume)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
-    auto startTime = std::chrono::high_resolution_clock::now();
-    double startPts = currentPts;
     while (playbackThreadRunning)
     {
-        if (!m_decoder->DecodeNextFrame(false))
-            break;
-
-        double target = currentPts - startPts;
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
-        double delay = target - elapsed;
-        if (delay > 0)
-            std::this_thread::sleep_for(std::chrono::duration<double>(delay));
+        double masterTime = GetMasterClockTime();
+        if (currentPts <= masterTime + (1.0 / frameRate))
+        {
+            if (!m_decoder->DecodeNextFrame(false))
+                break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     isPlaying = false;
 }
@@ -404,3 +410,18 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+
+double VideoPlayer::GetMasterClockTime() const {
+    std::lock_guard<std::mutex> lock(m_timingMutex);
+    if (!isPlaying)
+        return currentPts;
+
+    auto now = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration<double>(now - m_playbackStartTime).count();
+    return m_masterClockOffset + elapsed;
+}
+
+void VideoPlayer::SetMasterClock(double time) {
+    std::lock_guard<std::mutex> lock(m_timingMutex);
+    m_playbackStartTime = std::chrono::high_resolution_clock::now();
+    m_masterClockOffset = time;}

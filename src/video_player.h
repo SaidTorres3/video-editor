@@ -30,6 +30,7 @@ extern "C"
 #include <deque>
 #include <atomic>
 #include <limits>
+#include <chrono>
 
 // Audio output using Windows Audio Session API (WASAPI)
 #include <mmdeviceapi.h>
@@ -41,6 +42,12 @@ class AudioPlayer;
 class VideoRenderer;
 class VideoCutter;
 
+struct AudioSample {
+    double timestamp;
+    int16_t left;
+    int16_t right;
+};
+
 // Audio track structure
 struct AudioTrack {
     int streamIndex;
@@ -50,11 +57,13 @@ struct AudioTrack {
     bool isMuted;
     float volume;
     std::string name;
-    std::deque<int16_t> buffer;
+    std::deque<AudioSample> timedBuffer;
     std::vector<int16_t> resampleBuffer;
+    double startTime;
     
-    AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f) {}
+    AudioTrack()
+        : streamIndex(-1), codecContext(nullptr), swrContext(nullptr), frame(nullptr),
+          isMuted(false), volume(1.0f), startTime(0.0) {}
 };
 
 class VideoPlayer
@@ -118,6 +127,11 @@ public:
     std::mutex audioMutex;
     std::condition_variable audioCondition;
     std::mutex decodeMutex; // protects decoder during seek
+
+    // Master clock for A/V sync
+    std::chrono::high_resolution_clock::time_point m_playbackStartTime;
+    double m_masterClockOffset;
+    mutable std::mutex m_timingMutex;
     
     // Audio settings
     int audioSampleRate;
@@ -155,6 +169,10 @@ public:
     int64_t GetCurrentFrame() const { return currentFrame; }
     int64_t GetTotalFrames() const { return totalFrames; }
 
+    // Master clock helpers
+    double GetMasterClockTime() const;
+    void SetMasterClock(double time);
+
     void SetPosition(int x, int y, int width, int height);
     void Render();
 
@@ -175,5 +193,4 @@ public:
     void OnTimer();
 
 private:
-    void CreateVideoWindow();
-    void PlaybackThreadFunction();    static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);};
+    void CreateVideoWindow();    void PlaybackThreadFunction();    static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);};

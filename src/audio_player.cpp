@@ -182,6 +182,13 @@ bool AudioPlayer::InitializeTracks() {
                 continue;
             }
 
+            // Record track start time for synchronization
+            if (m_player->formatContext->streams[i]->start_time != AV_NOPTS_VALUE)
+                track->startTime = m_player->formatContext->streams[i]->start_time *
+                                 av_q2d(m_player->formatContext->streams[i]->time_base);
+            else
+                track->startTime = 0.0;
+
             // Set track name
             AVDictionaryEntry *title = av_dict_get(m_player->formatContext->streams[i]->metadata, "title", nullptr, 0);
             if (title)
@@ -282,12 +289,20 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
     if (convertedSamples < 0)
         return;
 
-    // Store raw samples in track buffer
+    // Store samples with timestamps for synchronization
     {
         std::lock_guard<std::mutex> lock(m_player->audioMutex);
-        track->buffer.insert(track->buffer.end(),
-                             outPtr,
-                             outPtr + convertedSamples * m_player->audioChannels);
+        double sampleDuration = 1.0 / m_player->audioSampleRate;
+        for (int i = 0; i < convertedSamples; ++i) {
+            AudioSample s;
+            s.timestamp = framePts + i * sampleDuration;
+            s.left = outPtr[i * m_player->audioChannels];
+            if (m_player->audioChannels > 1)
+                s.right = outPtr[i * m_player->audioChannels + 1];
+            else
+                s.right = s.left;
+            track->timedBuffer.push_back(s);
+        }
     }
     m_player->audioCondition.notify_one();
 }
@@ -337,8 +352,10 @@ void AudioPlayer::AudioThreadFunction() {
         if (FAILED(hr))
             continue;
 
-        // Mix audio from all tracks
-        MixAudioTracks(pData, numFramesAvailable);
+        // Mix audio from all tracks using master clock
+        double masterTime = m_player->GetMasterClockTime();
+        double frameDuration = 1.0 / m_player->audioSampleRate;
+        MixSynchronizedAudio(pData, numFramesAvailable, masterTime, frameDuration);
 
         hr = m_player->renderClient->ReleaseBuffer(numFramesAvailable, 0);
         if (FAILED(hr))
@@ -351,21 +368,29 @@ void AudioPlayer::AudioThreadFunction() {
 }
 
 void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount) {
+    double masterTime = m_player->GetMasterClockTime();
+    double frameDuration = 1.0 / m_player->audioSampleRate;
+    MixSynchronizedAudio(outputBuffer, frameCount, masterTime, frameDuration);
+}
+
+void AudioPlayer::MixSynchronizedAudio(uint8_t* outputBuffer, int frameCount,
+                                       double masterTime, double frameDuration) {
     memset(outputBuffer, 0, frameCount * m_player->audioChannels * sizeof(int16_t));
     int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
-    int totalSamples = frameCount * m_player->audioChannels;
 
     for (int frame = 0; frame < frameCount; ++frame) {
+        double targetTime = masterTime + frame * frameDuration;
         std::vector<int32_t> mix(m_player->audioChannels, 0);
         for (auto& track : m_player->audioTracks) {
-            if (track->isMuted)
+            if (track->isMuted || track->timedBuffer.empty())
                 continue;
-            if (track->buffer.size() >= static_cast<size_t>(m_player->audioChannels)) {
-                for (int ch = 0; ch < m_player->audioChannels; ++ch) {
-                    int16_t val = track->buffer.front();
-                    track->buffer.pop_front();
-                    mix[ch] += static_cast<int32_t>(val * track->volume);
-                }
+
+            if (track->timedBuffer.front().timestamp <= targetTime) {
+                AudioSample s = track->timedBuffer.front();
+                track->timedBuffer.pop_front();
+                mix[0] += static_cast<int32_t>(s.left * track->volume);
+                if (m_player->audioChannels > 1)
+                    mix[1] += static_cast<int32_t>(s.right * track->volume);
             }
         }
         for (int ch = 0; ch < m_player->audioChannels; ++ch) {
@@ -378,9 +403,8 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount) {
 }
 
 bool AudioPlayer::HasBufferedAudio() const {
-    for (const auto& track : m_player->audioTracks)
-    {
-        if (!track->buffer.empty())
+    for (const auto& track : m_player->audioTracks) {
+        if (!track->timedBuffer.empty())
             return true;
     }
     return false;
