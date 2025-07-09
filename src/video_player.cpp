@@ -9,7 +9,6 @@
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
 #include <uxtheme.h>
-#include <algorithm>
 #include <cstring>
 #include <chrono>
 
@@ -26,8 +25,6 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
-      m_playbackStartTime(std::chrono::high_resolution_clock::now()),
-      m_masterClockOffset(0.0),
       originalVideoWndProc(nullptr)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
@@ -195,8 +192,6 @@ bool VideoPlayer::Play()
         return false;
     isPlaying = true;
 
-    SetMasterClock(currentPts);
-
     m_audioPlayer->StartThread();
     playbackThreadRunning = true;
     playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
@@ -244,7 +239,7 @@ void VideoPlayer::Stop()
         // Clear audio buffers
         std::lock_guard<std::mutex> lock(audioMutex);
         for (auto& tr : audioTracks)
-            tr->timedBuffer.clear();
+            tr->buffer.clear();
     }
 }
 
@@ -261,12 +256,6 @@ void VideoPlayer::SeekToTime(double seconds)
 {
     if (!isLoaded)
         return;
-
-    bool wasPlaying = isPlaying;
-    if (wasPlaying)
-    {
-        Pause();
-    }
 
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
@@ -288,25 +277,20 @@ void VideoPlayer::SeekToTime(double seconds)
         {
             std::lock_guard<std::mutex> lock(audioMutex);
             for (auto& tr : audioTracks)
-                tr->timedBuffer.clear();
+                tr->buffer.clear();
         }
 
         currentFrame = (int64_t)(seconds * frameRate);
         currentPts = seconds;
     }
 
-    // Decode a few frames after seeking
+    // Decode a few frames after seeking so the display updates immediately
     for (int i = 0; i < 3; ++i)
     {
         if (!m_decoder->DecodeNextFrame(true))
             break;
         if (currentPts >= seconds)
             break;
-    }
-
-    if (wasPlaying)
-    {
-        Play();
     }
 }
 
@@ -387,38 +371,22 @@ void VideoPlayer::SetMasterVolume(float volume)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
+    auto startTime = std::chrono::high_resolution_clock::now();
+    double startPts = currentPts;
     while (playbackThreadRunning)
     {
-        double masterTime = GetMasterClockTime();
+        if (!m_decoder->DecodeNextFrame(false))
+            break;
 
-        if (currentPts <= masterTime + (1.0 / frameRate))
-        {
-            if (!m_decoder->DecodeNextFrame(false))
-                break;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        double target = currentPts - startPts;
+        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
+        double delay = target - elapsed;
+        if (delay > 0)
+            std::this_thread::sleep_for(std::chrono::duration<double>(delay));
     }
     isPlaying = false;
 }
 
-double VideoPlayer::GetMasterClockTime() const
-{
-    std::lock_guard<std::mutex> lock(m_timingMutex);
-    if (!isPlaying)
-        return currentPts;
-
-    auto now = std::chrono::high_resolution_clock::now();
-    auto elapsed = std::chrono::duration<double>(now - m_playbackStartTime).count();
-    return m_masterClockOffset + elapsed;
-}
-
-void VideoPlayer::SetMasterClock(double time)
-{
-    std::lock_guard<std::mutex> lock(m_timingMutex);
-    m_playbackStartTime = std::chrono::high_resolution_clock::now();
-    m_masterClockOffset = time;
-}
 
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
