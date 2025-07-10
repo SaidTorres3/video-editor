@@ -1,6 +1,9 @@
 #pragma once
 
 #include "video_player.h"
+#include <memory>
+
+class AudioMixer;
 
 class VideoPlayer;
 
@@ -20,8 +23,8 @@ public:
 
 private:
     void AudioThreadFunction();
-    void MixAudioTracks(uint8_t* outputBuffer, int frameCount);
-    bool HasBufferedAudio() const;
 
     VideoPlayer* m_player;
+    std::unique_ptr<AudioMixer> m_mixer;
+    double m_nextAudioPts;
 };

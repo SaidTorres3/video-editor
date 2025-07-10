@@ -30,6 +30,7 @@ extern "C"
 #include <deque>
 #include <atomic>
 #include <limits>
+#include <chrono>
 
 // Audio output using Windows Audio Session API (WASAPI)
 #include <mmdeviceapi.h>
@@ -50,11 +51,12 @@ struct AudioTrack {
     bool isMuted;
     float volume;
     std::string name;
-    std::deque<int16_t> buffer;
-    std::vector<int16_t> resampleBuffer;
+    std::deque<float> buffer;
+    std::vector<float> resampleBuffer;
+    double nextPts; // pts of the first sample in buffer
     
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f) {}
+                   frame(nullptr), isMuted(false), volume(1.0f), nextPts(0.0) {}
 };
 
 class VideoPlayer
@@ -101,6 +103,8 @@ public:
     // Threaded playback
     std::thread playbackThread;
     std::atomic<bool> playbackThreadRunning;
+    std::chrono::high_resolution_clock::time_point masterStartTime;
+    double masterStartPts;
 
     // Audio components
     std::vector<std::unique_ptr<AudioTrack>> audioTracks;
