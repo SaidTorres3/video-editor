@@ -1,5 +1,7 @@
 #include "audio_player.h"
 #include "video_player.h"
+#include <cmath>
+#include <vector>
 
 AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player) {}
 
@@ -280,9 +282,11 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
     if (convertedSamples < 0)
         return;
 
-    // Store raw samples in track buffer
+    // Store raw samples in track buffer and timestamp
     {
         std::lock_guard<std::mutex> lock(m_player->audioMutex);
+        if (track->buffer.empty())
+            track->nextPts = framePts - m_player->startTimeOffset;
         track->buffer.insert(track->buffer.end(),
                              outPtr,
                              outPtr + convertedSamples * m_player->audioChannels);
@@ -351,16 +355,33 @@ void AudioPlayer::AudioThreadFunction() {
 void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount) {
     memset(outputBuffer, 0, frameCount * m_player->audioChannels * sizeof(int16_t));
     int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
-    int totalSamples = frameCount * m_player->audioChannels;
+
+    double baseTime = m_player->GetSyncTime();
+    double rate = static_cast<double>(m_player->audioSampleRate);
+    const double epsilon = 0.002; // 2ms tolerance
 
     for (int frame = 0; frame < frameCount; ++frame)
     {
+        double sampleTime = baseTime + frame / rate;
         std::vector<int32_t> mix(m_player->audioChannels, 0);
+
         for (auto& track : m_player->audioTracks)
         {
             if (track->isMuted)
                 continue;
-            if (track->buffer.size() >= static_cast<size_t>(m_player->audioChannels))
+
+            while (track->buffer.size() >= static_cast<size_t>(m_player->audioChannels) &&
+                   track->nextPts >= 0.0 &&
+                   track->nextPts < sampleTime - epsilon)
+            {
+                for (int ch = 0; ch < m_player->audioChannels; ++ch)
+                    track->buffer.pop_front();
+                track->nextPts += 1.0 / rate;
+            }
+
+            if (track->buffer.size() >= static_cast<size_t>(m_player->audioChannels) &&
+                track->nextPts >= 0.0 &&
+                fabs(track->nextPts - sampleTime) <= epsilon)
             {
                 for (int ch = 0; ch < m_player->audioChannels; ++ch)
                 {
@@ -368,8 +389,10 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount) {
                     track->buffer.pop_front();
                     mix[ch] += static_cast<int32_t>(val * track->volume);
                 }
+                track->nextPts += 1.0 / rate;
             }
         }
+
         for (int ch = 0; ch < m_player->audioChannels; ++ch)
         {
             int32_t v = mix[ch];

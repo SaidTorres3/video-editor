@@ -192,7 +192,10 @@ bool VideoPlayer::Play()
     if (!isLoaded || isPlaying)
         return false;
     isPlaying = true;
-    
+
+    playClockStart = std::chrono::high_resolution_clock::now();
+    playClockStartPts = currentPts;
+
     m_audioPlayer->StartThread();
     playbackThreadRunning = true;
     playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
@@ -240,7 +243,10 @@ void VideoPlayer::Stop()
         // Clear audio buffers
         std::lock_guard<std::mutex> lock(audioMutex);
         for (auto& tr : audioTracks)
+        {
             tr->buffer.clear();
+            tr->nextPts = -1.0;
+        }
     }
 }
 
@@ -278,7 +284,10 @@ void VideoPlayer::SeekToTime(double seconds)
         {
             std::lock_guard<std::mutex> lock(audioMutex);
             for (auto& tr : audioTracks)
+            {
                 tr->buffer.clear();
+                tr->nextPts = -1.0;
+            }
         }
 
         currentFrame = (int64_t)(seconds * frameRate);
@@ -303,6 +312,13 @@ double VideoPlayer::GetDuration() const
 double VideoPlayer::GetCurrentTime() const
 {
     return currentPts;
+}
+
+double VideoPlayer::GetSyncTime() const
+{
+    return std::chrono::duration<double>(
+               std::chrono::high_resolution_clock::now() - playClockStart)
+               .count() + playClockStartPts;
 }
 
 void VideoPlayer::SetPosition(int x, int y, int width, int height)

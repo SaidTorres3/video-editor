@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <string>
+#include <chrono>
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
 
@@ -52,9 +53,10 @@ struct AudioTrack {
     std::string name;
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
-    
+    double nextPts;
+
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f) {}
+                   frame(nullptr), isMuted(false), volume(1.0f), nextPts(-1.0) {}
 };
 
 class VideoPlayer
@@ -101,6 +103,10 @@ public:
     // Threaded playback
     std::thread playbackThread;
     std::atomic<bool> playbackThreadRunning;
+
+    // Playback clock for sync
+    std::chrono::high_resolution_clock::time_point playClockStart;
+    double playClockStartPts;
 
     // Audio components
     std::vector<std::unique_ptr<AudioTrack>> audioTracks;
@@ -151,6 +157,7 @@ public:
 
     double GetDuration() const;
     double GetCurrentTime() const;
+    double GetSyncTime() const;
     int64_t GetCurrentFrame() const { return currentFrame; }
     int64_t GetTotalFrames() const { return totalFrames; }
 
