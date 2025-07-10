@@ -27,4 +27,5 @@ private:
     VideoPlayer* m_player;
     std::unique_ptr<AudioMixer> m_mixer;
     double m_nextAudioPts;
+    bool m_outputFloat;
 };

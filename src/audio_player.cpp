@@ -6,11 +6,12 @@
 #include <memory>
 #include <cmath>
 #include <cstring>
+#include <mmreg.h>
 
 using namespace std::chrono;
 
 AudioPlayer::AudioPlayer(VideoPlayer* player)
-    : m_player(player), m_mixer(nullptr), m_nextAudioPts(0.0) {}
+    : m_player(player), m_mixer(nullptr), m_nextAudioPts(0.0), m_outputFloat(false) {}
 
 AudioPlayer::~AudioPlayer()
 {
@@ -41,15 +42,14 @@ bool AudioPlayer::Initialize()
     if (FAILED(hr))
         return false;
 
-    m_player->audioFormat = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
-    *m_player->audioFormat = *deviceFormat;
-    CoTaskMemFree(deviceFormat);
+    m_player->audioFormat = deviceFormat;
 
-    m_player->audioFormat->wFormatTag = WAVE_FORMAT_PCM;
-    m_player->audioFormat->wBitsPerSample = 16;
-    m_player->audioFormat->nBlockAlign = (m_player->audioFormat->nChannels * m_player->audioFormat->wBitsPerSample) / 8;
-    m_player->audioFormat->nAvgBytesPerSec = m_player->audioFormat->nSamplesPerSec * m_player->audioFormat->nBlockAlign;
-    m_player->audioFormat->cbSize = 0;
+    m_outputFloat = (m_player->audioFormat->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
+    if (m_player->audioFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        auto ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(m_player->audioFormat);
+        if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
+            m_outputFloat = true;
+    }
 
     hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
     if (FAILED(hr))
@@ -284,9 +284,15 @@ void AudioPlayer::AudioThreadFunction()
         if (FAILED(m_player->renderClient->GetBuffer(available, &pData)))
             continue;
 
-        int16_t* dest = reinterpret_cast<int16_t*>(pData);
-        for (UINT32 i = 0; i < available * m_player->audioChannels; ++i)
-            dest[i] = static_cast<int16_t>(std::lrintf(out[i] * 32767.f));
+        if (m_outputFloat) {
+            float* dest = reinterpret_cast<float*>(pData);
+            for (UINT32 i = 0; i < available * m_player->audioChannels; ++i)
+                dest[i] = out[i];
+        } else {
+            int16_t* dest = reinterpret_cast<int16_t*>(pData);
+            for (UINT32 i = 0; i < available * m_player->audioChannels; ++i)
+                dest[i] = static_cast<int16_t>(std::lrintf(out[i] * 32767.f));
+        }
 
         m_player->renderClient->ReleaseBuffer(available, 0);
         m_nextAudioPts += available * sampleDur;
