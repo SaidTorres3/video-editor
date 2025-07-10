@@ -109,9 +109,20 @@ void OnCutClicked(HWND hwnd)
         ShowProgressWindow(hwnd);
         std::wstring outFile = szFile;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
+            g_uploadSuccess = false;
+            g_uploadedUrl.clear();
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
+            if (ok && g_autoUpload) {
+                std::string url;
+                if (UploadToB2(outFile, url)) {
+                    int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
+                    g_uploadedUrl.assign(sz - 1, 0);
+                    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);
+                    g_uploadSuccess = true;
+                }
+            }
             PostMessage(hwnd, (WM_APP + 1), ok ? 1 : 0, 0); // WM_APP_CUT_DONE
         }).detach();
     }

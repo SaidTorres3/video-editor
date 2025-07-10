@@ -94,6 +94,7 @@ bool UploadToB2(const std::wstring& filePath, std::string& outUrl) {
     curl_easy_setopt(curl, CURLOPT_URL, uploadUrl.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
     curl_easy_setopt(curl, CURLOPT_READDATA, fp);
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)fsz);
     response.clear();

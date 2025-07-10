@@ -272,8 +272,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             UINT flags;
             if (success)
             {
-                if (g_lastOperationWasExport && g_autoUpload) {
-                    std::wstring m = L"Video successfully exported.";
+                if (g_autoUpload) {
+                    std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
                     if (g_uploadSuccess)
                         m += L"\nUploaded to B2:\n" + g_uploadedUrl;
                     else
