@@ -1,7 +1,9 @@
 #include "audio_player.h"
 #include "video_player.h"
+#include <cmath>
 
-AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player) {}
+AudioPlayer::AudioPlayer(VideoPlayer* player)
+    : m_player(player), m_running(false) {}
 
 AudioPlayer::~AudioPlayer() {
     Cleanup();
@@ -13,58 +15,67 @@ bool AudioPlayer::Initialize() {
         return false;
 
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                          __uuidof(IMMDeviceEnumerator), (void**)&m_player->deviceEnumerator);
+                          __uuidof(IMMDeviceEnumerator),
+                          reinterpret_cast<void**>(&m_player->deviceEnumerator));
     if (FAILED(hr))
         return false;
 
-    hr = m_player->deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &m_player->audioDevice);
+    hr = m_player->deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole,
+                                                             &m_player->audioDevice);
     if (FAILED(hr))
         return false;
 
-    hr = m_player->audioDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&m_player->audioClient);
+    hr = m_player->audioDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                                         reinterpret_cast<void**>(&m_player->audioClient));
     if (FAILED(hr))
         return false;
 
-    // Get the default audio format
-    WAVEFORMATEX *deviceFormat = nullptr;
-    hr = m_player->audioClient->GetMixFormat(&deviceFormat);
+    WAVEFORMATEX* mixFormat = nullptr;
+    hr = m_player->audioClient->GetMixFormat(&mixFormat);
     if (FAILED(hr))
         return false;
 
-    // Set up our desired format (16-bit stereo at 44.1kHz)
-    m_player->audioFormat = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
-    m_player->audioFormat->wFormatTag = WAVE_FORMAT_PCM;
-    m_player->audioFormat->nChannels = 2;
-    m_player->audioFormat->nSamplesPerSec = 44100;
-    m_player->audioFormat->wBitsPerSample = 16;
-    m_player->audioFormat->nBlockAlign = (m_player->audioFormat->nChannels * m_player->audioFormat->wBitsPerSample) / 8;
-    m_player->audioFormat->nAvgBytesPerSec = m_player->audioFormat->nSamplesPerSec * m_player->audioFormat->nBlockAlign;
-    m_player->audioFormat->cbSize = 0;
+    // Force 32-bit float output
+    WAVEFORMATEXTENSIBLE* fmtEx = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(mixFormat);
+    fmtEx->Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    fmtEx->Format.wBitsPerSample = 32;
+    fmtEx->Format.nBlockAlign = fmtEx->Format.nChannels * 4;
+    fmtEx->Format.nAvgBytesPerSec = fmtEx->Format.nBlockAlign * fmtEx->Format.nSamplesPerSec;
+    fmtEx->Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    fmtEx->Samples.wValidBitsPerSample = 32;
+    fmtEx->SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 
-    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
-    if (FAILED(hr))
-    {
-        // Try with device format if our format fails
-        CoTaskMemFree(m_player->audioFormat);
-        m_player->audioFormat = deviceFormat;
-        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
-        if (FAILED(hr))
-            return false;
-    }
-    else
-    {
-        CoTaskMemFree(deviceFormat);
+    REFERENCE_TIME bufferTime = 1000000; // 100ms
+    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
+                                           AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                           bufferTime, 0, mixFormat, nullptr);
+    if (FAILED(hr)) {
+        CoTaskMemFree(mixFormat);
+        return false;
     }
 
-    // Update audio configuration to match the initialized format
-    m_player->audioSampleRate = m_player->audioFormat->nSamplesPerSec;
-    m_player->audioChannels = m_player->audioFormat->nChannels;
+    hr = m_player->audioClient->GetService(__uuidof(IAudioRenderClient),
+                                           reinterpret_cast<void**>(&m_player->renderClient));
+    if (FAILED(hr)) {
+        CoTaskMemFree(mixFormat);
+        return false;
+    }
 
     hr = m_player->audioClient->GetBufferSize(&m_player->bufferFrameCount);
-    if (FAILED(hr))
+    if (FAILED(hr)) {
+        CoTaskMemFree(mixFormat);
         return false;
+    }
 
-    hr = m_player->audioClient->GetService(__uuidof(IAudioRenderClient), (void**)&m_player->renderClient);
+    m_player->audioFormat = mixFormat;
+    m_player->audioSampleRate = mixFormat->nSamplesPerSec;
+    m_player->audioChannels = mixFormat->nChannels;
+    m_player->audioSampleFormat = AV_SAMPLE_FMT_FLT;
+
+    m_player->audioEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (!m_player->audioEvent)
+        return false;
+    hr = m_player->audioClient->SetEventHandle(m_player->audioEvent);
     if (FAILED(hr))
         return false;
 
@@ -73,40 +84,31 @@ bool AudioPlayer::Initialize() {
 }
 
 void AudioPlayer::Cleanup() {
-    if (m_player->audioThreadRunning)
-    {
-        m_player->audioThreadRunning = false;
-        m_player->audioCondition.notify_all();
-        if (m_player->audioThread.joinable())
-            m_player->audioThread.join();
-    }
-
-    if (m_player->renderClient)
-    {
+    StopThread();
+    if (m_player->renderClient) {
         m_player->renderClient->Release();
         m_player->renderClient = nullptr;
     }
-    if (m_player->audioClient)
-    {
+    if (m_player->audioClient) {
         m_player->audioClient->Release();
         m_player->audioClient = nullptr;
     }
-    if (m_player->audioDevice)
-    {
+    if (m_player->audioDevice) {
         m_player->audioDevice->Release();
         m_player->audioDevice = nullptr;
     }
-    if (m_player->deviceEnumerator)
-    {
+    if (m_player->deviceEnumerator) {
         m_player->deviceEnumerator->Release();
         m_player->deviceEnumerator = nullptr;
     }
-    if (m_player->audioFormat)
-    {
+    if (m_player->audioFormat) {
         CoTaskMemFree(m_player->audioFormat);
         m_player->audioFormat = nullptr;
     }
-    
+    if (m_player->audioEvent) {
+        CloseHandle(m_player->audioEvent);
+        m_player->audioEvent = nullptr;
+    }
     m_player->audioInitialized = false;
     CoUninitialize();
 }
@@ -115,276 +117,214 @@ bool AudioPlayer::InitializeTracks() {
     if (!m_player->formatContext)
         return false;
 
-    // Find all audio streams
-    for (unsigned i = 0; i < m_player->formatContext->nb_streams; i++)
-    {
-        if (m_player->formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
-        {
-            auto track = std::make_unique<AudioTrack>();
-            track->streamIndex = i;
-            
-            // Get codec and create context
-            AVCodecParameters *codecpar = m_player->formatContext->streams[i]->codecpar;
-            const AVCodec *codec = avcodec_find_decoder(codecpar->codec_id);
-            if (!codec)
-                continue;
+    for (unsigned i = 0; i < m_player->formatContext->nb_streams; ++i) {
+        if (m_player->formatContext->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+            continue;
 
-            track->codecContext = avcodec_alloc_context3(codec);
-            if (!track->codecContext)
-                continue;
+        auto track = std::make_unique<AudioTrack>();
+        track->streamIndex = i;
 
-            if (avcodec_parameters_to_context(track->codecContext, codecpar) < 0)
-            {
-                avcodec_free_context(&track->codecContext);
-                continue;
-            }
-
-            if (avcodec_open2(track->codecContext, codec, nullptr) < 0)
-            {
-                avcodec_free_context(&track->codecContext);
-                continue;
-            }
-
-            // Allocate frame
-            track->frame = av_frame_alloc();
-            if (!track->frame)
-            {
-                avcodec_free_context(&track->codecContext);
-                continue;
-            }
-
-            // Set up resampler
-            track->swrContext = swr_alloc();
-            if (!track->swrContext)
-            {
-                av_frame_free(&track->frame);
-                avcodec_free_context(&track->codecContext);
-                continue;
-            }
-
-            // Configure resampler to convert to our output format
-            AVChannelLayout in_ch_layout, out_ch_layout;
-            av_channel_layout_from_mask(&in_ch_layout, track->codecContext->ch_layout.nb_channels == 1 ? AV_CH_LAYOUT_MONO : AV_CH_LAYOUT_STEREO);
-            av_channel_layout_from_mask(&out_ch_layout, AV_CH_LAYOUT_STEREO);
-            
-            av_opt_set_chlayout(track->swrContext, "in_chlayout", &in_ch_layout, 0);
-            av_opt_set_chlayout(track->swrContext, "out_chlayout", &out_ch_layout, 0);
-            av_opt_set_int(track->swrContext, "in_sample_rate", track->codecContext->sample_rate, 0);
-            av_opt_set_int(track->swrContext, "out_sample_rate", m_player->audioSampleRate, 0);
-            av_opt_set_sample_fmt(track->swrContext, "in_sample_fmt", track->codecContext->sample_fmt, 0);
-            av_opt_set_sample_fmt(track->swrContext, "out_sample_fmt", m_player->audioSampleFormat, 0);
-
-            if (swr_init(track->swrContext) < 0)
-            {
-                swr_free(&track->swrContext);
-                av_frame_free(&track->frame);
-                avcodec_free_context(&track->codecContext);
-                continue;
-            }
-
-            // Set track name
-            AVDictionaryEntry *title = av_dict_get(m_player->formatContext->streams[i]->metadata, "title", nullptr, 0);
-            if (title)
-                track->name = title->value;
-            else
-                track->name = "Audio Track " + std::to_string(m_player->audioTracks.size() + 1);
-
-            m_player->audioTracks.push_back(std::move(track));
+        AVCodecParameters* codecpar = m_player->formatContext->streams[i]->codecpar;
+        const AVCodec* codec = avcodec_find_decoder(codecpar->codec_id);
+        if (!codec)
+            continue;
+        track->codecContext = avcodec_alloc_context3(codec);
+        if (!track->codecContext)
+            continue;
+        if (avcodec_parameters_to_context(track->codecContext, codecpar) < 0) {
+            avcodec_free_context(&track->codecContext);
+            continue;
         }
+        if (avcodec_open2(track->codecContext, codec, nullptr) < 0) {
+            avcodec_free_context(&track->codecContext);
+            continue;
+        }
+
+        track->frame = av_frame_alloc();
+        if (!track->frame) {
+            avcodec_free_context(&track->codecContext);
+            continue;
+        }
+
+        track->swrContext = swr_alloc();
+        if (!track->swrContext) {
+            av_frame_free(&track->frame);
+            avcodec_free_context(&track->codecContext);
+            continue;
+        }
+
+        AVChannelLayout in_ch, out_ch;
+        av_channel_layout_default(&in_ch, track->codecContext->ch_layout.nb_channels);
+        av_channel_layout_default(&out_ch, m_player->audioChannels);
+        av_opt_set_chlayout(track->swrContext, "in_chlayout", &in_ch, 0);
+        av_opt_set_chlayout(track->swrContext, "out_chlayout", &out_ch, 0);
+        av_opt_set_int(track->swrContext, "in_sample_rate", track->codecContext->sample_rate, 0);
+        av_opt_set_int(track->swrContext, "out_sample_rate", m_player->audioSampleRate, 0);
+        av_opt_set_sample_fmt(track->swrContext, "in_sample_fmt", track->codecContext->sample_fmt, 0);
+        av_opt_set_sample_fmt(track->swrContext, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
+        if (swr_init(track->swrContext) < 0) {
+            swr_free(&track->swrContext);
+            av_frame_free(&track->frame);
+            avcodec_free_context(&track->codecContext);
+            continue;
+        }
+
+        AVDictionaryEntry* title = av_dict_get(m_player->formatContext->streams[i]->metadata,
+                                               "title", nullptr, 0);
+        track->name = title ? title->value : "Audio Track " + std::to_string(m_player->audioTracks.size() + 1);
+
+        m_player->audioTracks.push_back(std::move(track));
     }
 
     return !m_player->audioTracks.empty();
 }
 
 void AudioPlayer::CleanupTracks() {
-    for (auto& track : m_player->audioTracks)
-    {
-        if (track->swrContext)
-            swr_free(&track->swrContext);
-        if (track->frame)
-            av_frame_free(&track->frame);
-        if (track->codecContext)
-            avcodec_free_context(&track->codecContext);
+    for (auto& t : m_player->audioTracks) {
+        if (t->swrContext)
+            swr_free(&t->swrContext);
+        if (t->frame)
+            av_frame_free(&t->frame);
+        if (t->codecContext)
+            avcodec_free_context(&t->codecContext);
     }
     m_player->audioTracks.clear();
 }
 
 void AudioPlayer::StartThread() {
-    if (!m_player->audioTracks.empty() && m_player->audioInitialized)
-    {
-        HRESULT hr = m_player->audioClient->Start();
-        if (FAILED(hr))
-        {
-            // Continue without audio or handle error appropriately
-        }
-        m_player->audioThreadRunning = true;
-        m_player->audioThread = std::thread(&AudioPlayer::AudioThreadFunction, this);
-    }
-}
-
-void AudioPlayer::StopThread() {
-    if (m_player->audioThreadRunning)
-    {
-        m_player->audioThreadRunning = false;
-        m_player->audioCondition.notify_all();
-        if (m_player->audioThread.joinable())
-            m_player->audioThread.join();
-    }
-}
-
-void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
     if (!m_player->audioInitialized || m_player->audioTracks.empty())
         return;
 
-    // Find the corresponding audio track
-    AudioTrack *track = nullptr;
-    for (auto& t : m_player->audioTracks)
-    {
-        if (t->streamIndex == audioPacket->stream_index)
-        {
+    if (FAILED(m_player->audioClient->Start()))
+        return;
+
+    m_running = true;
+    m_thread = std::thread(&AudioPlayer::AudioThread, this);
+}
+
+void AudioPlayer::StopThread() {
+    if (!m_running)
+        return;
+    m_running = false;
+    if (m_player->audioEvent)
+        SetEvent(m_player->audioEvent);
+    if (m_thread.joinable())
+        m_thread.join();
+    if (m_player->audioClient)
+        m_player->audioClient->Stop();
+}
+
+void AudioPlayer::ProcessFrame(AVPacket* packet) {
+    if (!m_player->audioInitialized)
+        return;
+
+    AudioTrack* track = nullptr;
+    for (auto& t : m_player->audioTracks) {
+        if (t->streamIndex == packet->stream_index) {
             track = t.get();
             break;
         }
     }
-
     if (!track || track->isMuted)
         return;
 
-    // Decode audio frame
-    int ret = avcodec_send_packet(track->codecContext, audioPacket);
-    if (ret < 0)
+    if (avcodec_send_packet(track->codecContext, packet) < 0)
+        return;
+    if (avcodec_receive_frame(track->codecContext, track->frame) < 0)
         return;
 
-    ret = avcodec_receive_frame(track->codecContext, track->frame);
-    if (ret < 0)
-        return;
-
-    AVStream *as = m_player->formatContext->streams[track->streamIndex];
-    double framePts = 0.0;
+    AVStream* as = m_player->formatContext->streams[track->streamIndex];
+    double pts = 0.0;
     if (track->frame->best_effort_timestamp != AV_NOPTS_VALUE)
-        framePts = track->frame->best_effort_timestamp * av_q2d(as->time_base);
+        pts = track->frame->best_effort_timestamp * av_q2d(as->time_base);
     else if (track->frame->pts != AV_NOPTS_VALUE)
-        framePts = track->frame->pts * av_q2d(as->time_base);
-    if (framePts - m_player->startTimeOffset < 0.0)
-        return; // Drop early audio
+        pts = track->frame->pts * av_q2d(as->time_base);
+    pts -= m_player->startTimeOffset;
+    if (pts < 0.0)
+        return;
 
-    // Resample audio
     int outSamples = swr_get_out_samples(track->swrContext, track->frame->nb_samples);
     size_t needed = static_cast<size_t>(outSamples * m_player->audioChannels);
     if (track->resampleBuffer.size() < needed)
         track->resampleBuffer.resize(needed);
-    int16_t* outPtr = track->resampleBuffer.data();
-
-    int convertedSamples = swr_convert(track->swrContext, (uint8_t**)&outPtr, outSamples,
-                                        (const uint8_t**)track->frame->data, track->frame->nb_samples);
-    if (convertedSamples < 0)
+    float* outPtr = track->resampleBuffer.data();
+    int converted = swr_convert(track->swrContext, reinterpret_cast<uint8_t**>(&outPtr), outSamples,
+                                const_cast<const uint8_t**>(track->frame->data), track->frame->nb_samples);
+    if (converted <= 0)
         return;
 
-    // Store raw samples in track buffer
-    {
-        std::lock_guard<std::mutex> lock(m_player->audioMutex);
-        track->buffer.insert(track->buffer.end(),
-                             outPtr,
-                             outPtr + convertedSamples * m_player->audioChannels);
-    }
-    m_player->audioCondition.notify_one();
+    std::lock_guard<std::mutex> lock(m_player->audioMutex);
+    if (track->buffer.empty())
+        track->nextPts = pts;
+    track->buffer.insert(track->buffer.end(), outPtr, outPtr + converted * m_player->audioChannels);
 }
 
 void AudioPlayer::SetMasterVolume(float volume) {
-    float clampedVolume = volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume);
-    for (auto& track : m_player->audioTracks)
-    {
-        track->volume = clampedVolume;
-    }
+    float v = volume < 0.f ? 0.f : (volume > 2.f ? 2.f : volume);
+    for (auto& t : m_player->audioTracks)
+        t->volume = v;
 }
 
-void AudioPlayer::AudioThreadFunction() {
-    if (!m_player->audioClient || !m_player->renderClient)
-        return;
-
-    HRESULT hr; // Declare hr here
-
-    while (m_player->audioThreadRunning)
-    {
-        std::unique_lock<std::mutex> lock(m_player->audioMutex);
-        m_player->audioCondition.wait(lock, [this] { return HasBufferedAudio() || !m_player->audioThreadRunning; });
-
-        if (!m_player->audioThreadRunning)
+void AudioPlayer::AudioThread() {
+    HANDLE evt = m_player->audioEvent;
+    while (m_running) {
+        if (WaitForSingleObject(evt, INFINITE) != WAIT_OBJECT_0)
+            continue;
+        if (!m_running)
             break;
-
-        if (!HasBufferedAudio())
+        UINT32 padding = 0;
+        if (FAILED(m_player->audioClient->GetCurrentPadding(&padding)))
             continue;
-
-        // Get available buffer space
-        UINT32 numFramesPadding;
-        hr = m_player->audioClient->GetCurrentPadding(&numFramesPadding);
-        if (FAILED(hr))
+        UINT32 frames = m_player->bufferFrameCount - padding;
+        if (frames == 0)
             continue;
-
-        UINT32 numFramesAvailable = m_player->bufferFrameCount - numFramesPadding;
-        if (numFramesAvailable == 0)
-        {
-            lock.unlock();
-            Sleep(1);
+        BYTE* data = nullptr;
+        if (FAILED(m_player->renderClient->GetBuffer(frames, &data)))
             continue;
-        }
-
-        // Get render buffer
-        BYTE *pData;
-        hr = m_player->renderClient->GetBuffer(numFramesAvailable, &pData);
-        if (FAILED(hr))
-            continue;
-
-        // Mix audio from all tracks
-        MixAudioTracks(pData, numFramesAvailable);
-
-        hr = m_player->renderClient->ReleaseBuffer(numFramesAvailable, 0);
-        if (FAILED(hr))
-            continue;
-
-        lock.unlock();
+        Mix(reinterpret_cast<float*>(data), frames);
+        m_player->renderClient->ReleaseBuffer(frames, 0);
     }
-
-    m_player->audioClient->Stop();
 }
 
-void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount) {
-    memset(outputBuffer, 0, frameCount * m_player->audioChannels * sizeof(int16_t));
-    int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
-    int totalSamples = frameCount * m_player->audioChannels;
+void AudioPlayer::Mix(float* output, UINT32 frames) {
+    std::fill(output, output + frames * m_player->audioChannels, 0.f);
+    double baseTime = m_player->GetSyncTime();
+    double rate = static_cast<double>(m_player->audioSampleRate);
+    const double eps = 0.001; // 1ms tolerance
 
-    for (int frame = 0; frame < frameCount; ++frame)
-    {
-        std::vector<int32_t> mix(m_player->audioChannels, 0);
-        for (auto& track : m_player->audioTracks)
-        {
-            if (track->isMuted)
+    for (UINT32 f = 0; f < frames; ++f) {
+        double t = baseTime + static_cast<double>(f) / rate;
+        for (auto& tr : m_player->audioTracks) {
+            if (tr->isMuted)
                 continue;
-            if (track->buffer.size() >= static_cast<size_t>(m_player->audioChannels))
-            {
-                for (int ch = 0; ch < m_player->audioChannels; ++ch)
-                {
-                    int16_t val = track->buffer.front();
-                    track->buffer.pop_front();
-                    mix[ch] += static_cast<int32_t>(val * track->volume);
+            while (tr->buffer.size() >= static_cast<size_t>(m_player->audioChannels) &&
+                   tr->nextPts < t - eps) {
+                for (int c = 0; c < m_player->audioChannels; ++c)
+                    tr->buffer.pop_front();
+                tr->nextPts += 1.0 / rate;
+            }
+            if (tr->buffer.size() >= static_cast<size_t>(m_player->audioChannels) &&
+                std::fabs(tr->nextPts - t) <= eps) {
+                for (int c = 0; c < m_player->audioChannels; ++c) {
+                    float sample = tr->buffer.front();
+                    tr->buffer.pop_front();
+                    output[f * m_player->audioChannels + c] += sample * tr->volume;
                 }
+                tr->nextPts += 1.0 / rate;
             }
         }
-        for (int ch = 0; ch < m_player->audioChannels; ++ch)
-        {
-            int32_t v = mix[ch];
-            if (v > 32767) v = 32767;
-            if (v < -32768) v = -32768;
-            out[frame * m_player->audioChannels + ch] = static_cast<int16_t>(v);
-        }
+    }
+
+    for (UINT32 i = 0; i < frames * m_player->audioChannels; ++i) {
+        float& v = output[i];
+        if (v > 1.f) v = 1.f;
+        if (v < -1.f) v = -1.f;
     }
 }
 
-bool AudioPlayer::HasBufferedAudio() const {
-    for (const auto& track : m_player->audioTracks)
-    {
-        if (!track->buffer.empty())
+bool AudioPlayer::TracksHaveData() const {
+    for (const auto& t : m_player->audioTracks)
+        if (!t->buffer.empty())
             return true;
-    }
     return false;
 }
