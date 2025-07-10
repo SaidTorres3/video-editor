@@ -2,6 +2,7 @@
 #define OPTIONS_WINDOW_H
 
 #include <windows.h>
+#include <string>
 
 // Option identifiers used in the options window
 #define ID_RADIO_ENCODER_LIBX264 1021

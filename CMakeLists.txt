@@ -22,11 +22,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Define UNICODE for Windows API calls
 add_compile_definitions(UNICODE _UNICODE)
 
-# Set FFmpeg path - UPDATE THIS PATH to where you extracted FFmpeg
-set(FFMPEG_ROOT "C:/Program Files/ffmpeg" CACHE PATH "Path to FFmpeg")
+# Set the vcpkg installation path
+# Set FFmpeg path to vcpkg installation
+set(FFMPEG_ROOT "C:/tools/vcpkg/installed/x64-windows-static" CACHE PATH "Path to FFmpeg vcpkg installation")
 
 # Find FFmpeg libraries
-find_path(FFMPEG_INCLUDE_DIR 
+find_path(FFMPEG_INCLUDE_DIR
     NAMES libavcodec/avcodec.h
     PATHS ${FFMPEG_ROOT}/include
     NO_DEFAULT_PATH
@@ -62,14 +63,18 @@ find_library(SWRESAMPLE_LIBRARY
     NO_DEFAULT_PATH
 )
 
+# Find packages
 find_path(CURL_INCLUDE_DIR
     NAMES curl/curl.h
-    PATHS ${FFMPEG_ROOT}/include
-    NO_DEFAULT_PATH)
+    PATHS C:/tools/vcpkg/installed/x64-windows-static/include
+    NO_DEFAULT_PATH
+)
+
 find_library(CURL_LIBRARY
-    NAMES libcurl_a libcurl
-    PATHS ${FFMPEG_ROOT}/lib
-    NO_DEFAULT_PATH)
+    NAMES libcurl
+    PATHS C:/tools/vcpkg/installed/x64-windows-static/lib
+    NO_DEFAULT_PATH
+)
 
 # Create the executable
 add_executable(VideoEditor WIN32
@@ -83,10 +88,10 @@ add_executable(VideoEditor WIN32
 # Headers live in src/
 target_include_directories(VideoEditor PRIVATE src)
 
-# Include FFmpeg headers
 if(FFMPEG_INCLUDE_DIR)
     target_include_directories(VideoEditor PRIVATE ${FFMPEG_INCLUDE_DIR})
 endif()
+
 if(CURL_INCLUDE_DIR)
     target_include_directories(VideoEditor PRIVATE ${CURL_INCLUDE_DIR})
 endif()
@@ -122,12 +127,14 @@ target_link_libraries(VideoEditor PRIVATE
     mf
     mfuuid
     strmiids
+    crypt32
+    advapi32
+    ${CURL_LIBRARY}
     ${AVCODEC_LIBRARY}
     ${AVFORMAT_LIBRARY}
     ${AVUTIL_LIBRARY}
     ${SWSCALE_LIBRARY}
     ${SWRESAMPLE_LIBRARY}
-    ${CURL_LIBRARY}
     ${FFMPEG_EXTRA_LIBS}
 )
 
