@@ -27,7 +27,6 @@ extern "C"
 #include <memory>
 #include <thread>
 #include <mutex>
-#include <deque>
 #include <atomic>
 #include <limits>
 
@@ -50,7 +49,7 @@ struct AudioTrack {
     bool isMuted;
     float volume;
     std::string name;
-    std::deque<float> buffer;
+    std::vector<float> buffer;
     std::vector<float> resampleBuffer;
     double nextPts;
 

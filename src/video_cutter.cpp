@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <deque>
 #include <commctrl.h>
 
 // Simple debug logging helper that also writes to a file and can show popups
