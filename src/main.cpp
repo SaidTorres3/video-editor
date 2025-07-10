@@ -165,7 +165,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
             }
             case 'K':
             case 'k':
-                g_videoPlayer->Pause();
+                if (g_videoPlayer->IsPlaying())
+                    g_videoPlayer->Pause();
+                else
+                    g_videoPlayer->Play();
                 break;
             case VK_OEM_COMMA:
             {
