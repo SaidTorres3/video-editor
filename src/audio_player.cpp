@@ -127,10 +127,24 @@ bool AudioPlayer::InitializeTracks()
             continue;
         }
 
-        track->swrContext = swr_alloc_set_opts(nullptr,
-            av_get_default_channel_layout(m_player->audioChannels), AV_SAMPLE_FMT_FLT, m_player->audioSampleRate,
-            av_get_default_channel_layout(track->codecContext->ch_layout.nb_channels), track->codecContext->sample_fmt, track->codecContext->sample_rate,
-            0, nullptr);
+        AVChannelLayout inLayout{};
+        av_channel_layout_default(&inLayout,
+                                  track->codecContext->ch_layout.nb_channels > 0 ?
+                                      track->codecContext->ch_layout.nb_channels : 2);
+        AVChannelLayout outLayout{};
+        av_channel_layout_default(&outLayout, m_player->audioChannels);
+
+        track->swrContext = swr_alloc();
+        if (track->swrContext)
+        {
+            av_opt_set_chlayout(track->swrContext, "in_chlayout", &inLayout, 0);
+            av_opt_set_chlayout(track->swrContext, "out_chlayout", &outLayout, 0);
+            av_opt_set_int(track->swrContext, "in_sample_rate", track->codecContext->sample_rate, 0);
+            av_opt_set_int(track->swrContext, "out_sample_rate", m_player->audioSampleRate, 0);
+            av_opt_set_sample_fmt(track->swrContext, "in_sample_fmt", track->codecContext->sample_fmt, 0);
+            av_opt_set_sample_fmt(track->swrContext, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
+        }
+
         if (!track->swrContext || swr_init(track->swrContext) < 0)
         {
             if (track->swrContext) swr_free(&track->swrContext);
