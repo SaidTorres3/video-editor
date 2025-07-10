@@ -1,6 +1,7 @@
 #include "audio_player.h"
 #include "video_player.h"
 #include <cmath>
+#include <algorithm>
 
 AudioPlayer::AudioPlayer(VideoPlayer* player)
     : m_player(player), m_running(false) {}
@@ -288,31 +289,39 @@ void AudioPlayer::AudioThread() {
 
 void AudioPlayer::Mix(float* output, UINT32 frames) {
     std::fill(output, output + frames * m_player->audioChannels, 0.f);
+
     double baseTime = m_player->GetSyncTime();
     double rate = static_cast<double>(m_player->audioSampleRate);
-    const double eps = 0.001; // 1ms tolerance
 
-    for (UINT32 f = 0; f < frames; ++f) {
-        double t = baseTime + static_cast<double>(f) / rate;
-        for (auto& tr : m_player->audioTracks) {
-            if (tr->isMuted)
-                continue;
-            while (tr->buffer.size() >= static_cast<size_t>(m_player->audioChannels) &&
-                   tr->nextPts < t - eps) {
-                for (int c = 0; c < m_player->audioChannels; ++c)
-                    tr->buffer.pop_front();
-                tr->nextPts += 1.0 / rate;
-            }
-            if (tr->buffer.size() >= static_cast<size_t>(m_player->audioChannels) &&
-                std::fabs(tr->nextPts - t) <= eps) {
-                for (int c = 0; c < m_player->audioChannels; ++c) {
-                    float sample = tr->buffer.front();
-                    tr->buffer.pop_front();
-                    output[f * m_player->audioChannels + c] += sample * tr->volume;
-                }
-                tr->nextPts += 1.0 / rate;
-            }
+    std::lock_guard<std::mutex> lock(m_player->audioMutex);
+    for (auto& tr : m_player->audioTracks) {
+        if (tr->isMuted || tr->buffer.empty())
+            continue;
+
+        double diff = tr->nextPts - baseTime;
+        int64_t offset = static_cast<int64_t>(std::llround(diff * rate));
+
+        int srcStart = 0;
+        int dstStart = 0;
+        if (offset < 0) {
+            srcStart = static_cast<int>(-offset);
+        } else {
+            dstStart = static_cast<int>(offset);
         }
+
+        int available = static_cast<int>(tr->buffer.size() / m_player->audioChannels) - srcStart;
+        if (available <= 0 || dstStart >= static_cast<int>(frames))
+            continue;
+
+        int mixFrames = std::min<int>(frames - dstStart, available);
+        const float* src = tr->buffer.data() + srcStart * m_player->audioChannels;
+        float* dst = output + dstStart * m_player->audioChannels;
+        for (int i = 0; i < mixFrames * m_player->audioChannels; ++i)
+            dst[i] += src[i] * tr->volume;
+
+        int consumed = srcStart + mixFrames;
+        tr->buffer.erase(tr->buffer.begin(), tr->buffer.begin() + consumed * m_player->audioChannels);
+        tr->nextPts += static_cast<double>(consumed) / rate;
     }
 
     for (UINT32 i = 0; i < frames * m_player->audioChannels; ++i) {
