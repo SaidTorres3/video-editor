@@ -49,12 +49,16 @@ struct AudioTrack {
     AVFrame *frame;
     bool isMuted;
     float volume;
+    double bufferPts;
+    bool ptsValid;
     std::string name;
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
-    
-    AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f) {}
+
+    AudioTrack()
+        : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
+          frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0),
+          ptsValid(false) {}
 };
 
 class VideoPlayer

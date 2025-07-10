@@ -240,7 +240,10 @@ void VideoPlayer::Stop()
         // Clear audio buffers
         std::lock_guard<std::mutex> lock(audioMutex);
         for (auto& tr : audioTracks)
+        {
             tr->buffer.clear();
+            tr->ptsValid = false;
+        }
     }
 }
 
@@ -278,7 +281,10 @@ void VideoPlayer::SeekToTime(double seconds)
         {
             std::lock_guard<std::mutex> lock(audioMutex);
             for (auto& tr : audioTracks)
+            {
                 tr->buffer.clear();
+                tr->ptsValid = false;
+            }
         }
 
         currentFrame = (int64_t)(seconds * frameRate);
