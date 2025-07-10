@@ -132,33 +132,40 @@ if (-not $Static.IsPresent) {
 if ($Static.IsPresent) {
     $required = @(
         "$FFmpegPath\include\libavcodec\avcodec.h",
-        "$FFmpegPath\lib\avcodec.lib"
+        "$FFmpegPath\lib\avcodec.lib",
+        "$FFmpegPath\include\curl\curl.h",
+        "$FFmpegPath\lib\libcurl.lib"
     )
 } else {
     $required = @(
         "$FFmpegPath\include\libavcodec\avcodec.h",
         "$FFmpegPath\lib\avcodec.lib",
-        "$FFmpegPath\bin\ffmpeg.exe"
+        "$FFmpegPath\bin\ffmpeg.exe",
+        "$FFmpegPath\include\curl\curl.h",
+        "$FFmpegPath\lib\libcurl.lib"
     )
 }
 
 foreach ($p in $required) {
     if (-not (Test-Path $p)) {
-        Write-Host "ERROR: No se encontró FFmpeg en: $p" -ForegroundColor Red
-        Write-Host "Asegúrate de descargar el paquete 'dev' y extraerlo correctamente." -ForegroundColor Yellow
+        Write-Host "ERROR: No se encontró un componente requerido en: $p" -ForegroundColor Red
+        Write-Host "Asegúrate de que las librerías (FFmpeg, curl, etc.) están instaladas con vcpkg y la ruta es correcta." -ForegroundColor Yellow
         exit 1
     }
 }
 Write-Host "FFmpeg validado en: $FFmpegPath" -ForegroundColor Green
 
+$env:CMAKE_TOOLCHAIN_FILE = "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
+Write-Host "Usando vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor Cyan
+
 # 5) Configurar/reconfigurar CMake
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
 if (-not (Test-Path ".\build")) {
     Write-Host "Configurando CMake..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag
+    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag
 } else {
     Write-Host "Reconfigurando CMake con nuevos parámetros..." -ForegroundColor Yellow
-    cmake -S . -B build -DFFMPEG_ROOT="$FFmpegPath" -DUSE_STATIC_FFMPEG=$staticFlag
+    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag
 }
 if ($LASTEXITCODE -ne 0) { Write-Error "Fallo la configuración de CMake."; exit 1 }
 
