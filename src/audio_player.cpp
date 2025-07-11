@@ -1,6 +1,7 @@
 #include "audio_player.h"
 #include "video_player.h"
 #include <chrono>
+#include <limits>
 
 AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player), m_framesWritten(0) {}
 
@@ -360,6 +361,10 @@ void AudioPlayer::AudioThreadFunction() {
         if (framesNeeded > available)
             framesNeeded = available;
 
+        int buffered = GetAvailableFrameCount();
+        if (framesNeeded > static_cast<UINT32>(buffered))
+            framesNeeded = static_cast<UINT32>(buffered);
+
         if (framesNeeded == 0)
         {
             lock.unlock();
@@ -437,4 +442,21 @@ bool AudioPlayer::HasBufferedAudio() const {
             return true;
     }
     return false;
+}
+
+int AudioPlayer::GetAvailableFrameCount() const {
+    int minFrames = INT_MAX;
+    bool hasTrack = false;
+    for (const auto& track : m_player->audioTracks)
+    {
+        if (track->isMuted)
+            continue;
+        int frames = static_cast<int>(track->buffer.size() / m_player->audioChannels);
+        if (frames < minFrames)
+            minFrames = frames;
+        hasTrack = true;
+    }
+    if (!hasTrack || minFrames == INT_MAX)
+        return 0;
+    return minFrames;
 }
