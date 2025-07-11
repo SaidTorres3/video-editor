@@ -29,6 +29,7 @@ extern "C"
 #include <condition_variable>
 #include <deque>
 #include <atomic>
+#include <chrono>
 #include <limits>
 
 // Audio output using Windows Audio Session API (WASAPI)
@@ -52,9 +53,10 @@ struct AudioTrack {
     std::string name;
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
-    
+    double bufferPts;
+
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f) {}
+                   frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0) {}
 };
 
 class VideoPlayer
@@ -123,6 +125,10 @@ public:
     int audioSampleRate;
     int audioChannels;
     AVSampleFormat audioSampleFormat;
+
+    // Shared master clock for A/V synchronization
+    std::chrono::high_resolution_clock::time_point masterStartTime;
+    double masterStartPts;
 
     // Currently loaded file path
     std::wstring loadedFilename;

@@ -192,7 +192,10 @@ bool VideoPlayer::Play()
     if (!isLoaded || isPlaying)
         return false;
     isPlaying = true;
-    
+
+    masterStartPts = currentPts;
+    masterStartTime = std::chrono::high_resolution_clock::now();
+
     m_audioPlayer->StartThread();
     playbackThreadRunning = true;
     playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
@@ -372,8 +375,8 @@ void VideoPlayer::SetMasterVolume(float volume)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
-    auto startTime = std::chrono::high_resolution_clock::now();
-    double startPts = currentPts;
+    auto startTime = masterStartTime;
+    double startPts = masterStartPts;
     while (playbackThreadRunning)
     {
         if (!m_decoder->DecodeNextFrame(false))

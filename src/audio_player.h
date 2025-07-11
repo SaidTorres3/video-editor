@@ -1,6 +1,7 @@
 #pragma once
 
 #include "video_player.h"
+#include <chrono>
 
 class VideoPlayer;
 
@@ -20,8 +21,9 @@ public:
 
 private:
     void AudioThreadFunction();
-    void MixAudioTracks(uint8_t* outputBuffer, int frameCount);
+    void MixAudioTracks(uint8_t* outputBuffer, int frameCount, double startPts);
     bool HasBufferedAudio() const;
 
     VideoPlayer* m_player;
+    int64_t m_framesWritten;
 };

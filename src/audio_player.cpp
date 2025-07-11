@@ -1,7 +1,8 @@
 #include "audio_player.h"
 #include "video_player.h"
+#include <chrono>
 
-AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player) {}
+AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player), m_framesWritten(0) {}
 
 AudioPlayer::~AudioPlayer() {
     Cleanup();
@@ -42,13 +43,19 @@ bool AudioPlayer::Initialize() {
     m_player->audioFormat->nAvgBytesPerSec = m_player->audioFormat->nSamplesPerSec * m_player->audioFormat->nBlockAlign;
     m_player->audioFormat->cbSize = 0;
 
-    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
+    REFERENCE_TIME devicePeriod = 0;
+    hr = m_player->audioClient->GetDevicePeriod(nullptr, &devicePeriod);
+    if (FAILED(hr))
+        devicePeriod = 100000; // fall back to 10ms
+    REFERENCE_TIME bufferDuration = devicePeriod * 4; // approx 40ms
+
+    hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0, m_player->audioFormat, nullptr);
     if (FAILED(hr))
     {
         // Try with device format if our format fails
         CoTaskMemFree(m_player->audioFormat);
         m_player->audioFormat = deviceFormat;
-        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, m_player->audioFormat, nullptr);
+        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0, m_player->audioFormat, nullptr);
         if (FAILED(hr))
             return false;
     }
@@ -206,6 +213,8 @@ void AudioPlayer::CleanupTracks() {
             av_frame_free(&track->frame);
         if (track->codecContext)
             avcodec_free_context(&track->codecContext);
+        track->buffer.clear();
+        track->bufferPts = 0.0;
     }
     m_player->audioTracks.clear();
 }
@@ -218,6 +227,7 @@ void AudioPlayer::StartThread() {
         {
             // Continue without audio or handle error appropriately
         }
+        m_framesWritten = 0;
         m_player->audioThreadRunning = true;
         m_player->audioThread = std::thread(&AudioPlayer::AudioThreadFunction, this);
     }
@@ -284,6 +294,8 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
     // Store raw samples in track buffer
     {
         std::lock_guard<std::mutex> lock(m_player->audioMutex);
+        if (track->buffer.empty())
+            track->bufferPts = framePts - m_player->startTimeOffset;
         track->buffer.insert(track->buffer.end(),
                              outPtr,
                              outPtr + convertedSamples * m_player->audioChannels);
@@ -309,7 +321,9 @@ void AudioPlayer::AudioThreadFunction() {
         return;
     }
 
-    HRESULT hr; // Declare hr here
+    HRESULT hr;
+    auto startTime = m_player->masterStartTime;
+    double startPts = m_player->masterStartPts;
 
     while (m_player->audioThreadRunning)
     {
@@ -319,36 +333,53 @@ void AudioPlayer::AudioThreadFunction() {
         if (!m_player->audioThreadRunning)
             break;
 
-        if (!HasBufferedAudio())
-            continue;
-
-        // Get available buffer space
-        UINT32 numFramesPadding;
-        hr = m_player->audioClient->GetCurrentPadding(&numFramesPadding);
+        UINT32 padding = 0;
+        hr = m_player->audioClient->GetCurrentPadding(&padding);
         if (FAILED(hr))
             continue;
 
-        UINT32 numFramesAvailable = m_player->bufferFrameCount - numFramesPadding;
-        if (numFramesAvailable == 0)
+        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
+        double masterPts = startPts + elapsed;
+        UINT64 played = m_framesWritten > padding ? m_framesWritten - padding : 0;
+        double playedPts = played / static_cast<double>(m_player->audioSampleRate);
+
+        if (masterPts < playedPts)
         {
             lock.unlock();
             Sleep(1);
             continue;
         }
 
-        // Get render buffer
-        BYTE *pData;
-        hr = m_player->renderClient->GetBuffer(numFramesAvailable, &pData);
+        UINT64 targetWritten = static_cast<UINT64>((masterPts + 0.1) * m_player->audioSampleRate);
+        if (targetWritten < m_framesWritten)
+            targetWritten = m_framesWritten;
+
+        UINT32 framesNeeded = static_cast<UINT32>(targetWritten - m_framesWritten);
+
+        UINT32 available = m_player->bufferFrameCount - padding;
+        if (framesNeeded > available)
+            framesNeeded = available;
+
+        if (framesNeeded == 0)
+        {
+            lock.unlock();
+            Sleep(1);
+            continue;
+        }
+
+        BYTE* pData;
+        hr = m_player->renderClient->GetBuffer(framesNeeded, &pData);
         if (FAILED(hr))
             continue;
 
-        // Mix audio from all tracks
-        MixAudioTracks(pData, numFramesAvailable);
+        double outputPts = m_player->masterStartPts + (double)m_framesWritten / m_player->audioSampleRate;
+        MixAudioTracks(pData, framesNeeded, outputPts);
 
-        hr = m_player->renderClient->ReleaseBuffer(numFramesAvailable, 0);
+        hr = m_player->renderClient->ReleaseBuffer(framesNeeded, 0);
         if (FAILED(hr))
             continue;
 
+        m_framesWritten += framesNeeded;
         lock.unlock();
     }
 
@@ -356,18 +387,28 @@ void AudioPlayer::AudioThreadFunction() {
     CoUninitialize();
 }
 
-void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount) {
+void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double startPts) {
     memset(outputBuffer, 0, frameCount * m_player->audioChannels * sizeof(int16_t));
     int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
-    int totalSamples = frameCount * m_player->audioChannels;
 
     for (int frame = 0; frame < frameCount; ++frame)
     {
+        double samplePts = startPts + frame / static_cast<double>(m_player->audioSampleRate);
         std::vector<int32_t> mix(m_player->audioChannels, 0);
         for (auto& track : m_player->audioTracks)
         {
             if (track->isMuted)
                 continue;
+
+            // Drop samples that are earlier than the desired timestamp
+            while (!track->buffer.empty() &&
+                   track->bufferPts + 1.0 / m_player->audioSampleRate <= samplePts)
+            {
+                for (int ch = 0; ch < m_player->audioChannels && !track->buffer.empty(); ++ch)
+                    track->buffer.pop_front();
+                track->bufferPts += 1.0 / m_player->audioSampleRate;
+            }
+
             if (track->buffer.size() >= static_cast<size_t>(m_player->audioChannels))
             {
                 for (int ch = 0; ch < m_player->audioChannels; ++ch)
@@ -376,6 +417,7 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount) {
                     track->buffer.pop_front();
                     mix[ch] += static_cast<int32_t>(val * track->volume);
                 }
+                track->bufferPts += 1.0 / m_player->audioSampleRate;
             }
         }
         for (int ch = 0; ch < m_player->audioChannels; ++ch)
