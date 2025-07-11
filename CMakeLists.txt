@@ -70,6 +70,14 @@ if(NOT USE_STATIC_FFMPEG)
         message(FATAL_ERROR "❌ zlib.lib no existe en ${CURL_ROOT}/lib")
     endif()
     message(STATUS ">> Usando zlib vendorizado: ${CURL_ROOT}/lib/zlib.lib")
+elseif(USE_STATIC_FFMPEG)
+    # Si es estático, usamos la zlib de FFmpeg
+    set(VENDOR_ZLIB_INCLUDE_DIR "${FFMPEG_ROOT}/include")
+    set(VENDOR_ZLIB_LIBRARIES "${FFMPEG_ROOT}/lib/zlib.lib")
+    add_library(VENDOR_ZLIB INTERFACE)
+    target_include_directories(VENDOR_ZLIB INTERFACE ${VENDOR_ZLIB_INCLUDE_DIR})
+    target_link_libraries(VENDOR_ZLIB INTERFACE ${VENDOR_ZLIB_LIBRARIES})
+    message(STATUS ">> Usando zlib de FFmpeg: ${VENDOR_ZLIB_LIBRARIES}")
 endif()
 
 # ==== EJECUTABLE Y CÓDIGO FUENTE ====
