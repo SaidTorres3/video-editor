@@ -85,12 +85,15 @@ find_library(CURL_LIBRARY
 )
 
 if(NOT USE_STATIC_FFMPEG)
-    # Vendored libcurl requires zlib when linking dynamically
-    set(CURL_ZLIB_LIBRARY "${CURL_ROOT}/lib/zlib.lib" CACHE FILEPATH "Path to zlib for vendored curl")
-    if(EXISTS "${CURL_ZLIB_LIBRARY}")
-        message(STATUS "Found curl zlib: ${CURL_ZLIB_LIBRARY}")
+    # Vendored libcurl depends on zlib when linking dynamically. Import it as a
+    # separate library so MSBuild links it correctly.
+    set(_curl_zlib "${CURL_ROOT}/lib/zlib.lib")
+    if(EXISTS "${_curl_zlib}")
+        message(STATUS "Found curl zlib: ${_curl_zlib}")
+        add_library(CURL_ZLIB STATIC IMPORTED GLOBAL)
+        set_target_properties(CURL_ZLIB PROPERTIES IMPORTED_LOCATION "${_curl_zlib}")
     else()
-        message(FATAL_ERROR "curl zlib library not found: ${CURL_ZLIB_LIBRARY}")
+        message(FATAL_ERROR "curl zlib library not found: ${_curl_zlib}")
     endif()
 endif()
 
@@ -157,7 +160,7 @@ target_link_libraries(VideoEditor PRIVATE
 )
 
 if(NOT USE_STATIC_FFMPEG)
-    target_link_libraries(VideoEditor PRIVATE ${CURL_ZLIB_LIBRARY})
+    target_link_libraries(VideoEditor PRIVATE CURL_ZLIB)
 endif()
 
 # Copy FFmpeg DLLs when linking dynamically
