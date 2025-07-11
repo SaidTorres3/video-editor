@@ -4,7 +4,7 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 
 All source files now reside under the `src/` directory to keep the project organized.
 
-![Video Editor Showcase](https://raw.githubusercontent.com/SaidTorres3/video-editor/refs/heads/master/.readme-assets/showcase-v001.png)
+![Video Editor Showcase](https://raw.githubusercontent.com/SaidTorres3/video-editor/refs/heads/master/.readme-assets/showcase-v002.png)
 
 ## Features
 
