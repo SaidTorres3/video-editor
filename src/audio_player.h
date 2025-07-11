@@ -21,7 +21,7 @@ public:
 
 private:
     void AudioThreadFunction();
-    void MixAudioTracks(uint8_t* outputBuffer, int frameCount, double startPts);
+    void MixAudioTracks(float* outputBuffer, int frameCount, double startPts);
     bool HasBufferedAudio() const;
 
     VideoPlayer* m_player;

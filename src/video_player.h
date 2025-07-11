@@ -51,8 +51,8 @@ struct AudioTrack {
     bool isMuted;
     float volume;
     std::string name;
-    std::deque<int16_t> buffer;
-    std::vector<int16_t> resampleBuffer;
+    std::deque<float> buffer;
+    std::vector<float> resampleBuffer;
     double bufferPts;
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
