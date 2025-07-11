@@ -3,6 +3,39 @@ param(
     [switch]$Static
 )
 
+# 0) Limpiar build/Release según condiciones
+$releaseDir = Join-Path $PSScriptRoot 'build\Release'
+if (Test-Path $releaseDir) {
+    $files = Get-ChildItem -Path $releaseDir -File
+    $count = $files.Count
+
+    if ($count -eq 0) {
+        # No hay archivos, no hacemos nada
+    }
+    elseif ($count -eq 1 -and $Static) {
+        # Modo estático y un solo archivo: no hacemos nada
+    }
+    elseif ($count -eq 1 -and -not $Static) {
+        try {
+            Write-Host "Cambiando a modo dinámico..." -ForegroundColor Yellow
+            Remove-Item -Path (Join-Path $PSScriptRoot 'build') -Recurse -Force
+        } catch {
+            Write-Host "ERROR: No se pudo eliminar la carpeta 'build'. Deteniendo la ejecución." -ForegroundColor Red
+            exit 1
+        }
+    }
+    elseif ($count -gt 1 -and $Static) {
+        try {
+            Write-Host "Cambiando a modo estático..." -ForegroundColor Yellow
+            Remove-Item -Path (Join-Path $PSScriptRoot 'build') -Recurse -Force
+        } catch {
+            Write-Host "ERROR: No se pudo eliminar la carpeta 'build'. Deteniendo la ejecución." -ForegroundColor Red
+            exit 1
+        }
+    }
+    # elseif ($count -gt 1 -and -not $Static) { # más de 1 archivo y modo no estático: no hacemos nada }
+}
+
 # Path to vendored libcurl used when building dynamically
 $VendoredCurl = Join-Path $PSScriptRoot 'vendor\libcurl'
 
