@@ -20,7 +20,7 @@ AudioPlayer::~AudioPlayer()
 
 bool AudioPlayer::Initialize()
 {
-    HRESULT hr = CoInitialize(nullptr);
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr))
         return false;
 
@@ -255,6 +255,7 @@ void AudioPlayer::SetMasterVolume(float volume)
 
 void AudioPlayer::AudioThreadFunction()
 {
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const double sampleDur = 1.0 / m_player->audioSampleRate;
     std::vector<float> mixBuffer(m_player->bufferFrameCount * m_player->audioChannels);
 
@@ -297,4 +298,5 @@ void AudioPlayer::AudioThreadFunction()
         m_player->renderClient->ReleaseBuffer(available, 0);
         m_nextAudioPts += available * sampleDur;
     }
+    CoUninitialize();
 }
