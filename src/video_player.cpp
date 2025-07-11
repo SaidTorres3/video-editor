@@ -25,7 +25,6 @@ VideoPlayer::VideoPlayer(HWND parent)
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
-      masterStartTime(), masterStartPts(0.0),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
       originalVideoWndProc(nullptr)
 {
@@ -193,10 +192,7 @@ bool VideoPlayer::Play()
     if (!isLoaded || isPlaying)
         return false;
     isPlaying = true;
-
-    masterStartTime = std::chrono::high_resolution_clock::now();
-    masterStartPts = currentPts;
-
+    
     m_audioPlayer->StartThread();
     playbackThreadRunning = true;
     playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
@@ -376,8 +372,8 @@ void VideoPlayer::SetMasterVolume(float volume)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
-    auto startTime = masterStartTime;
-    double startPts = masterStartPts;
+    auto startTime = std::chrono::high_resolution_clock::now();
+    double startPts = currentPts;
     while (playbackThreadRunning)
     {
         if (!m_decoder->DecodeNextFrame(false))
