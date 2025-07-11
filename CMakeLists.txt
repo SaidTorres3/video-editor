@@ -22,9 +22,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Define UNICODE for Windows API calls
 add_compile_definitions(UNICODE _UNICODE)
 
-# Set the vcpkg installation path
-# Set FFmpeg path to vcpkg installation
-set(FFMPEG_ROOT "C:/tools/vcpkg/installed/x64-windows-static" CACHE PATH "Path to FFmpeg vcpkg installation")
+# Default path to the shared FFmpeg binaries
+set(FFMPEG_ROOT "C:/Program Files/ffmpeg" CACHE PATH "Path to FFmpeg installation")
 
 # Find FFmpeg libraries
 find_path(FFMPEG_INCLUDE_DIR

@@ -162,10 +162,10 @@ Write-Host "Usando vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor 
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
 if (-not (Test-Path ".\build")) {
     Write-Host "Configurando CMake..." -ForegroundColor Yellow
-    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag
+    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag "-DFFMPEG_ROOT=$FFmpegPath"
 } else {
     Write-Host "Reconfigurando CMake con nuevos parámetros..." -ForegroundColor Yellow
-    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag
+    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag "-DFFMPEG_ROOT=$FFmpegPath"
 }
 if ($LASTEXITCODE -ne 0) { Write-Error "Fallo la configuración de CMake."; exit 1 }
 
