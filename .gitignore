@@ -3,7 +3,6 @@
 /third_party
 *.exe
 *.dll
-*.lib
 *.obj
 *.ilk
 *.pdb
