@@ -83,6 +83,10 @@ find_library(CURL_LIBRARY
         C:/tools/vcpkg/installed/x64-windows-static/lib
     NO_DEFAULT_PATH
 )
+if(NOT CURL_LIBRARY AND EXISTS "${CURL_ROOT}/lib/libcurl.lib")
+    set(CURL_LIBRARY "${CURL_ROOT}/lib/libcurl.lib" CACHE FILEPATH "Curl library" FORCE)
+    message(STATUS "Using vendored libcurl: ${CURL_LIBRARY}")
+endif()
 
 if(NOT USE_STATIC_FFMPEG)
     # Vendored libcurl depends on zlib when linking dynamically. Import it as a
@@ -91,7 +95,10 @@ if(NOT USE_STATIC_FFMPEG)
     if(EXISTS "${_curl_zlib}")
         message(STATUS "Found curl zlib: ${_curl_zlib}")
         add_library(CURL_ZLIB STATIC IMPORTED GLOBAL)
-        set_target_properties(CURL_ZLIB PROPERTIES IMPORTED_LOCATION "${_curl_zlib}")
+        set_target_properties(CURL_ZLIB PROPERTIES
+            IMPORTED_LOCATION "${_curl_zlib}"
+            IMPORTED_LOCATION_RELEASE "${_curl_zlib}"
+        )
     else()
         message(FATAL_ERROR "curl zlib library not found: ${_curl_zlib}")
     endif()
