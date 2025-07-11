@@ -149,7 +149,18 @@ if (-not $Static.IsPresent) {
         $zipPath     = "$env:TEMP\ffmpeg.zip"
         $extractPath = "$PSScriptRoot\third_party"
 
-        Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath
+        # Use Start-BitsTransfer if available as it can be faster and more reliable
+        if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+            try {
+                Write-Host "Descargando FFmpeg con Start-BitsTransfer..." -ForegroundColor Cyan
+                Start-BitsTransfer -Source $ffmpegUrl -Destination $zipPath -ErrorAction Stop
+            } catch {
+                Write-Host "Start-BitsTransfer falló, usando Invoke-WebRequest..." -ForegroundColor Yellow
+                Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath
+            }
+        } else {
+            Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath
+        }
         Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
 
         $extracted = Get-ChildItem -Directory -Path $extractPath | Where-Object Name -Like "ffmpeg*" | Select-Object -First 1
