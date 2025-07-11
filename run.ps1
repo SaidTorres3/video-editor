@@ -3,6 +3,9 @@ param(
     [switch]$Static
 )
 
+# Path to vendored libcurl used when building dynamically
+$VendoredCurl = Join-Path $PSScriptRoot 'vendor\libcurl'
+
 # Se recomienda instalar FFmpeg con:
 # vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
 # Si piden build estática y no cambiaron la ruta por defecto,
@@ -128,21 +131,30 @@ if (-not $Static.IsPresent) {
     }
 }
 
-# 4) Verificar componentes de FFmpeg según modo
+# 4) Verificar componentes de FFmpeg y libcurl según modo
+$curlRoot = $FFmpegPath
+if (-not $Static.IsPresent -and -not (Test-Path "$FFmpegPath\lib\libcurl.lib")) {
+    if (Test-Path "$VendoredCurl\lib\libcurl.lib") {
+        Write-Host "libcurl no encontrado en FFmpeg. Usando copia vendorizada..." -ForegroundColor Yellow
+        $curlRoot = $VendoredCurl
+    }
+}
+$env:CURL_ROOT = $curlRoot
+
 if ($Static.IsPresent) {
     $required = @(
         "$FFmpegPath\include\libavcodec\avcodec.h",
         "$FFmpegPath\lib\avcodec.lib",
-        "$FFmpegPath\include\curl\curl.h",
-        "$FFmpegPath\lib\libcurl.lib"
+        "$curlRoot\include\curl\curl.h",
+        "$curlRoot\lib\libcurl.lib"
     )
 } else {
     $required = @(
         "$FFmpegPath\include\libavcodec\avcodec.h",
         "$FFmpegPath\lib\avcodec.lib",
         "$FFmpegPath\bin\ffmpeg.exe",
-        "$FFmpegPath\include\curl\curl.h",
-        "$FFmpegPath\lib\libcurl.lib"
+        "$curlRoot\include\curl\curl.h",
+        "$curlRoot\lib\libcurl.lib"
     )
 }
 
@@ -162,10 +174,10 @@ Write-Host "Usando vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor 
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
 if (-not (Test-Path ".\build")) {
     Write-Host "Configurando CMake..." -ForegroundColor Yellow
-    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag "-DFFMPEG_ROOT=$FFmpegPath"
+    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
 } else {
     Write-Host "Reconfigurando CMake con nuevos parámetros..." -ForegroundColor Yellow
-    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag "-DFFMPEG_ROOT=$FFmpegPath"
+    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
 }
 if ($LASTEXITCODE -ne 0) { Write-Error "Fallo la configuración de CMake."; exit 1 }
 
