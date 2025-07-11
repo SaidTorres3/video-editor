@@ -175,12 +175,13 @@ Write-Host "Usando vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor 
 
 # 5) Configurar/reconfigurar CMake
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
+Write-Host "Argumentos de CMake: -DUSE_STATIC_FFMPEG=$staticFlag, -DFFMPEG_ROOT=$FFmpegPath, -DCURL_ROOT=$env:CURL_ROOT" -ForegroundColor Cyan
 if (-not (Test-Path ".\build")) {
     Write-Host "Configurando CMake..." -ForegroundColor Yellow
-    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
+    cmake -S . -B build -D "USE_STATIC_FFMPEG:BOOL=$staticFlag" "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
 } else {
     Write-Host "Reconfigurando CMake con nuevos parámetros..." -ForegroundColor Yellow
-    cmake -S . -B build -DUSE_STATIC_FFMPEG=$staticFlag "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
+    cmake -S . -B build -D "USE_STATIC_FFMPEG:BOOL=$staticFlag" "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
 }
 if ($LASTEXITCODE -ne 0) { Write-Error "Fallo la configuración de CMake."; exit 1 }
 
