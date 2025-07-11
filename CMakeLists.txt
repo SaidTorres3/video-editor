@@ -25,6 +25,9 @@ add_compile_definitions(UNICODE _UNICODE)
 # Default path to the shared FFmpeg binaries
 set(FFMPEG_ROOT "C:/Program Files/ffmpeg" CACHE PATH "Path to FFmpeg installation")
 
+# Default path to the vendored libcurl
+set(CURL_ROOT "${CMAKE_SOURCE_DIR}/vendor/libcurl" CACHE PATH "Path to libcurl installation")
+
 # Find FFmpeg libraries
 find_path(FFMPEG_INCLUDE_DIR
     NAMES libavcodec/avcodec.h
@@ -65,13 +68,19 @@ find_library(SWRESAMPLE_LIBRARY
 # Find packages
 find_path(CURL_INCLUDE_DIR
     NAMES curl/curl.h
-    PATHS C:/tools/vcpkg/installed/x64-windows-static/include
+    PATHS
+        ${FFMPEG_ROOT}/include
+        ${CURL_ROOT}/include
+        C:/tools/vcpkg/installed/x64-windows-static/include
     NO_DEFAULT_PATH
 )
 
 find_library(CURL_LIBRARY
     NAMES libcurl
-    PATHS C:/tools/vcpkg/installed/x64-windows-static/lib
+    PATHS
+        ${FFMPEG_ROOT}/lib
+        ${CURL_ROOT}/lib
+        C:/tools/vcpkg/installed/x64-windows-static/lib
     NO_DEFAULT_PATH
 )
 
