@@ -77,7 +77,7 @@ single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
 
 1. **Using the prebuilt shared FFmpeg binaries** (default)
    1. Extract FFmpeg to `C:/Program Files/ffmpeg` (or set `FFMPEG_ROOT` when
-      configuring CMake).
+      configuring CMake). This is now the default `FFMPEG_ROOT` value.
    2. Create a build directory: `mkdir build && cd build`
    3. Generate the project: `cmake ..`
    4. Build: `cmake --build . --config Release`
@@ -111,6 +111,8 @@ Alternatively you can use the provided `run.ps1` script:
 ```powershell
 ./run.ps1 -Static
 ```
+Run without `-Static` to build against the shared FFmpeg DLLs. The script
+passes the chosen path to CMake using `FFMPEG_ROOT`.
 
 When `-Static` is used the script looks for FFmpeg in
 `C:\tools\vcpkg\installed\x64-windows-static` unless another path is passed
