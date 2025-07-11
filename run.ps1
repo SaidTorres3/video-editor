@@ -156,6 +156,9 @@ if ($Static.IsPresent) {
         "$curlRoot\include\curl\curl.h",
         "$curlRoot\lib\libcurl.lib"
     )
+    if ($curlRoot -eq $VendoredCurl) {
+        $required += "$curlRoot\lib\zlib.lib"
+    }
 }
 
 foreach ($p in $required) {

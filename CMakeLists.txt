@@ -84,6 +84,16 @@ find_library(CURL_LIBRARY
     NO_DEFAULT_PATH
 )
 
+if(NOT USE_STATIC_FFMPEG)
+    # Vendored libcurl requires zlib when linking dynamically
+    set(CURL_ZLIB_LIBRARY "${CURL_ROOT}/lib/zlib.lib" CACHE FILEPATH "Path to zlib for vendored curl")
+    if(EXISTS "${CURL_ZLIB_LIBRARY}")
+        message(STATUS "Found curl zlib: ${CURL_ZLIB_LIBRARY}")
+    else()
+        message(FATAL_ERROR "curl zlib library not found: ${CURL_ZLIB_LIBRARY}")
+    endif()
+endif()
+
 # Create the executable
 add_executable(VideoEditor WIN32
     src/main.cpp src/window_proc.cpp src/ui_controls.cpp src/file_handling.cpp src/ui_updates.cpp src/timeline.cpp src/editing.cpp src/utils.cpp src/video_decoder.cpp src/audio_player.cpp src/video_renderer.cpp src/video_cutter.cpp
@@ -145,6 +155,10 @@ target_link_libraries(VideoEditor PRIVATE
     ${SWRESAMPLE_LIBRARY}
     ${FFMPEG_EXTRA_LIBS}
 )
+
+if(NOT USE_STATIC_FFMPEG)
+    target_link_libraries(VideoEditor PRIVATE ${CURL_ZLIB_LIBRARY})
+endif()
 
 # Copy FFmpeg DLLs when linking dynamically
 if(WIN32 AND NOT USE_STATIC_FFMPEG)
