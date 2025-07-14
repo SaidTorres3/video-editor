@@ -19,6 +19,7 @@ jobs:
       - run:
           name: Install vcpkg and dependencies
           shell: powershell
+          no_output_timeout: 30m
           command: |
             if (-not (Test-Path 'C:/tools/vcpkg')) {
               git clone https://github.com/microsoft/vcpkg C:/tools/vcpkg
@@ -31,27 +32,10 @@ jobs:
               New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
             }
 
-            # Lanzar job en segundo plano que imprime un punto cada 5 minutos
-            $script:keepAlive = {
-              while ($true) {
-                Start-Sleep -Seconds 300  # 5 minutos
-                Write-Host "[CI-KEEPALIVE] Still building... FFmpeg is slow, calm down."
-              }
+            if ("<<parameters.static>>" -eq "true") {
+              & C:/tools/vcpkg/vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
+              & C:/tools/vcpkg/vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
             }
-            $job = Start-Job $script:keepAlive
-
-            try {
-              if ("<<parameters.static>>" -eq "true") {
-                & C:/tools/vcpkg/vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
-                & C:/tools/vcpkg/vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
-              }
-            }
-            finally {
-              # Matar el job keepalive para que no quede corriendo
-              Stop-Job $job | Out-Null
-              Remove-Job $job | Out-Null
-            }
-
 
       - save_cache:
           key: vcpkg-cache-{{ checksum "vcpkg.json.ci" }}
