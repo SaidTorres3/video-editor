@@ -61,6 +61,9 @@ jobs:
             } else {
               ./run.ps1
             }
+      - store_artifacts:
+          path: ./build/Release
+          destination: release
 
 workflows:
   build:
