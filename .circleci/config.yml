@@ -42,21 +42,11 @@ jobs:
                   Remove-Item $tempExtractDir -Recurse
 
       - run:
-          name: Install CMake
+          name: Install CMake via Chocolatey
           command: |
-            $cmakeUrl    = "https://github.com/Kitware/CMake/releases/download/v3.29.2/cmake-3.29.2-windows-x86_64.zip"
-            $zipPath     = "C:/cmake.zip"
-            $extractDir  = "C:/cmake_temp"
-            Invoke-WebRequest -Uri $cmakeUrl -OutFile $zipPath
-            Expand-Archive -Path $zipPath -DestinationPath $extractDir
-            $folder      = Get-ChildItem $extractDir | Select-Object -First 1
-            $binPath     = Join-Path $folder.FullName "bin"
-            $env:Path    = "$env:Path;$binPath"
-            [Environment]::SetEnvironmentVariable("Path", $env:Path, "Process")
-
-      - run:
-          name: Verify CMake
-          command: cmake --version
+            choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+            refreshenv
+            cmake --version
 
       - run:
           name: Configure
