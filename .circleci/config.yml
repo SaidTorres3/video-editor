@@ -7,12 +7,12 @@ jobs:
     parameters:
       static:
         type: boolean
-    # Use the Windows image with VS 2022 and CMake preinstalled
     executor: win/server-2022
     steps:
       - checkout
+
       - run:
-          name: Install vcpkg and deps
+          name: Install vcpkg and dependencies
           command: |
             if (-not (Test-Path 'C:/tools/vcpkg')) {
               git clone https://github.com/microsoft/vcpkg C:/tools/vcpkg
@@ -22,6 +22,7 @@ jobs:
               & C:/tools/vcpkg/vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
               & C:/tools/vcpkg/vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
             }
+
       - when:
           condition:
             not: <<parameters.static>>
@@ -35,26 +36,46 @@ jobs:
                   Invoke-WebRequest -Uri $url -OutFile $zipPath
                   $tempExtractDir = "C:/ffmpeg_temp"
                   Expand-Archive -Path $zipPath -DestinationPath $tempExtractDir
-                  $unzippedFolder = Get-ChildItem -Path $tempExtractDir | Select-Object -First 1
-                  Move-Item -Path ($unzippedFolder.FullName + "/*") -Destination "C:/Program Files/ffmpeg"
+                  $unzipped = Get-ChildItem -Path $tempExtractDir | Select-Object -First 1
+                  Move-Item -Path (Join-Path $unzipped.FullName "*") -Destination "C:/Program Files/ffmpeg"
                   Remove-Item $zipPath
                   Remove-Item $tempExtractDir -Recurse
+
+      - run:
+          name: Install CMake
+          command: |
+            $cmakeUrl    = "https://github.com/Kitware/CMake/releases/download/v3.29.2/cmake-3.29.2-windows-x86_64.zip"
+            $zipPath     = "C:/cmake.zip"
+            $extractDir  = "C:/cmake_temp"
+            Invoke-WebRequest -Uri $cmakeUrl -OutFile $zipPath
+            Expand-Archive -Path $zipPath -DestinationPath $extractDir
+            $folder      = Get-ChildItem $extractDir | Select-Object -First 1
+            $binPath     = Join-Path $folder.FullName "bin"
+            $env:Path    = "$env:Path;$binPath"
+            [Environment]::SetEnvironmentVariable("Path", $env:Path, "Process")
+
+      - run:
+          name: Verify CMake
+          command: cmake --version
+
       - run:
           name: Configure
           command: |
             if (<<parameters.static>>) {
               $env:FFMPEG_ROOT = "C:/tools/vcpkg/installed/x64-windows-static"
-              $env:CURL_ROOT = "C:/tools/vcpkg/installed/x64-windows-static"
+              $env:CURL_ROOT   = "C:/tools/vcpkg/installed/x64-windows-static"
               $env:CMAKE_TOOLCHAIN_FILE = "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
-              $buildDir = "build-static"
-              $flag = "ON"
+              $buildDir = "build-static";  $flag = "ON"
             } else {
               $env:FFMPEG_ROOT = "C:/Program Files/ffmpeg"
-              $env:CURL_ROOT = "vendor/libcurl"
-              $buildDir = "build"
-              $flag = "OFF"
+              $env:CURL_ROOT   = "vendor/libcurl"
+              $buildDir = "build";         $flag = "OFF"
             }
-            cmake -S . -B $buildDir -A x64 -DUSE_STATIC_FFMPEG=$flag -DFFMPEG_ROOT=$env:FFMPEG_ROOT -DCURL_ROOT=$env:CURL_ROOT
+            cmake -S . -B $buildDir -A x64 `
+                  -DUSE_STATIC_FFMPEG=$flag `
+                  -DFFMPEG_ROOT="$env:FFMPEG_ROOT" `
+                  -DCURL_ROOT="$env:CURL_ROOT"
+
       - run:
           name: Build
           command: |
