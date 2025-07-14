@@ -53,10 +53,9 @@ jobs:
 
       - run:
           name: Run build script
-          description: Ejecuta tu script PowerShell que ya encapsula configure + build
           shell: powershell
           command: |
-            if (<<parameters.static>>) {
+            if ("<<parameters.static>>" -eq "true") {
               ./run.ps1 -Static
             } else {
               ./run.ps1
@@ -66,7 +65,7 @@ jobs:
           destination: release
 
 workflows:
-  build:
+  ci-build:
     jobs:
       - build:
           name: build-dynamic
