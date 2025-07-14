@@ -2,8 +2,28 @@
   "name": "video-editor",
   "version": "0.1.0",
   "dependencies": [
-    "ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib]",
-    "curl[core,sspi,ssl,schannel,non-http]"
-  ],
-  "overrides": []
+    {
+      "name": "ffmpeg",
+      "features": [
+        "dav1d",
+        "openh264",
+        "x264",
+        "x265",
+        "mp3lame",
+        "fdk-aac",
+        "opus",
+        "zlib"
+      ]
+    },
+    {
+      "name": "curl",
+      "features": [
+        "core",
+        "sspi",
+        "ssl",
+        "schannel",
+        "non-http"
+      ]
+    }
+  ]
 }
