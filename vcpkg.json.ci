@@ -18,7 +18,6 @@
     {
       "name": "curl",
       "features": [
-        "core",
         "sspi",
         "ssl",
         "schannel",

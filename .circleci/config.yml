@@ -13,7 +13,7 @@ jobs:
 
       - restore_cache:
           keys:
-            - vcpkg-cache-{{ checksum "vcpkg.json" }}
+            - vcpkg-cache-{{ checksum "vcpkg.json.ci" }}
             - vcpkg-cache-
 
       - run:
@@ -37,7 +37,7 @@ jobs:
             }
 
       - save_cache:
-          key: vcpkg-cache-{{ checksum "vcpkg.json" }}
+          key: vcpkg-cache-{{ checksum "vcpkg.json.ci" }}
           paths:
             - C:/tools/vcpkg
 
