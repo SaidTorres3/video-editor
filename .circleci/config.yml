@@ -13,6 +13,7 @@ jobs:
 
       - run:
           name: Install vcpkg and dependencies
+          shell: powershell
           command: |
             if (-not (Test-Path 'C:/tools/vcpkg')) {
               git clone https://github.com/microsoft/vcpkg C:/tools/vcpkg
@@ -29,6 +30,7 @@ jobs:
           steps:
             - run:
                 name: Install FFmpeg (dynamic)
+                shell: powershell
                 command: |
                   New-Item -ItemType Directory -Force -Path "C:/Program Files/ffmpeg"
                   $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
@@ -43,34 +45,22 @@ jobs:
 
       - run:
           name: Install CMake via Chocolatey
+          shell: powershell
           command: |
             choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
             refreshenv
             cmake --version
 
       - run:
-          name: Configure
+          name: Run build script
+          description: Ejecuta tu script PowerShell que ya encapsula configure + build
+          shell: powershell
           command: |
             if (<<parameters.static>>) {
-              $env:FFMPEG_ROOT = "C:/tools/vcpkg/installed/x64-windows-static"
-              $env:CURL_ROOT   = "C:/tools/vcpkg/installed/x64-windows-static"
-              $env:CMAKE_TOOLCHAIN_FILE = "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
-              $buildDir = "build-static";  $flag = "ON"
+              ./run.ps1 -Static
             } else {
-              $env:FFMPEG_ROOT = "C:/Program Files/ffmpeg"
-              $env:CURL_ROOT   = "vendor/libcurl"
-              $buildDir = "build";         $flag = "OFF"
+              ./run.ps1
             }
-            cmake -S . -B $buildDir -A x64 `
-                  -DUSE_STATIC_FFMPEG=$flag `
-                  -DFFMPEG_ROOT="$env:FFMPEG_ROOT" `
-                  -DCURL_ROOT="$env:CURL_ROOT"
-
-      - run:
-          name: Build
-          command: |
-            if (<<parameters.static>>) { $buildDir = "build-static" } else { $buildDir = "build" }
-            cmake --build $buildDir --config Release
 
 workflows:
   build:
