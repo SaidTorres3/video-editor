@@ -31,7 +31,7 @@ jobs:
               New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
             }
 
-            if (<<parameters.static>>) {
+            if (<<parameters.static>> -eq "true") {
               & C:/tools/vcpkg/vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
               & C:/tools/vcpkg/vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
             }
