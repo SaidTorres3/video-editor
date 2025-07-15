@@ -119,10 +119,9 @@ function Find-MSBuild {
 $msbuildPath = Find-MSBuild
 if (-not $msbuildPath) {
     Write-Host "`n❌ MSBuild not found." -ForegroundColor Red
-    Write-Host "Install Build Tools with winget? (Requires admin) [y/n]" -ForegroundColor Yellow
+    Write-Host "Install Build Tools for Windows 11 with winget? (Requires admin) [y/n]" -ForegroundColor Yellow
     if ((Read-Host) -eq "y") {
-        Start-Process winget -ArgumentList 'install','Microsoft.VisualStudio.2022.BuildTools','-e','--silent' -Verb RunAs -Wait
-        $msbuildPath = Find-MSBuild
+        Start-Process winget -ArgumentList 'install','--id','Microsoft.VisualStudio.2022.BuildTools','-e','--override','"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --includeRecommended"' -Verb RunAs -Wait
         if (-not $msbuildPath) {
             Write-Host "❌ MSBuild still not found. Please restart or install manually." -ForegroundColor Red
             exit 1
