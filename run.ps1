@@ -3,67 +3,67 @@ param(
     [switch]$Static
 )
 
-# 0) Limpiar build/Release según condiciones
+# 0) Clean the build/Release folder based on conditions
 $releaseDir = Join-Path $PSScriptRoot 'build\Release'
 if (Test-Path $releaseDir) {
     $files = Get-ChildItem -Path $releaseDir -File
     $count = $files.Count
 
     if ($count -eq 0) {
-        # No hay archivos, no hacemos nada
+        # No files, do nothing
     }
     elseif ($count -eq 1 -and $Static) {
-        # Modo estático y un solo archivo: no hacemos nada
+        # Static mode and only one file: do nothing
     }
     elseif ($count -eq 1 -and -not $Static) {
         try {
-            Write-Host "Cambiando a modo dinámico..." -ForegroundColor Yellow
+            Write-Host "Switching to dynamic mode..." -ForegroundColor Yellow
             Remove-Item -Path (Join-Path $PSScriptRoot 'build') -Recurse -Force
         } catch {
-            Write-Host "ERROR: No se pudo eliminar la carpeta 'build'. Deteniendo la ejecución." -ForegroundColor Red
+            Write-Host "ERROR: Could not remove the 'build' folder. Stopping execution." -ForegroundColor Red
             exit 1
         }
     }
     elseif ($count -gt 1 -and $Static) {
         try {
-            Write-Host "Cambiando a modo estático..." -ForegroundColor Yellow
+            Write-Host "Switching to static mode..." -ForegroundColor Yellow
             Remove-Item -Path (Join-Path $PSScriptRoot 'build') -Recurse -Force
         } catch {
-            Write-Host "ERROR: No se pudo eliminar la carpeta 'build'. Deteniendo la ejecución." -ForegroundColor Red
+            Write-Host "ERROR: Could not remove the 'build' folder. Stopping execution." -ForegroundColor Red
             exit 1
         }
     }
-    # elseif ($count -gt 1 -and -not $Static) { # más de 1 archivo y modo no estático: no hacemos nada }
+    # elseif ($count -gt 1 -and -not $Static) { # More than one file and non-static mode: do nothing }
 }
 
-# Path to vendored libcurl used when building dynamically
+# Path to the vendored libcurl used when building dynamically
 $VendoredCurl = Join-Path $PSScriptRoot 'vendor\libcurl'
 
-# Se recomienda instalar FFmpeg con:
+# Recommended FFmpeg install command:
 # vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
-# Si piden build estática y no cambiaron la ruta por defecto,
-# intentamos adivinar la ubicación de vcpkg estático.
+# If static build is requested and the default path wasn't changed,
+# try to guess the static vcpkg location.
 if ($Static -and $FFmpegPath -eq "C:\Program Files\ffmpeg") {
     $guess = "C:\tools\vcpkg\installed\x64-windows-static"
     if (Test-Path "$guess\lib\avcodec.lib") {
-        Write-Host "Modo estático detectado. Usando FFmpeg desde $guess" -ForegroundColor Cyan
+        Write-Host "Static mode detected. Using FFmpeg from $guess" -ForegroundColor Cyan
         $FFmpegPath = $guess
     } else {
-        Write-Host "Modo estático solicitado pero no se encontró FFmpeg en $guess." -ForegroundColor Yellow
+        Write-Host "Static mode requested but FFmpeg not found in $guess." -ForegroundColor Yellow
     }
 }
 
-# Validar que la instalación es realmente estática
+# Validate that the installation is truly static
 if ($Static) {
     if (-not (Test-Path "$FFmpegPath\lib\avcodec.lib")) {
-        Write-Host "ERROR: No se encontró una instalación estática de FFmpeg en $FFmpegPath" -ForegroundColor Red
-        Write-Host "Instala 'ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib]:x64-windows-static' con vcpkg o especifica la ruta con -FFmpegPath" -ForegroundColor Yellow
+        Write-Host "ERROR: No static FFmpeg installation found at $FFmpegPath" -ForegroundColor Red
+        Write-Host "Install 'ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib]:x64-windows-static' with vcpkg or specify the path with -FFmpegPath" -ForegroundColor Yellow
         exit 1
     }
     $dlls = Get-ChildItem "$FFmpegPath\bin" -Filter "avcodec*.dll" -ErrorAction SilentlyContinue
     if ($dlls) {
-        Write-Host "ERROR: La ruta $FFmpegPath contiene DLLs de FFmpeg. Se requiere la variante estática." -ForegroundColor Red
-        Write-Host "Asegúrate de haber instalado la tripleta x64-windows-static" -ForegroundColor Yellow
+        Write-Host "ERROR: The path $FFmpegPath contains FFmpeg DLLs. A static build is required." -ForegroundColor Red
+        Write-Host "Make sure you installed the x64-windows-static triplet" -ForegroundColor Yellow
         exit 1
     }
 }
@@ -74,38 +74,38 @@ Write-Host "=========================" -ForegroundColor Green
 function Add-ToPath {
     param($dir)
     if (Test-Path $dir -and -not ($env:Path -split ';' | Where-Object { $_ -eq $dir })) {
-        Write-Host "Añadiendo '$dir' a PATH de esta sesión..." -ForegroundColor Cyan
+        Write-Host "Adding '$dir' to PATH for this session..." -ForegroundColor Cyan
         $env:Path = "$env:Path;$dir"
     }
 }
 
-# 1) Verificar CMake
+# 1) Check for CMake
 $cmakeExe = "$env:ProgramFiles\CMake\bin\cmake.exe"
 if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
     if (Test-Path $cmakeExe) {
         Add-ToPath (Split-Path $cmakeExe)
-        Write-Host "✅ CMake detectado e integrado en PATH." -ForegroundColor Green
+        Write-Host "✅ CMake detected and added to PATH." -ForegroundColor Green
     } else {
-        Write-Host "`n❌ CMake no está instalado." -ForegroundColor Red
-        Write-Host "¿Lo instalo con winget? (Requiere admin) [s/n]" -ForegroundColor Yellow
-        if ((Read-Host) -eq "s") {
+        Write-Host "`n❌ CMake is not installed." -ForegroundColor Red
+        Write-Host "Install it with winget? (Requires admin) [y/n]" -ForegroundColor Yellow
+        if ((Read-Host) -eq "y") {
             Start-Process winget -ArgumentList 'install','Kitware.CMake','-e','--silent' -Verb RunAs -Wait
             Add-ToPath (Split-Path $cmakeExe)
             if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-                Write-Host "❌ No se encontró CMake tras la instalación. Reinicia la consola." -ForegroundColor Red
+                Write-Host "❌ CMake not found after installation. Please restart the console." -ForegroundColor Red
                 exit 1
             }
-            Write-Host "✅ CMake instalado y listo." -ForegroundColor Green
+            Write-Host "✅ CMake installed and ready." -ForegroundColor Green
         } else {
-            Write-Host "Por favor instala CMake manualmente: https://cmake.org/download/" -ForegroundColor Cyan
+            Write-Host "Please install CMake manually: https://cmake.org/download/" -ForegroundColor Cyan
             exit 1
         }
     }
 } else {
-    Write-Host "✅ CMake disponible: $(Get-Command cmake).Source" -ForegroundColor Green
+    Write-Host "✅ CMake available: $(Get-Command cmake).Source" -ForegroundColor Green
 }
 
-# 2) Verificar MSBuild
+# 2) Check for MSBuild
 function Find-MSBuild {
     $vsPaths = @(
         "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe",
@@ -118,44 +118,44 @@ function Find-MSBuild {
 
 $msbuildPath = Find-MSBuild
 if (-not $msbuildPath) {
-    Write-Host "`n❌ MSBuild no encontrado." -ForegroundColor Red
-    Write-Host "¿Instalo Build Tools con winget? (Requiere admin) [s/n]" -ForegroundColor Yellow
-    if ((Read-Host) -eq "s") {
+    Write-Host "`n❌ MSBuild not found." -ForegroundColor Red
+    Write-Host "Install Build Tools with winget? (Requires admin) [y/n]" -ForegroundColor Yellow
+    if ((Read-Host) -eq "y") {
         Start-Process winget -ArgumentList 'install','Microsoft.VisualStudio.2022.BuildTools','-e','--silent' -Verb RunAs -Wait
         $msbuildPath = Find-MSBuild
         if (-not $msbuildPath) {
-            Write-Host "❌ Aún no se encuentra MSBuild. Reinicia o instala manualmente." -ForegroundColor Red
+            Write-Host "❌ MSBuild still not found. Please restart or install manually." -ForegroundColor Red
             exit 1
         }
-        Write-Host "✅ MSBuild encontrado en: $msbuildPath" -ForegroundColor Green
+        Write-Host "✅ MSBuild found at: $msbuildPath" -ForegroundColor Green
     } else {
-        Write-Host "Descarga desde: https://visualstudio.microsoft.com/visual-cpp-build-tools/" -ForegroundColor Cyan
+        Write-Host "Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/" -ForegroundColor Cyan
         exit 1
     }
 } else {
-    Write-Host "✅ MSBuild encontrado en: $msbuildPath" -ForegroundColor Green
+    Write-Host "✅ MSBuild found at: $msbuildPath" -ForegroundColor Green
 }
 
-# Ruta por defecto si no se especificó
+# Default path if not specified
 if (-not $FFmpegPath) {
     $FFmpegPath = "$PSScriptRoot\third_party\ffmpeg"
 }
 
-# 3) Descarga automática solo en modo compartido
+# 3) Auto-download only in shared mode
 if (-not $Static.IsPresent) {
     if (-not (Test-Path "$FFmpegPath\bin\ffmpeg.exe")) {
-        Write-Host "FFmpeg no encontrado en bin/. Descargando..." -ForegroundColor Yellow
+        Write-Host "FFmpeg not found in bin/. Downloading..." -ForegroundColor Yellow
         $ffmpegUrl   = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
         $zipPath     = "$env:TEMP\ffmpeg.zip"
         $extractPath = "$PSScriptRoot\third_party"
 
-        # Use Start-BitsTransfer if available as it can be faster and more reliable
+        # Use Start-BitsTransfer if available as it's faster and more reliable
         if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
             try {
-                Write-Host "Descargando FFmpeg con Start-BitsTransfer..." -ForegroundColor Cyan
+                Write-Host "Downloading FFmpeg with Start-BitsTransfer..." -ForegroundColor Cyan
                 Start-BitsTransfer -Source $ffmpegUrl -Destination $zipPath -ErrorAction Stop
             } catch {
-                Write-Host "Start-BitsTransfer falló, usando Invoke-WebRequest..." -ForegroundColor Yellow
+                Write-Host "Start-BitsTransfer failed, using Invoke-WebRequest..." -ForegroundColor Yellow
                 Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath
             }
         } else {
@@ -167,19 +167,19 @@ if (-not $Static.IsPresent) {
         if ($extracted) {
             Move-Item "$extractPath\$($extracted.Name)" "$FFmpegPath" -Force
             Remove-Item $zipPath -Force
-            Write-Host "✅ FFmpeg descargado y extraído en $FFmpegPath" -ForegroundColor Green
+            Write-Host "✅ FFmpeg downloaded and extracted to $FFmpegPath" -ForegroundColor Green
         } else {
-            Write-Host "❌ Error al extraer FFmpeg." -ForegroundColor Red
+            Write-Host "❌ Error extracting FFmpeg." -ForegroundColor Red
             exit 1
         }
     }
 }
 
-# 4) Verificar componentes de FFmpeg y libcurl según modo
+# 4) Verify FFmpeg and libcurl components based on mode
 $curlRoot = $FFmpegPath
 if (-not $Static.IsPresent -and -not (Test-Path "$FFmpegPath\lib\libcurl.lib")) {
     if (Test-Path "$VendoredCurl\lib\libcurl.lib") {
-        Write-Host "libcurl no encontrado en FFmpeg. Usando copia vendorizada..." -ForegroundColor Yellow
+        Write-Host "libcurl not found in FFmpeg. Using vendored copy..." -ForegroundColor Yellow
         $curlRoot = $VendoredCurl
     }
 }
@@ -207,57 +207,57 @@ if ($Static.IsPresent) {
 
 foreach ($p in $required) {
     if (-not (Test-Path $p)) {
-        Write-Host "ERROR: No se encontró un componente requerido en: $p" -ForegroundColor Red
-        Write-Host "Asegúrate de que las librerías (FFmpeg, curl, etc.) están instaladas con vcpkg y la ruta es correcta." -ForegroundColor Yellow
+        Write-Host "ERROR: Required component not found at: $p" -ForegroundColor Red
+        Write-Host "Ensure that libraries (FFmpeg, curl, etc.) are installed via vcpkg and that the path is correct." -ForegroundColor Yellow
         exit 1
     }
 }
-Write-Host "FFmpeg validado en: $FFmpegPath" -ForegroundColor Green
+Write-Host "FFmpeg validated at: $FFmpegPath" -ForegroundColor Green
 
 $env:CMAKE_TOOLCHAIN_FILE = "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
-Write-Host "Usando vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor Cyan
+Write-Host "Using vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor Cyan
 
-# 5) Configurar/reconfigurar CMake
+# 5) Configure/reconfigure CMake
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
-Write-Host "Argumentos de CMake: -DUSE_STATIC_FFMPEG=$staticFlag, -DFFMPEG_ROOT=$FFmpegPath, -DCURL_ROOT=$env:CURL_ROOT" -ForegroundColor Cyan
+Write-Host "CMake arguments: -DUSE_STATIC_FFMPEG=$staticFlag, -DFFMPEG_ROOT=$FFmpegPath, -DCURL_ROOT=$env:CURL_ROOT" -ForegroundColor Cyan
 if (-not (Test-Path ".\build")) {
-    Write-Host "Configurando CMake..." -ForegroundColor Yellow
+    Write-Host "Configuring CMake..." -ForegroundColor Yellow
     cmake -S . -B build -D "USE_STATIC_FFMPEG:BOOL=$staticFlag" "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
 } else {
-    Write-Host "Reconfigurando CMake con nuevos parámetros..." -ForegroundColor Yellow
+    Write-Host "Reconfiguring CMake with new parameters..." -ForegroundColor Yellow
     cmake -S . -B build -D "USE_STATIC_FFMPEG:BOOL=$staticFlag" "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
 }
-if ($LASTEXITCODE -ne 0) { Write-Error "Fallo la configuración de CMake."; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Error "CMake configuration failed."; exit 1 }
 
-# 6) Compilar el proyecto
-Write-Host "Compilando proyecto..." -ForegroundColor Yellow
+# 6) Build the project
+Write-Host "Building project..." -ForegroundColor Yellow
 cmake --build build --config Release
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Fallo la compilación con CMake."
+    Write-Error "Build failed with CMake."
     exit 1
 }
 
-# 7) Copiar DLLs solo en modo compartido
+# 7) Copy DLLs only in shared mode
 if (-not $Static.IsPresent) {
     $dllSrc = "$FFmpegPath\bin"
     $dllDst = ".\build\Release"
     if (Test-Path $dllDst) {
-        Write-Host "Copiando DLLs de FFmpeg..." -ForegroundColor Yellow
+        Write-Host "Copying FFmpeg DLLs..." -ForegroundColor Yellow
         Get-ChildItem $dllSrc -Filter "*.dll" |
           Where-Object { $_.Name -match "^(avcodec|avformat|avutil|swscale|swresample)" } |
           ForEach-Object {
               Copy-Item $_.FullName -Destination $dllDst -Force
-              Write-Host "  Copiado: $($_.Name)" -ForegroundColor Cyan
+              Write-Host "  Copied: $($_.Name)" -ForegroundColor Cyan
           }
     }
 }
 
-# 8) Ejecutable final
+# 8) Final executable
 $exe = ".\build\Release\VideoEditor.exe"
 if (-not (Test-Path $exe)) {
-    Write-Host "ERROR: ¡VideoEditor.exe no fue creado!" -ForegroundColor Red
+    Write-Host "ERROR: VideoEditor.exe was not created!" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "`n✅ Build completada. Ejecutando Video Editor..." -ForegroundColor Green
+Write-Host "`n✅ Build complete. Launching Video Editor..." -ForegroundColor Green
 Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe -Parent)
