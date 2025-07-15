@@ -74,7 +74,7 @@ All source files now reside under the `src/` directory to keep the project organ
 
 ### Prerequisites
 
-- Visual Studio 2019 or later
+- Visual Studio 2022 or later
 - CMake 3.10 or later (3.15+ recommended for static linking)
 - FFmpeg development libraries
 
@@ -92,8 +92,11 @@ single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
    3. Run with powershell: .\run.ps1
 
    You won't need to install anything else. This produces a folder with the required dlls and a lightweight `VideoEditor.exe`.
+
 ---
+
 2. **Building a portable executable with static FFmpeg**
+
    1. Make sure you have installed the [vcpkg](https://github.com/Microsoft/vcpkg) package manager and installed in `C:/tools/vcpkg/`
    2. Install FFmpeg and curl via vcpkg using the static triplet.  You may enable
       additional codec features if desired:
