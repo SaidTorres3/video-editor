@@ -19,7 +19,7 @@ jobs:
       - run:
           name: Install vcpkg and dependencies
           shell: powershell
-          no_output_timeout: 30m
+          no_output_timeout: 2h
           command: |
             if (-not (Test-Path 'C:/tools/vcpkg')) {
               git clone https://github.com/microsoft/vcpkg C:/tools/vcpkg
