@@ -89,6 +89,7 @@ workflows:
       - build:
           name: build-dynamic
           static: false
-      - build:
-          name: build-static
-          static: true
+      # // Commented out static build for now because it consumes too much time (and credits $$$)!
+      # - build:
+      #     name: build-static
+      #     static: true
