@@ -51,14 +51,14 @@ jobs:
                 name: Install FFmpeg (dynamic)
                 shell: powershell
                 command: |
-                  New-Item -ItemType Directory -Force -Path "C:/Program Files/ffmpeg"
+                  New-Item -ItemType Directory -Force -Path "./third_party/ffmpeg"
                   $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
                   $zipPath = "C:/ffmpeg.zip"
                   Invoke-WebRequest -Uri $url -OutFile $zipPath
                   $tempExtractDir = "C:/ffmpeg_temp"
                   Expand-Archive -Path $zipPath -DestinationPath $tempExtractDir
                   $unzipped = Get-ChildItem -Path $tempExtractDir | Select-Object -First 1
-                  Move-Item -Path (Join-Path $unzipped.FullName "*") -Destination "C:/Program Files/ffmpeg"
+                  Move-Item -Path (Join-Path $unzipped.FullName "*") -Destination "./third_party/ffmpeg"
                   Remove-Item $zipPath
                   Remove-Item $tempExtractDir -Recurse
 
