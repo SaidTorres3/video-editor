@@ -234,9 +234,6 @@ if ($Static.IsPresent) {
     }
 }
 
-$env:CMAKE_TOOLCHAIN_FILE = "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
-Write-Host "Using vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor Cyan
-
 # 5) Configure/reconfigure CMake
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
 Write-Host "CMake arguments: -DUSE_STATIC_FFMPEG=$staticFlag, -DFFMPEG_ROOT=$FFmpegPath, -DCURL_ROOT=$env:CURL_ROOT" -ForegroundColor Cyan
