@@ -74,39 +74,57 @@ All source files now reside under the `src/` directory to keep the project organ
 
 ### Prerequisites
 
-- Visual Studio 2022 or later
-- CMake 3.10 or later (3.15+ recommended for static linking)
-- FFmpeg development libraries
+- PowerShell 7 or later
+
+The following dependencies will be installed automatically when running the ```run.ps1``` script:
+
+- Visual Studio 2022 or later with C++ tools
+- CMake 3.10 or later
+- FFmpeg development libraries ([https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip))
+
+If you prefer to install them manually, the script will detect and use your existing installations.
+
+The -static build option requires vcpkg to be installed and the FFmpeg and curl libraries to be installed, which are not being installed by this script.
 
 ### Build Steps
 
-The project can be built against the regular FFmpeg DLLs or the static
-libraries provided by `vcpkg`. Building with the static libraries produces a
-single `VideoEditor.exe` that does not need FFmpeg DLLs at runtime.
+---
 
-1. **Using the prebuilt shared FFmpeg binaries** (default)
+#### 1. Using prebuilt shared FFmpeg binaries (default)
 
-   1. Download FFmpeg from [https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip)
-   2. Extract FFmpeg to `C:/Program Files/ffmpeg` (or set `FFMPEG_ROOT` when
-      configuring CMake). This is now the default `FFMPEG_ROOT` value.
-   3. Run with powershell: .\run.ps1
+1. Open a terminal **as Administrator** in the project directory and run the following command using **PowerShell 7 or later**:
+   ```powershell
+   pwsh .\run.ps1
+   ```
+2. Accept the installation of all missing dependencies the script will prompt for.
+3. If the script fails or stops for any reason, simply run it again.
+4. After the first successful build, you can run the script without Administrator privileges:
+   ```powershell
+   .\run.ps1
+   ```
 
-   You won't need to install anything else. This produces a folder with the required dlls and a lightweight `VideoEditor.exe`.
+The script will handle all dependencies automatically. You'll end up with a lightweight  `VideoEditor.exe` and all required DLLs in the output folder—no extra setup needed.
 
 ---
 
-2. **Building a portable executable with static FFmpeg**
+#### 2. Building a portable e xecutable with static FFmpeg
 
-   1. Make sure you have installed the [vcpkg](https://github.com/Microsoft/vcpkg) package manager and installed in `C:/tools/vcpkg/`
-   2. Install FFmpeg and curl via vcpkg using the static triplet.  You may enable
-      additional codec features if desired:
-      ```
-      vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
-      vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
-      ```
-   3. Run with powershell: .\run.ps1 -Static
+1. Make sure you have installed the [vcpkg](https://github.com/Microsoft/vcpkg) package manager and installed in `C:/tools/vcpkg/`
+2. Install FFmpeg and curl via vcpkg using the static triplet.  You may enable
+   additional codec features if desired:
+   ```
+   vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
+   vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
+   ```
+3. Run with powershell 7 or later:
+
+```powershell
+   pwsh .\run.ps1 -Static
+```
 
    The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
+
+---
 
 The `CutVideo` feature uses the FFmpeg libraries directly, so no external `ffmpeg` executable is needed.
 When cutting you can optionally re-encode the video to H.264 and merge all active audio tracks; these operations are handled internally by FFmpeg.
