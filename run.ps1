@@ -1,5 +1,5 @@
 param(
-    [string]$FFmpegPath = "C:\Program Files\ffmpeg",
+    [string]$FFmpegPath = "$PSScriptRoot\third_party\ffmpeg",
     [switch]$Static
 )
 
@@ -43,7 +43,7 @@ $VendoredCurl = Join-Path $PSScriptRoot 'vendor\libcurl'
 # vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
 # If static build is requested and the default path wasn't changed,
 # try to guess the static vcpkg location.
-if ($Static -and $FFmpegPath -eq "C:\Program Files\ffmpeg") {
+if ($Static -and $FFmpegPath -eq "$PSScriptRoot\third_party\ffmpeg") {
     $guess = "C:\tools\vcpkg\installed\x64-windows-static"
     if (Test-Path "$guess\lib\avcodec.lib") {
         Write-Host "Static mode detected. Using FFmpeg from $guess" -ForegroundColor Cyan
