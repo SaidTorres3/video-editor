@@ -78,10 +78,10 @@ jobs:
             } else {
               ./run.ps1
             }
-
-      - store_artifacts:
-          path: ./build/Release
-          destination: release
+      # // Commented out because it consumes too much space
+      # - store_artifacts:
+      #     path: ./build/Release
+      #     destination: release
 
 workflows:
   ci-build:
