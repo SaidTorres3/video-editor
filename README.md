@@ -76,7 +76,7 @@ All source files now reside under the `src/` directory to keep the project organ
 
 - PowerShell 7 or later
 
-The following dependencies will be installed automatically when running the ```run.ps1``` script:
+The following dependencies will be installed automatically when running the ``run.ps1`` script:
 
 - Visual Studio 2022 or later with C++ tools
 - CMake 3.10 or later
@@ -92,22 +92,18 @@ The -static build option requires vcpkg to be installed and the FFmpeg and curl 
 
 #### 1. Using prebuilt shared FFmpeg binaries (default)
 
-1. Open a terminal **as Administrator** in the project directory and run the following command using **PowerShell 7 or later**:
+1. Open a windows terminal in the project directory and run the following command using **PowerShell 7 or later**:
    ```powershell
    pwsh .\run.ps1
    ```
 2. Accept the installation of all missing dependencies the script will prompt for.
 3. If the script fails or stops for any reason, simply run it again.
-4. After the first successful build, you can run the script without Administrator privileges:
-   ```powershell
-   .\run.ps1
-   ```
 
 The script will handle all dependencies automatically. You'll end up with a lightweight  `VideoEditor.exe` and all required DLLs in the output folder—no extra setup needed.
 
 ---
 
-#### 2. Building a portable e xecutable with static FFmpeg
+#### 2. Building a portable executable with static FFmpeg
 
 1. Make sure you have installed the [vcpkg](https://github.com/Microsoft/vcpkg) package manager and installed in `C:/tools/vcpkg/`
 2. Install FFmpeg and curl via vcpkg using the static triplet.  You may enable
