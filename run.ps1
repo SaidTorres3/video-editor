@@ -213,6 +213,27 @@ foreach ($p in $required) {
 }
 Write-Host "FFmpeg validated at: $FFmpegPath" -ForegroundColor Green
 
+# 5) Set vcpkg toolchain
+if ($Static.IsPresent) {
+    if (-not (Test-Path "C:/tools/vcpkg")) {
+        Write-Host "vcpkg not found. Cloning and bootstrapping..." -ForegroundColor Yellow
+        git clone https://github.com/microsoft/vcpkg "C:/tools/vcpkg"
+        & "C:/tools/vcpkg/bootstrap-vcpkg.bat"
+    }
+    $env:CMAKE_TOOLCHAIN_FILE = "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    Write-Host "Using vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor Cyan
+} else {
+    # Elimina la variable y cache de build para modo dinámico
+    if (Test-Path Env:\CMAKE_TOOLCHAIN_FILE) {
+        Remove-Item Env:\CMAKE_TOOLCHAIN_FILE -ErrorAction SilentlyContinue
+        Write-Host "Not using vcpkg toolchain (dynamic mode)" -ForegroundColor Cyan
+    }
+    if (Test-Path ".\build") {
+        Write-Host "Dynamic mode: removing existing build directory to drop vcpkg cache…" -ForegroundColor Yellow
+        Remove-Item ".\build" -Recurse -Force
+    }
+}
+
 $env:CMAKE_TOOLCHAIN_FILE = "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
 Write-Host "Using vcpkg toolchain: $env:CMAKE_TOOLCHAIN_FILE" -ForegroundColor Cyan
 
