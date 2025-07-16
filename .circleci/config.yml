@@ -11,40 +11,41 @@ jobs:
     steps:
       - checkout
 
-      - restore_cache:
-          keys:
-            - vcpkg-cache-{{ checksum "vcpkg.json.ci" }}
-            - vcpkg-cache-
-
-      - run:
-          name: Install vcpkg and dependencies
-          shell: powershell
-          no_output_timeout: 2h
-          command: |
-            if (-not (Test-Path 'C:/tools/vcpkg')) {
-              git clone https://github.com/microsoft/vcpkg C:/tools/vcpkg
-              & C:/tools/vcpkg/bootstrap-vcpkg.bat
-            }
-
-            # Habilitar caché binario interno
-            $env:VCPKG_DEFAULT_BINARY_CACHE = "C:/tools/vcpkg/bincache"
-            if (-not (Test-Path $env:VCPKG_DEFAULT_BINARY_CACHE)) {
-              New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-            }
-
-            if ("<<parameters.static>>" -eq "true") {
-              & C:/tools/vcpkg/vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
-              & C:/tools/vcpkg/vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
-            }
-
-      - save_cache:
-          key: vcpkg-cache-{{ checksum "vcpkg.json.ci" }}
-          paths:
-            - C:/tools/vcpkg
-
+      # static=true
       - when:
           condition:
-            not: <<parameters.static>>
+            equal: [ true, <<parameters.static>> ]
+          steps:
+            - restore_cache:
+                keys:
+                  - vcpkg-cache-{{ checksum "vcpkg.json.ci" }}
+                  - vcpkg-cache-
+
+            - run:
+                name: Install vcpkg and dependencies
+                shell: powershell
+                no_output_timeout: 2h
+                command: |
+                  if (-not (Test-Path 'C:/tools/vcpkg')) {
+                    git clone https://github.com/microsoft/vcpkg C:/tools/vcpkg
+                    & C:/tools/vcpkg/bootstrap-vcpkg.bat
+                  }
+                  $env:VCPKG_DEFAULT_BINARY_CACHE = "C:/tools/vcpkg/bincache"
+                  if (-not (Test-Path $env:VCPKG_DEFAULT_BINARY_CACHE)) {
+                    New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+                  }
+                  & C:/tools/vcpkg/vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,fdk-aac,opus,zlib,ffmpeg]:x64-windows-static
+                  & C:/tools/vcpkg/vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
+
+            - save_cache:
+                key: vcpkg-cache-{{ checksum "vcpkg.json.ci" }}
+                paths:
+                  - C:/tools/vcpkg
+
+      # static=false
+      - when:
+          condition:
+            equal: [ false, <<parameters.static>> ]
           steps:
             - run:
                 name: Install FFmpeg (dynamic)
