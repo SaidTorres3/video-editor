@@ -2,6 +2,7 @@
 #include "video_player.h"
 #include <chrono>
 #include <limits>
+#include <cmath>
 
 AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player), m_framesWritten(0) {}
 
@@ -198,6 +199,9 @@ bool AudioPlayer::InitializeTracks() {
             else
                 track->name = "Audio Track " + std::to_string(m_player->audioTracks.size() + 1);
 
+            track->noiseReducer.Initialize(m_player->audioSampleRate, m_player->audioChannels);
+            track->noiseReducer.SetSensitivity(track->noiseReductionThreshold);
+
             m_player->audioTracks.push_back(std::move(track));
         }
     }
@@ -291,6 +295,9 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
                                         (const uint8_t**)track->frame->data, track->frame->nb_samples);
     if (convertedSamples < 0)
         return;
+
+    if (track->noiseReductionEnabled)
+        track->noiseReducer.Process(outPtr, convertedSamples, m_player->audioChannels);
 
     // Store raw samples in track buffer
     {

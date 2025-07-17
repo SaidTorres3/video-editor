@@ -93,14 +93,18 @@ add_executable(VideoEditor WIN32
     src/video_renderer.cpp
     src/video_cutter.cpp
     src/video_player.cpp
+    src/noise_reducer.cpp
     src/options_window.cpp
     src/progress_window.cpp
     src/b2_upload.cpp
+    vendor/kissfft/kiss_fft.c
+    vendor/kissfft/kiss_fftr.c
 )
 
 # ==== INCLUDE DIRECTORIES ====
 target_include_directories(VideoEditor PRIVATE
     src
+    vendor/kissfft
     ${FFMPEG_INCLUDE_DIR}
 )
 
