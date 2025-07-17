@@ -29,6 +29,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Master Volume Control**: Control overall audio volume for all tracks
 - **Real-time Audio Mixing**: Multiple audio tracks are mixed together in real-time
 - **Audio Track Names**: Displays track names from metadata when available
+- **Advanced Noise Reduction**: Spectral filter removes steady background sounds like fan hum with adjustable sensitivity
 
 ### Audio Controls Interface
 
@@ -171,6 +172,7 @@ Open **Options** and click **B2 Settings** to enter your Backblaze account crede
 - **Individual Control**: Each track can be muted or have its volume adjusted independently
 - **Volume Range**: 0-200% volume control (0% = silent, 100% = original, 200% = amplified)
 - **Real-time Changes**: All audio adjustments take effect immediately during playback
+- **Noise Reduction Option**: Enable or disable the advanced noise filter per track
 
 ## Audio Track Display
 
