@@ -97,6 +97,7 @@ add_executable(VideoEditor WIN32
     src/progress_window.cpp
     src/b2_upload.cpp
     src/catbox_upload.cpp
+    src/debug_log.cpp
     src/upload_dialog.cpp
 )
 

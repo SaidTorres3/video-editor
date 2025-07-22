@@ -1,27 +1,10 @@
 #include "video_cutter.h"
 #include "video_player.h"
 #include "options_window.h"
+#include "debug_log.h"
 #include <iostream>
 #include <sstream>
-#include <fstream>
 #include <commctrl.h>
-
-// Simple debug logging helper that also writes to a file and can show popups
-
-static std::ofstream g_debugFile;
-static void DebugLog(const std::string& msg, bool popup = false)
-{
-    if (g_logToFile) {
-        if (!g_debugFile.is_open())
-            g_debugFile.open("debug.log", std::ios::app);
-        if (g_debugFile.is_open())
-            g_debugFile << msg << std::endl;
-    }
-
-    OutputDebugStringA((msg + "\n").c_str());
-    if (popup)
-        MessageBoxA(nullptr, msg.c_str(), "Video Editor Debug", MB_OK | MB_ICONINFORMATION);
-}
 
 VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player) {}
 
