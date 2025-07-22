@@ -6,6 +6,7 @@
 #include <thread>
 #include <string>
 #include "b2_upload.h"
+#include "catbox_upload.h"
 
 // Forward declarations
 void UpdateCutInfoLabel(HWND hwnd);
@@ -17,6 +18,8 @@ extern double g_cutStartTime, g_cutEndTime;
 extern HWND g_hStatusText, g_hProgressBar;
 extern bool g_useNvenc;
 extern bool g_autoUpload;
+extern bool g_useCatbox;
+extern bool g_useB2;
 std::wstring g_uploadedUrl;
 bool g_uploadSuccess = false;
 bool g_lastOperationWasExport = false;
@@ -114,10 +117,17 @@ void OnCutClicked(HWND hwnd)
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
-            if (ok && g_autoUpload) {
-                SetWindowTextW(g_hProgressWindow, L"Uploading to cloud");
+            if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
+                std::wstring title = L"Uploading to ";
+                title += g_useCatbox ? L"catbox.moe" : L"Backblaze B2";
+                SetWindowTextW(g_hProgressWindow, title.c_str());
                 std::string url;
-                if (UploadToB2(outFile, url, g_hProgressBar)) {
+                bool up = false;
+                if (g_useCatbox)
+                    up = UploadToCatbox(outFile, url, g_hProgressBar);
+                else if (g_useB2)
+                    up = UploadToB2(outFile, url, g_hProgressBar);
+                if (up) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
                     g_uploadedUrl.assign(sz - 1, 0);
                     MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);
@@ -193,10 +203,17 @@ void OnExportClicked(HWND hwnd)
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
-            if (ok && g_autoUpload) {
-                SetWindowTextW(g_hProgressWindow, L"Uploading to cloud");
+            if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
+                std::wstring title = L"Uploading to ";
+                title += g_useCatbox ? L"catbox.moe" : L"Backblaze B2";
+                SetWindowTextW(g_hProgressWindow, title.c_str());
                 std::string url;
-                if (UploadToB2(outFile, url, g_hProgressBar)) {
+                bool up = false;
+                if (g_useCatbox)
+                    up = UploadToCatbox(outFile, url, g_hProgressBar);
+                else if (g_useB2)
+                    up = UploadToB2(outFile, url, g_hProgressBar);
+                if (up) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
                     g_uploadedUrl.assign(sz - 1, 0);
                     MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);

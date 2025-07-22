@@ -16,6 +16,7 @@
 #include "options_window.h"
 #include "progress_window.h"
 #include "upload_dialog.h"
+#include <curl/curl.h>
 #include "window_proc.h"
 #include "timeline.h"
 #include "utils.h"
@@ -61,6 +62,7 @@ COLORREF g_textColor = RGB(240, 240, 240);
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
     LoadSettings();
+    curl_global_init(CURL_GLOBAL_DEFAULT);
     const wchar_t CLASS_NAME[] = L"VideoEditorClass";
     WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
@@ -94,6 +96,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     b2c.hCursor = LoadCursor(nullptr, IDC_ARROW);
     b2c.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClass(&b2c);
+
+    WNDCLASS upc = {};
+    upc.lpfnWndProc = UploadProc;
+    upc.hInstance = hInstance;
+    upc.lpszClassName = L"UploadConfigClass";
+    upc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    upc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&upc);
+
+    WNDCLASS catc = {};
+    catc.lpfnWndProc = CatboxConfigProc;
+    catc.hInstance = hInstance;
+    catc.lpszClassName = L"CatboxConfigClass";
+    catc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    catc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&catc);
 
     WNDCLASS pwc = {};
     pwc.lpfnWndProc = ProgressProc;
@@ -218,5 +236,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+    curl_global_cleanup();
     return 0;
 }

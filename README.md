@@ -44,7 +44,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Codec Options**: Copy video/audio codecs for a fast cut or convert to H.264
 - **Bitrate or Target Size**: When converting to H.264 you can either set a bitrate or specify a desired final size; only the chosen option is shown
 - **Progress Window**: A small window shows export progress in real time
-- **Optional B2 Upload**: When credentials are configured the exported file is uploaded to Backblaze B2 automatically and the download URL is shown
+- **Optional Cloud Upload**: Exported files can be uploaded automatically to Backblaze B2 or catbox.moe and the download URL is shown
 
 ## Technical Implementation
 
@@ -161,9 +161,9 @@ using `-FFmpegPath`.
 3. **Track Volume**: Adjust the "Track Volume" slider for the selected track
 4. **Master Volume**: Use the "Master Volume" slider to control overall audio level
 
-### Backblaze Settings
+### Upload Settings
 
-Open **Options** and click **B2 Settings** to enter your Backblaze account credentials. Enable *Auto upload* to have videos uploaded automatically after export.
+Open **Options** and click **Upload Settings** to configure cloud uploads. The window lets you enable *Auto upload after export* and open **Catbox Settings** or **Backblaze B2 Settings**. Each provider has its own window with an enable checkbox and credentials. When an upload succeeds a small dialog shows the URL so you can easily copy it to the clipboard. Make sure to paste your Catbox user hash without extra spaces.
 
 ### Audio Track Features
 
@@ -193,11 +193,9 @@ The application supports all audio formats that FFmpeg can decode, including:
 - Efficient audio mixing with minimal CPU overhead
 - Automatic format conversion handles different audio specifications
 
-### Backblaze B2 Upload
+### Cloud Upload
 
-Configure your B2 credentials under **Options > B2 Settings**. When `Auto upload`
-is enabled the exported video is automatically uploaded to Backblaze B2 and the
-download URL is shown after completion.
+Configure one or both providers under **Options > Upload Settings**. Enter your Backblaze B2 credentials or Catbox user hash in their respective dialogs. When `Auto upload after export` is enabled, the exported video is uploaded to the selected provider and the download URL is shown in a copyable dialog. Uploads without a Catbox user hash are anonymous and will not appear in your account.
 
 ## Troubleshooting
 
