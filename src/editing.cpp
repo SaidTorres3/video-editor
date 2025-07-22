@@ -6,6 +6,7 @@
 #include <thread>
 #include <string>
 #include "b2_upload.h"
+#include "catbox_upload.h"
 
 // Forward declarations
 void UpdateCutInfoLabel(HWND hwnd);
@@ -17,6 +18,7 @@ extern double g_cutStartTime, g_cutEndTime;
 extern HWND g_hStatusText, g_hProgressBar;
 extern bool g_useNvenc;
 extern bool g_autoUpload;
+extern bool g_useCatbox;
 std::wstring g_uploadedUrl;
 bool g_uploadSuccess = false;
 bool g_lastOperationWasExport = false;
@@ -117,7 +119,12 @@ void OnCutClicked(HWND hwnd)
             if (ok && g_autoUpload) {
                 SetWindowTextW(g_hProgressWindow, L"Uploading to cloud");
                 std::string url;
-                if (UploadToB2(outFile, url, g_hProgressBar)) {
+                bool up = false;
+                if (g_useCatbox)
+                    up = UploadToCatbox(outFile, url, g_hProgressBar);
+                else
+                    up = UploadToB2(outFile, url, g_hProgressBar);
+                if (up) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
                     g_uploadedUrl.assign(sz - 1, 0);
                     MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);
@@ -196,7 +203,12 @@ void OnExportClicked(HWND hwnd)
             if (ok && g_autoUpload) {
                 SetWindowTextW(g_hProgressWindow, L"Uploading to cloud");
                 std::string url;
-                if (UploadToB2(outFile, url, g_hProgressBar)) {
+                bool up = false;
+                if (g_useCatbox)
+                    up = UploadToCatbox(outFile, url, g_hProgressBar);
+                else
+                    up = UploadToB2(outFile, url, g_hProgressBar);
+                if (up) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
                     g_uploadedUrl.assign(sz - 1, 0);
                     MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);

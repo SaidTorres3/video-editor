@@ -17,6 +17,8 @@
 #define ID_EDIT_B2_BUCKET_NAME  2004
 #define ID_CHECKBOX_AUTO_UPLOAD 2005
 #define ID_EDIT_B2_CUSTOM_URL   2006
+#define ID_EDIT_CATBOX_HASH     2007
+#define ID_CHECKBOX_USE_CATBOX  2008
 
 extern bool g_useNvenc;
 extern bool g_logToFile;
@@ -27,6 +29,8 @@ extern std::wstring g_b2BucketId;
 extern std::wstring g_b2BucketName;
 extern std::wstring g_b2CustomUrl;
 extern bool g_autoUpload;
+extern bool g_useCatbox;
+extern std::wstring g_catboxUserHash;
 
 void ShowB2ConfigWindow(HWND parent);
 LRESULT CALLBACK B2ConfigProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
