@@ -98,7 +98,7 @@ void ShowOptionsWindow(HWND parent)
 
     g_hOptionsWnd = CreateWindowEx(0, L"OptionsClass", L"Options",
                                    WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 260, 200,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 280, 200,
                                    parent, nullptr,
                                    (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hOptionsWnd);
@@ -321,7 +321,7 @@ void ShowUploadWindow(HWND parent)
 
     g_hUploadWnd = CreateWindowEx(0, L"UploadConfigClass", L"Upload Settings",
                                   WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, 260, 150,
+                                  CW_USEDEFAULT, CW_USEDEFAULT, 300, 150,
                                   parent, nullptr,
                                   (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hUploadWnd);
@@ -340,7 +340,7 @@ void ShowUploadWindow(HWND parent)
 
     HWND hB2 = CreateWindow(L"BUTTON", L"Backblaze B2 Settings",
                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                             130, 40, 110, 25, g_hUploadWnd,
+                             130, 40, 130, 25, g_hUploadWnd,
                              (HMENU)ID_BUTTON_B2_SETTINGS,
                              (HINSTANCE)GetWindowLongPtr(g_hUploadWnd, GWLP_HINSTANCE), nullptr);
 
