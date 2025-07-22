@@ -20,6 +20,17 @@ static int ProgressCB(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
     return 0;
 }
 
+static std::wstring Trim(const std::wstring& in)
+{
+    size_t start = 0;
+    while (start < in.size() && iswspace(in[start]))
+        ++start;
+    size_t end = in.size();
+    while (end > start && iswspace(in[end - 1]))
+        --end;
+    return in.substr(start, end - start);
+}
+
 static std::string Narrow(const std::wstring& w) {
     int sz = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr,
  nullptr);
@@ -39,13 +50,13 @@ bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND prog
     curl_mime_name(part, "reqtype");
     curl_mime_data(part, "fileupload", CURL_ZERO_TERMINATED);
 
-    if (!g_catboxUserHash.empty()) {
+    std::wstring trimmedHash = Trim(g_catboxUserHash);
+    if (!trimmedHash.empty()) {
         part = curl_mime_addpart(mime);
         curl_mime_name(part, "userhash");
-        std::string hash = Narrow(g_catboxUserHash);
+        std::string hash = Narrow(trimmedHash);
         curl_mime_data(part, hash.c_str(), CURL_ZERO_TERMINATED);
     }
-
     part = curl_mime_addpart(mime);
     curl_mime_name(part, "fileToUpload");
     std::string path = Narrow(filePath);
