@@ -6,6 +6,7 @@
 #include "file_handling.h"
 #include "ui_updates.h"
 #include "editing.h"
+#include "upload_dialog.h"
 #include "utils.h"
 
 // Forward declarations for functions in other files
@@ -267,37 +268,38 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             CloseProgressWindow();
             EnableWindow(hwnd, TRUE);
             bool success = wParam != 0;
-            const wchar_t* msg;
-            const wchar_t* title;
-            UINT flags;
-            if (success)
-            {
-                if (g_autoUpload) {
-                    std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
-                    if (g_uploadSuccess)
-                        m += L"\nUploaded to B2:\n" + g_uploadedUrl;
-                    else
-                        m += L"\nFailed to upload to B2.";
-                    msg = m.c_str();
+            if (success && g_autoUpload && g_uploadSuccess) {
+                std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                m += L"\nUploaded to B2:";
+                ShowUrlCopyDialog(hwnd, m, g_uploadedUrl);
+            } else {
+                const wchar_t* msg;
+                const wchar_t* title;
+                UINT flags;
+                if (success) {
+                    if (g_autoUpload) {
+                        std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                        if (g_uploadSuccess)
+                            m += L"\nUploaded to B2:\n" + g_uploadedUrl;
+                        else
+                            m += L"\nFailed to upload to B2.";
+                        msg = m.c_str();
+                    } else {
+                        msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                    }
+                    title = L"Success";
+                    flags = MB_OK | MB_ICONINFORMATION;
+                } else if (g_cancelExport) {
+                    msg = L"Export canceled.";
+                    title = L"Canceled";
+                    flags = MB_OK | MB_ICONINFORMATION;
                 } else {
-                    msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                    msg = g_lastOperationWasExport ? L"Failed to export the video." : L"Failed to cut the video.";
+                    title = L"Error";
+                    flags = MB_OK | MB_ICONERROR;
                 }
-                title = L"Success";
-                flags = MB_OK | MB_ICONINFORMATION;
+                MessageBoxW(hwnd, msg, title, flags);
             }
-            else if (g_cancelExport)
-            {
-                msg = L"Export canceled.";
-                title = L"Canceled";
-                flags = MB_OK | MB_ICONINFORMATION;
-            }
-            else
-            {
-                msg = g_lastOperationWasExport ? L"Failed to export the video." : L"Failed to cut the video.";
-                title = L"Error";
-                flags = MB_OK | MB_ICONERROR;
-            }
-            MessageBoxW(hwnd, msg, title, flags);
             g_cancelExport = false;
             UpdateControls();
         }

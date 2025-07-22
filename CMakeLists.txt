@@ -96,6 +96,7 @@ add_executable(VideoEditor WIN32
     src/options_window.cpp
     src/progress_window.cpp
     src/b2_upload.cpp
+    src/upload_dialog.cpp
 )
 
 # ==== INCLUDE DIRECTORIES ====
