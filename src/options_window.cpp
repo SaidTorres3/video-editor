@@ -12,6 +12,7 @@ std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
 std::wstring g_b2BucketId;
 std::wstring g_b2BucketName;
+std::wstring g_b2CustomUrl;
 bool g_autoUpload = false;
 
 // Load settings from Windows registry
@@ -39,6 +40,9 @@ void LoadSettings()
         sz = sizeof(buf);
         if (RegQueryValueExW(hKey, L"B2BucketName", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
             g_b2BucketName = buf;
+        sz = sizeof(buf);
+        if (RegQueryValueExW(hKey, L"B2CustomUrl", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
+            g_b2CustomUrl = buf;
         sz = sizeof(DWORD); val = 0;
         if (RegQueryValueExW(hKey, L"AutoUpload", nullptr, nullptr, (LPBYTE)&val, &sz) == ERROR_SUCCESS)
             g_autoUpload = val != 0;
@@ -59,6 +63,7 @@ void SaveSettings()
         RegSetValueExW(hKey, L"B2AppKey", 0, REG_SZ, (const BYTE*)g_b2AppKey.c_str(), (DWORD)((g_b2AppKey.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2BucketId", 0, REG_SZ, (const BYTE*)g_b2BucketId.c_str(), (DWORD)((g_b2BucketId.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2BucketName", 0, REG_SZ, (const BYTE*)g_b2BucketName.c_str(), (DWORD)((g_b2BucketName.size()+1)*sizeof(wchar_t)));
+        RegSetValueExW(hKey, L"B2CustomUrl", 0, REG_SZ, (const BYTE*)g_b2CustomUrl.c_str(), (DWORD)((g_b2CustomUrl.size()+1)*sizeof(wchar_t)));
         val = g_autoUpload ? 1 : 0;
         RegSetValueExW(hKey, L"AutoUpload", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegCloseKey(hKey);
@@ -166,7 +171,7 @@ void ShowB2ConfigWindow(HWND parent)
 
     g_hB2Wnd = CreateWindowEx(0, L"B2ConfigClass", L"Backblaze B2 Settings",
                               WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 340, 230,
+                              CW_USEDEFAULT, CW_USEDEFAULT, 340, 260,
                               parent, nullptr,
                               (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hB2Wnd);
@@ -207,20 +212,29 @@ void ShowB2ConfigWindow(HWND parent)
                                    (HMENU)ID_EDIT_B2_BUCKET_NAME,
                                    (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
 
+    CreateWindow(L"STATIC", L"Custom URL:", WS_CHILD | WS_VISIBLE,
+                 10, 130, 100, 20, g_hB2Wnd, nullptr,
+                 (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+    HWND hCustomUrl = CreateWindow(L"EDIT", g_b2CustomUrl.c_str(),
+                                  WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                                  120, 130, 190, 20, g_hB2Wnd,
+                                  (HMENU)ID_EDIT_B2_CUSTOM_URL,
+                                  (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+
     HWND hAuto = CreateWindow(L"BUTTON", L"Auto upload after export",
                               WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                              10, 130, 200, 20, g_hB2Wnd,
+                              10, 160, 200, 20, g_hB2Wnd,
                               (HMENU)ID_CHECKBOX_AUTO_UPLOAD,
                               (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
 
     HWND hOk = CreateWindow(L"BUTTON", L"OK",
                             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            70, 170, 80, 25, g_hB2Wnd,
+                            70, 200, 80, 25, g_hB2Wnd,
                             (HMENU)IDOK,
                             (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
     HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                170, 170, 80, 25, g_hB2Wnd,
+                                170, 200, 80, 25, g_hB2Wnd,
                                 (HMENU)IDCANCEL,
                                 (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
 
@@ -228,6 +242,7 @@ void ShowB2ConfigWindow(HWND parent)
     ApplyDarkTheme(hAppKey);
     ApplyDarkTheme(hBucketId);
     ApplyDarkTheme(hBucketName);
+    ApplyDarkTheme(hCustomUrl);
     ApplyDarkTheme(hAuto);
     ApplyDarkTheme(hOk);
     ApplyDarkTheme(hCancel);
@@ -249,6 +264,8 @@ LRESULT CALLBACK B2ConfigProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             g_b2BucketId = buf;
             GetWindowTextW(GetDlgItem(hwnd, ID_EDIT_B2_BUCKET_NAME), buf, 256);
             g_b2BucketName = buf;
+            GetWindowTextW(GetDlgItem(hwnd, ID_EDIT_B2_CUSTOM_URL), buf, 256);
+            g_b2CustomUrl = buf;
             g_autoUpload = SendMessage(GetDlgItem(hwnd, ID_CHECKBOX_AUTO_UPLOAD), BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();
             DestroyWindow(hwnd);
@@ -265,6 +282,8 @@ LRESULT CALLBACK B2ConfigProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             g_b2BucketId = buf;
             GetWindowTextW(GetDlgItem(hwnd, ID_EDIT_B2_BUCKET_NAME), buf, 256);
             g_b2BucketName = buf;
+            GetWindowTextW(GetDlgItem(hwnd, ID_EDIT_B2_CUSTOM_URL), buf, 256);
+            g_b2CustomUrl = buf;
             g_autoUpload = SendMessage(GetDlgItem(hwnd, ID_CHECKBOX_AUTO_UPLOAD), BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();
             DestroyWindow(hwnd);

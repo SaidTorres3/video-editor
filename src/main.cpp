@@ -15,6 +15,7 @@
 #include "video_player.h"
 #include "options_window.h"
 #include "progress_window.h"
+#include "upload_dialog.h"
 #include "window_proc.h"
 #include "timeline.h"
 #include "utils.h"
@@ -101,6 +102,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     pwc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     pwc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClass(&pwc);
+
+    WNDCLASS ucw = {};
+    ucw.lpfnWndProc = UrlCopyProc;
+    ucw.hInstance = hInstance;
+    ucw.lpszClassName = L"UrlCopyClass";
+    ucw.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    ucw.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&ucw);
 
     HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"Video Editor - Preview",

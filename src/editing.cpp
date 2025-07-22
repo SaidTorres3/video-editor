@@ -115,8 +115,9 @@ void OnCutClicked(HWND hwnd)
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload) {
+                SetWindowTextW(g_hProgressWindow, L"Uploading to cloud");
                 std::string url;
-                if (UploadToB2(outFile, url)) {
+                if (UploadToB2(outFile, url, g_hProgressBar)) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
                     g_uploadedUrl.assign(sz - 1, 0);
                     MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);
@@ -193,8 +194,9 @@ void OnExportClicked(HWND hwnd)
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload) {
+                SetWindowTextW(g_hProgressWindow, L"Uploading to cloud");
                 std::string url;
-                if (UploadToB2(outFile, url)) {
+                if (UploadToB2(outFile, url, g_hProgressBar)) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
                     g_uploadedUrl.assign(sz - 1, 0);
                     MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);

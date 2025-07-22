@@ -16,6 +16,7 @@
 #define ID_EDIT_B2_BUCKET_ID    2003
 #define ID_EDIT_B2_BUCKET_NAME  2004
 #define ID_CHECKBOX_AUTO_UPLOAD 2005
+#define ID_EDIT_B2_CUSTOM_URL   2006
 
 extern bool g_useNvenc;
 extern bool g_logToFile;
@@ -24,6 +25,7 @@ extern std::wstring g_b2KeyId;
 extern std::wstring g_b2AppKey;
 extern std::wstring g_b2BucketId;
 extern std::wstring g_b2BucketName;
+extern std::wstring g_b2CustomUrl;
 extern bool g_autoUpload;
 
 void ShowB2ConfigWindow(HWND parent);

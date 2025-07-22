@@ -10,13 +10,14 @@ void ApplyDarkTheme(HWND hwnd);
 
 void ShowProgressWindow(HWND parent) {
     if (g_hProgressWindow) {
+        SetWindowTextW(g_hProgressWindow, L"Exporting video");
         ShowWindow(g_hProgressWindow, SW_SHOW);
         UpdateWindow(g_hProgressWindow);
         return;
     }
 
     g_hProgressWindow = CreateWindowEx(
-        WS_EX_TOPMOST, L"ProgressClass", L"Exporting...",
+        WS_EX_TOPMOST, L"ProgressClass", L"Exporting video",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
         CW_USEDEFAULT, CW_USEDEFAULT, 300, 150,
         parent, nullptr, GetModuleHandle(nullptr), nullptr);
