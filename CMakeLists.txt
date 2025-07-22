@@ -5,7 +5,7 @@ if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-project(VideoEditor CXX)
+project(VideoEditor C CXX)
 
 if(USE_STATIC_FFMPEG)
     message(STATUS "🔗 Linking FFmpeg statically")
