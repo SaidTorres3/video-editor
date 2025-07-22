@@ -2,6 +2,10 @@
 #include <cmath>
 #include <algorithm>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 NoiseReducer::NoiseReducer()
     : m_enabled(false), m_sensitivity(0.5f), m_sampleRate(44100), m_channels(2),
       m_windowSize(1024), m_profileFrames(20), m_framesCollected(0),
