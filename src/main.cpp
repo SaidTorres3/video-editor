@@ -95,6 +95,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     b2c.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClass(&b2c);
 
+    WNDCLASS upc = {};
+    upc.lpfnWndProc = UploadProc;
+    upc.hInstance = hInstance;
+    upc.lpszClassName = L"UploadConfigClass";
+    upc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    upc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&upc);
+
+    WNDCLASS catc = {};
+    catc.lpfnWndProc = CatboxConfigProc;
+    catc.hInstance = hInstance;
+    catc.lpszClassName = L"CatboxConfigClass";
+    catc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    catc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&catc);
+
     WNDCLASS pwc = {};
     pwc.lpfnWndProc = ProgressProc;
     pwc.hInstance = hInstance;

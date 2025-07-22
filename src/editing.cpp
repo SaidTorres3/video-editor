@@ -19,6 +19,7 @@ extern HWND g_hStatusText, g_hProgressBar;
 extern bool g_useNvenc;
 extern bool g_autoUpload;
 extern bool g_useCatbox;
+extern bool g_useB2;
 std::wstring g_uploadedUrl;
 bool g_uploadSuccess = false;
 bool g_lastOperationWasExport = false;
@@ -122,7 +123,7 @@ void OnCutClicked(HWND hwnd)
                 bool up = false;
                 if (g_useCatbox)
                     up = UploadToCatbox(outFile, url, g_hProgressBar);
-                else
+                else if (g_useB2)
                     up = UploadToB2(outFile, url, g_hProgressBar);
                 if (up) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
@@ -206,7 +207,7 @@ void OnExportClicked(HWND hwnd)
                 bool up = false;
                 if (g_useCatbox)
                     up = UploadToCatbox(outFile, url, g_hProgressBar);
-                else
+                else if (g_useB2)
                     up = UploadToB2(outFile, url, g_hProgressBar);
                 if (up) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
