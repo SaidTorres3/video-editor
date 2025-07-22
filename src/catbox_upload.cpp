@@ -63,12 +63,18 @@ bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND prog
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     }
 
+    long httpCode = 0;
     CURLcode res = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
     curl_mime_free(mime);
-    if (res != CURLE_OK) { curl_easy_cleanup(curl); return false; }
+    if (res != CURLE_OK || httpCode != 200) {
+        curl_easy_cleanup(curl);
+        return false;
+    }
 
-    // Trim newline if present
-    while (!response.empty() && (response.back() == '\n' || response.back() == '\r'))
+    // Trim whitespace if present
+    while (!response.empty() &&
+           (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
         response.pop_back();
     outUrl = response;
     curl_easy_cleanup(curl);

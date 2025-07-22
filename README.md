@@ -195,7 +195,7 @@ The application supports all audio formats that FFmpeg can decode, including:
 
 ### Cloud Upload
 
-Configure one or both providers under **Options > Upload Settings**. Enter your Backblaze B2 credentials or Catbox user hash in their respective dialogs. When `Auto upload after export` is enabled, the exported video is uploaded to the selected provider and the download URL is shown in a copyable dialog.
+Configure one or both providers under **Options > Upload Settings**. Enter your Backblaze B2 credentials or Catbox user hash in their respective dialogs. When `Auto upload after export` is enabled, the exported video is uploaded to the selected provider and the download URL is shown in a copyable dialog. Uploads without a Catbox user hash are anonymous and will not appear in your account.
 
 ## Troubleshooting
 
