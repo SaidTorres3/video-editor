@@ -84,6 +84,8 @@ bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND prog
 
     std::string response;
     curl_easy_setopt(curl, CURLOPT_URL, "https://catbox.moe/user/api.php");
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "VideoEditor/1.0");
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCB);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
