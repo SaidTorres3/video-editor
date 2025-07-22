@@ -268,9 +268,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             CloseProgressWindow();
             EnableWindow(hwnd, TRUE);
             bool success = wParam != 0;
+            std::wstring provider = g_useCatbox ? L"catbox.moe" : L"Backblaze B2";
             if (success && g_autoUpload && g_uploadSuccess) {
                 std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
-                m += L"\nUploaded to B2:";
+                m += L"\nUploaded to " + provider + L":";
                 ShowUrlCopyDialog(hwnd, m, g_uploadedUrl);
             } else {
                 const wchar_t* msg;
@@ -278,12 +279,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 UINT flags;
                 if (success) {
                     if (g_autoUpload) {
-                        std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
-                        if (g_uploadSuccess)
-                            m += L"\nUploaded to B2:\n" + g_uploadedUrl;
-                        else
-                            m += L"\nFailed to upload to B2.";
-                        msg = m.c_str();
+                        if (g_useCatbox || g_useB2) {
+                            std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                            if (g_uploadSuccess)
+                                m += L"\nUploaded to " + provider + L":\n" + g_uploadedUrl;
+                            else
+                                m += L"\nFailed to upload to " + provider + L".";
+                            msg = m.c_str();
+                        } else {
+                            msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
+                        }
                     } else {
                         msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
                     }

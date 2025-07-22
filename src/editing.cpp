@@ -117,8 +117,10 @@ void OnCutClicked(HWND hwnd)
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
-            if (ok && g_autoUpload) {
-                SetWindowTextW(g_hProgressWindow, L"Uploading to cloud");
+            if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
+                std::wstring title = L"Uploading to ";
+                title += g_useCatbox ? L"catbox.moe" : L"Backblaze B2";
+                SetWindowTextW(g_hProgressWindow, title.c_str());
                 std::string url;
                 bool up = false;
                 if (g_useCatbox)
@@ -201,8 +203,10 @@ void OnExportClicked(HWND hwnd)
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
-            if (ok && g_autoUpload) {
-                SetWindowTextW(g_hProgressWindow, L"Uploading to cloud");
+            if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
+                std::wstring title = L"Uploading to ";
+                title += g_useCatbox ? L"catbox.moe" : L"Backblaze B2";
+                SetWindowTextW(g_hProgressWindow, title.c_str());
                 std::string url;
                 bool up = false;
                 if (g_useCatbox)

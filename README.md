@@ -163,7 +163,7 @@ using `-FFmpegPath`.
 
 ### Upload Settings
 
-Open **Options** and click **Upload Settings** to configure cloud uploads. The window lets you enable *Auto upload after export* and open **Catbox Settings** or **Backblaze B2 Settings**. Each provider has its own window with an enable checkbox and credentials.
+Open **Options** and click **Upload Settings** to configure cloud uploads. The window lets you enable *Auto upload after export* and open **Catbox Settings** or **Backblaze B2 Settings**. Each provider has its own window with an enable checkbox and credentials. When an upload succeeds a small dialog shows the URL so you can easily copy it to the clipboard.
 
 ### Audio Track Features
 
@@ -195,7 +195,7 @@ The application supports all audio formats that FFmpeg can decode, including:
 
 ### Cloud Upload
 
-Configure one or both providers under **Options > Upload Settings**. Enter your Backblaze B2 credentials or Catbox user hash in their respective dialogs. When `Auto upload after export` is enabled the exported video is uploaded to the selected provider and the download URL is shown.
+Configure one or both providers under **Options > Upload Settings**. Enter your Backblaze B2 credentials or Catbox user hash in their respective dialogs. When `Auto upload after export` is enabled, the exported video is uploaded to the selected provider and the download URL is shown in a copyable dialog.
 
 ## Troubleshooting
 
