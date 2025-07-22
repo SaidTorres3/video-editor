@@ -8,6 +8,7 @@
 
 extern std::atomic<bool> g_cancelExport;
 extern HWND g_hProgressBar;
+extern HWND g_hProgressWindow;
 
 void ShowProgressWindow(HWND parent);
 void CloseProgressWindow();

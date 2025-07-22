@@ -115,6 +115,7 @@ void OnCutClicked(HWND hwnd)
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload) {
+                SetWindowTextW(g_hProgressWindow, L"Uploading video to cloud...");
                 std::string url;
                 if (UploadToB2(outFile, url, g_hProgressBar)) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
@@ -193,6 +194,7 @@ void OnExportClicked(HWND hwnd)
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload) {
+                SetWindowTextW(g_hProgressWindow, L"Uploading video to cloud...");
                 std::string url;
                 if (UploadToB2(outFile, url, g_hProgressBar)) {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
