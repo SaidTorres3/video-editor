@@ -228,6 +228,7 @@ void VideoPlayer::Stop()
 {
     Pause();
     currentFrame = 0;
+    currentPts = 0.0;
     if (isLoaded)
     {
         av_seek_frame(formatContext, videoStreamIndex, 0, AVSEEK_FLAG_FRAME);
