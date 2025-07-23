@@ -68,6 +68,7 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         SwrContext* swrCtx;
         AVFrame* frame;
         std::deque<int16_t> buffer;
+        float volume{1.0f};
     };
     std::vector<MergeTrack> mergeTracks;
     AVCodecContext* aEncCtx = nullptr;
@@ -194,6 +195,13 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             // We'll create a single output audio stream later
             MergeTrack mt{};
             mt.index = i;
+            // Preserve the current track volume so export obeys UI settings
+            for (const auto& at : m_player->audioTracks) {
+                if (at->streamIndex == i) {
+                    mt.volume = at->volume;
+                    break;
+                }
+            }
             const AVCodec* dec = avcodec_find_decoder(inStream->codecpar->codec_id);
             mt.decCtx = avcodec_alloc_context3(dec);
             avcodec_parameters_to_context(mt.decCtx, inStream->codecpar);
@@ -400,13 +408,12 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 for (int i = 0; i < encFrameSamples * 2; ++i) {
                     int sum = 0;
                     for (auto &mt : mergeTracks) {
-                        sum += mt.buffer.front();
+                        sum += static_cast<int>(mt.buffer.front() * mt.volume);
                         mt.buffer.pop_front();
                     }
-                    int v = sum / (int)mergeTracks.size();
-                    if (v > 32767) v = 32767;
-                    if (v < -32768) v = -32768;
-                    mixBuffer[i] = (int16_t)v;
+                    if (sum > 32767) sum = 32767;
+                    if (sum < -32768) sum = -32768;
+                    mixBuffer[i] = static_cast<int16_t>(sum);
                 }
                 AVFrame* af = av_frame_alloc();
                 af->nb_samples = encFrameSamples;
@@ -465,11 +472,13 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             if (!ready) break;
             for (int i = 0; i < encFrameSamples * 2; ++i) {
                 int sum = 0;
-                for (auto &mt : mergeTracks) { sum += mt.buffer.front(); mt.buffer.pop_front(); }
-                int v = sum / (int)mergeTracks.size();
-                if (v > 32767) v = 32767;
-                if (v < -32768) v = -32768;
-                mixBuffer[i] = (int16_t)v;
+                for (auto &mt : mergeTracks) {
+                    sum += static_cast<int>(mt.buffer.front() * mt.volume);
+                    mt.buffer.pop_front();
+                }
+                if (sum > 32767) sum = 32767;
+                if (sum < -32768) sum = -32768;
+                mixBuffer[i] = static_cast<int16_t>(sum);
             }
             AVFrame* af = av_frame_alloc();
             af->nb_samples = encFrameSamples;
