@@ -153,6 +153,8 @@ using `-FFmpegPath`.
 1. Click "Open Video" to select a video file
 2. The application will automatically detect and list all audio tracks
 3. Audio tracks appear in the "Audio Tracks" list on the right side
+4. You can also pass a video file path as a command line argument or use
+   Windows "Open with..." to launch the program with that video already loaded
 
 ### Controlling Audio Tracks
 

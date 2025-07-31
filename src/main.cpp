@@ -145,6 +145,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
+    int argc;
+    LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv && argc > 1)
+    {
+        LoadVideoFile(hwnd, std::wstring(argv[1]));
+    }
+    if (argv)
+        LocalFree(argv);
+
     MSG msg = {};
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
