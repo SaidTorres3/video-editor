@@ -20,6 +20,7 @@
 #include "window_proc.h"
 #include "timeline.h"
 #include "utils.h"
+#include "file_handling.h"
 
 #include <string>
 #include <cstdlib>
