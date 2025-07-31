@@ -196,7 +196,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         double step = 0.1 * (delta / WHEEL_DELTA);
         if (focused == g_hEditStartTime && g_cutStartTime >= 0)
         {
-            g_cutStartTime -= step;
+            g_cutStartTime += step;
             if (g_cutStartTime < 0) g_cutStartTime = 0;
             if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
                 g_cutStartTime = g_cutEndTime - 0.01;
@@ -206,7 +206,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         else if (focused == g_hEditEndTime && g_cutEndTime >= 0)
         {
-            g_cutEndTime -= step;
+            g_cutEndTime += step;
             if (g_cutEndTime < 0) g_cutEndTime = 0;
             if (g_cutStartTime >= 0 && g_cutEndTime <= g_cutStartTime)
                 g_cutEndTime = g_cutStartTime + 0.01;

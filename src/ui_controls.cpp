@@ -54,7 +54,7 @@ void CreateControls(HWND hwnd)
 
     // Open button
     g_hButtonOpen = CreateWindow(
-        L"BUTTON", L"Open Video",
+        L"BUTTON", L"\U0001F4C2",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         10, 10, 100, 30,
         hwnd, (HMENU)ID_BUTTON_OPEN,
@@ -89,7 +89,7 @@ void CreateControls(HWND hwnd)
     ApplyDarkTheme(g_hButtonStop);
 
     g_hButtonOptions = CreateWindow(
-        L"BUTTON", L"Options",
+        L"BUTTON", L"\u2699 Options",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
         330, 10, 80, 30,
         hwnd, (HMENU)ID_BUTTON_OPTIONS,
@@ -359,7 +359,9 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonPlay, 120, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonPause, 190, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonStop, 260, mainControlsY, 60, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonOptions, 330, mainControlsY, 80, mainControlsHeight, TRUE);
+    int optionsWidth = 80;
+    int optionsX = clientRect.right - optionsWidth - 10;
+    MoveWindow(g_hButtonOptions, optionsX, mainControlsY, optionsWidth, mainControlsHeight, TRUE);
 
     // Audio controls (aligned to the right)
     int audioControlsWidth = 220;
