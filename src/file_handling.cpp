@@ -2,6 +2,7 @@
 #include "video_player.h"
 #include "ui_updates.h"
 #include "editing.h"
+#include "options_window.h"
 #include <commdlg.h>
 
 // Forward declarations
@@ -77,6 +78,11 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
 
         UpdateControls();
         UpdateTimeline();
+        if (g_autoPlay)
+        {
+            g_videoPlayer->Play();
+            UpdateControls();
+        }
     }
     else
     {
