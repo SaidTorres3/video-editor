@@ -11,6 +11,7 @@
 #define ID_BUTTON_UPLOAD_CONFIG 1024
 #define ID_BUTTON_CATBOX_CONFIG 1031
 #define ID_BUTTON_B2_SETTINGS   1032
+#define ID_CHECKBOX_AUTO_PLAY   1033
 
 // B2 config control identifiers
 #define ID_EDIT_B2_KEY_ID       2001
@@ -25,6 +26,7 @@
 
 extern bool g_useNvenc;
 extern bool g_logToFile;
+extern bool g_autoPlay;
 
 extern std::wstring g_b2KeyId;
 extern std::wstring g_b2AppKey;

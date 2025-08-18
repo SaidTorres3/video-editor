@@ -10,6 +10,7 @@ static HWND g_hCatboxWnd = nullptr;
 // Global option variables
 bool g_useNvenc = false;
 bool g_logToFile = true;
+bool g_autoPlay = false;
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
 std::wstring g_b2BucketId;
@@ -31,6 +32,9 @@ void LoadSettings()
         size = sizeof(val);
         if (RegQueryValueExW(hKey, L"EnableLogFile", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
             g_logToFile = (val != 0);
+        size = sizeof(val);
+        if (RegQueryValueExW(hKey, L"AutoPlay", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
+            g_autoPlay = (val != 0);
 
         wchar_t buf[256];
         DWORD sz = sizeof(buf);
@@ -73,6 +77,8 @@ void SaveSettings()
         RegSetValueExW(hKey, L"UseNvenc", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         val = g_logToFile ? 1 : 0;
         RegSetValueExW(hKey, L"EnableLogFile", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = g_autoPlay ? 1 : 0;
+        RegSetValueExW(hKey, L"AutoPlay", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"B2KeyId", 0, REG_SZ, (const BYTE*)g_b2KeyId.c_str(), (DWORD)((g_b2KeyId.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2AppKey", 0, REG_SZ, (const BYTE*)g_b2AppKey.c_str(), (DWORD)((g_b2AppKey.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2BucketId", 0, REG_SZ, (const BYTE*)g_b2BucketId.c_str(), (DWORD)((g_b2BucketId.size()+1)*sizeof(wchar_t)));
@@ -121,22 +127,28 @@ void ShowOptionsWindow(HWND parent)
                              10, 90, 150, 20, g_hOptionsWnd,
                              (HMENU)ID_CHECKBOX_ENABLE_LOG,
                              (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
+    HWND hAuto = CreateWindow(L"BUTTON", L"Enable auto-play",
+                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                              10, 110, 150, 20, g_hOptionsWnd,
+                              (HMENU)ID_CHECKBOX_AUTO_PLAY,
+                              (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(hLib);
     ApplyDarkTheme(hNv);
     ApplyDarkTheme(hLog);
+    ApplyDarkTheme(hAuto);
     HWND hUpload = CreateWindow(L"BUTTON", L"Upload Settings",
                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                               10, 120, 100, 25, g_hOptionsWnd,
+                               10, 150, 100, 25, g_hOptionsWnd,
                                (HMENU)ID_BUTTON_UPLOAD_CONFIG,
                                (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     HWND hOk = CreateWindow(L"BUTTON", L"OK",
                             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            120, 120, 60, 25, g_hOptionsWnd,
+                            120, 150, 60, 25, g_hOptionsWnd,
                             (HMENU)IDOK,
                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                190, 120, 60, 25, g_hOptionsWnd,
+                                190, 150, 60, 25, g_hOptionsWnd,
                                 (HMENU)IDCANCEL,
                                 (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(hOk);
@@ -146,6 +158,7 @@ void ShowOptionsWindow(HWND parent)
     SendMessage(hLib, BM_SETCHECK, g_useNvenc ? BST_UNCHECKED : BST_CHECKED, 0);
     SendMessage(hNv, BM_SETCHECK, g_useNvenc ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hLog, BM_SETCHECK, g_logToFile ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hAuto, BM_SETCHECK, g_autoPlay ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
 LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -157,8 +170,10 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         } else if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
             HWND hNv = GetDlgItem(hwnd, ID_RADIO_ENCODER_NVENC);
             HWND hLog = GetDlgItem(hwnd, ID_CHECKBOX_ENABLE_LOG);
+            HWND hAuto = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_PLAY);
             g_useNvenc = SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();
             DestroyWindow(hwnd);
         }
@@ -167,8 +182,10 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             HWND hNv = GetDlgItem(hwnd, ID_RADIO_ENCODER_NVENC);
             HWND hLog = GetDlgItem(hwnd, ID_CHECKBOX_ENABLE_LOG);
+            HWND hAuto = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_PLAY);
             g_useNvenc = SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();
             DestroyWindow(hwnd);
         }
