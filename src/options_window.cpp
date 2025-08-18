@@ -10,7 +10,7 @@ static HWND g_hCatboxWnd = nullptr;
 // Global option variables
 bool g_useNvenc = false;
 bool g_logToFile = true;
-bool g_autoPlay = false;
+bool g_autoPlay = true;
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
 std::wstring g_b2BucketId;
@@ -104,7 +104,7 @@ void ShowOptionsWindow(HWND parent)
 
     g_hOptionsWnd = CreateWindowEx(0, L"OptionsClass", L"Options",
                                    WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 280, 200,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 280, 240,
                                    parent, nullptr,
                                    (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hOptionsWnd);
