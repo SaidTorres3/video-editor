@@ -4,7 +4,7 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 
 All source files now reside under the `src/` directory to keep the project organized.
 
-![Video Editor Showcase](https://raw.githubusercontent.com/SaidTorres3/video-editor/refs/heads/master/.readme-assets/showcase-v002.png)
+![Video Editor Showcase](https://raw.githubusercontent.com/SaidTorres3/video-editor/refs/heads/master/.readme-assets/showcase-v003.png)
 
 ## Features
 
@@ -21,7 +21,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - Frame-by-frame playback control
 - Hardware-accelerated rendering using Direct2D
 
-### Audio Playback (NEW!)
+### Audio Playback
 
 - **Multitrack Audio Support**: Automatically detects and loads all audio tracks from video files
 - **Individual Track Control**: Each audio track can be controlled independently
