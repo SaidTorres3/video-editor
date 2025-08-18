@@ -2,6 +2,7 @@
 #include "video_player.h"
 #include "audio_player.h"
 #include "video_renderer.h"
+#include "ui_updates.h"
 
 VideoDecoder::VideoDecoder(VideoPlayer* player) : m_player(player) {}
 
@@ -191,6 +192,8 @@ bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
                 {
                     InvalidateRect(m_player->videoWindow, nullptr, FALSE);
                 }
+
+                UpdateTimeline();
 
                 return true;
             }
