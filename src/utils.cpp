@@ -46,3 +46,21 @@ void ApplyDarkTheme(HWND hwnd)
         SendMessage(hwnd, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     SetWindowTheme(hwnd, L"DarkMode_Explorer", nullptr);
 }
+
+void CenterWindow(HWND hwnd, HWND parent)
+{
+    RECT rcWnd, rcParent;
+    GetWindowRect(hwnd, &rcWnd);
+    if (parent)
+        GetWindowRect(parent, &rcParent);
+    else {
+        rcParent.left = 0;
+        rcParent.top = 0;
+        rcParent.right = GetSystemMetrics(SM_CXSCREEN);
+        rcParent.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    int x = rcParent.left + (rcParent.right - rcParent.left - (rcWnd.right - rcWnd.left)) / 2;
+    int y = rcParent.top + (rcParent.bottom - rcParent.top - (rcWnd.bottom - rcWnd.top)) / 2;
+    SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+}

@@ -1,7 +1,5 @@
 #include "options_window.h"
-
-// Forward declaration from main.cpp for styling
-void ApplyDarkTheme(HWND hwnd);
+#include "utils.h"
 
 static HWND g_hOptionsWnd = nullptr;
 static HWND g_hUploadWnd = nullptr;
@@ -108,6 +106,7 @@ void ShowOptionsWindow(HWND parent)
                                    parent, nullptr,
                                    (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hOptionsWnd);
+    CenterWindow(g_hOptionsWnd, parent);
 
     CreateWindow(L"STATIC", L"Encode H264:", WS_CHILD | WS_VISIBLE,
                  10, 10, 120, 20, g_hOptionsWnd, nullptr,
@@ -211,6 +210,7 @@ void ShowB2ConfigWindow(HWND parent)
                               parent, nullptr,
                               (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hB2Wnd);
+    CenterWindow(g_hB2Wnd, parent);
 
     CreateWindow(L"STATIC", L"Key ID:", WS_CHILD | WS_VISIBLE,
                  10, 10, 100, 20, g_hB2Wnd, nullptr,
@@ -342,6 +342,7 @@ void ShowUploadWindow(HWND parent)
                                   parent, nullptr,
                                   (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hUploadWnd);
+    CenterWindow(g_hUploadWnd, parent);
 
     HWND hAuto = CreateWindow(L"BUTTON", L"Auto upload after export",
                               WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
@@ -424,6 +425,7 @@ void ShowCatboxConfigWindow(HWND parent)
                                   parent, nullptr,
                                   (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hCatboxWnd);
+    CenterWindow(g_hCatboxWnd, parent);
 
     CreateWindow(L"STATIC", L"User Hash:", WS_CHILD | WS_VISIBLE,
                  10, 10, 100, 20, g_hCatboxWnd, nullptr,

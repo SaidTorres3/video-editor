@@ -14,6 +14,7 @@ void ShowUrlCopyDialog(HWND parent, const std::wstring& message, const std::wstr
                                (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     if (!g_hUrlDlg) return;
     ApplyDarkTheme(g_hUrlDlg);
+    CenterWindow(g_hUrlDlg, parent);
     CreateWindow(L"STATIC", message.c_str(), WS_CHILD | WS_VISIBLE | SS_LEFT,
                  10, 10, 330, 40, g_hUrlDlg, nullptr,
                  (HINSTANCE)GetWindowLongPtr(g_hUrlDlg, GWLP_HINSTANCE), nullptr);
