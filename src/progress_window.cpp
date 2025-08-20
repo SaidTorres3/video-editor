@@ -1,12 +1,10 @@
 #include "progress_window.h"
 #include <commctrl.h>
+#include "utils.h"
 
 std::atomic<bool> g_cancelExport(false);
 HWND g_hProgressBar = nullptr;
 HWND g_hProgressWindow = nullptr;
-
-// Forward declaration for the dark theme function if needed
-void ApplyDarkTheme(HWND hwnd);
 
 void ShowProgressWindow(HWND parent) {
     if (g_hProgressWindow) {
@@ -23,14 +21,7 @@ void ShowProgressWindow(HWND parent) {
         parent, nullptr, GetModuleHandle(nullptr), nullptr);
 
     if (g_hProgressWindow) {
-        // Center the window
-        RECT parentRect, windowRect;
-        GetWindowRect(parent, &parentRect);
-        GetWindowRect(g_hProgressWindow, &windowRect);
-        int x = parentRect.left + (parentRect.right - parentRect.left - (windowRect.right - windowRect.left)) / 2;
-        int y = parentRect.top + (parentRect.bottom - parentRect.top - (windowRect.bottom - windowRect.top)) / 2;
-        SetWindowPos(g_hProgressWindow, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE);
-
+        CenterWindow(g_hProgressWindow, parent);
         ShowWindow(g_hProgressWindow, SW_SHOW);
         UpdateWindow(g_hProgressWindow);
     }
