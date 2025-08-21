@@ -63,9 +63,10 @@ VideoPlayer::~VideoPlayer()
 
 void VideoPlayer::CreateVideoWindow()
 {
+    // Use SS_NOTIFY to ensure mouse messages are delivered to our window procedure
     videoWindow = CreateWindow(
         L"STATIC", nullptr,
-        WS_CHILD | WS_VISIBLE | SS_BLACKRECT,
+        WS_CHILD | WS_VISIBLE | SS_BLACKRECT | SS_NOTIFY,
         10, 10, 640, 480,
         parentWindow, nullptr,
         (HINSTANCE)GetWindowLongPtr(parentWindow, GWLP_HINSTANCE),
