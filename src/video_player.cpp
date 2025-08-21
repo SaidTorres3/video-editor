@@ -475,7 +475,21 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
                 player->cropRect.top = (LONG)(y1 / drawH * player->frameHeight);
                 player->cropRect.right = (LONG)(x2 / drawW * player->frameWidth);
                 player->cropRect.bottom = (LONG)(y2 / drawH * player->frameHeight);
-                player->hasCrop = true;
+
+                // Ensure cropping dimensions are even so the H.264 encoder can open
+                auto make_even_floor = [](LONG v) { return v & ~1; };
+                auto make_even_ceil  = [](LONG v) { return (v + 1) & ~1; };
+                player->cropRect.left = std::max<LONG>(0, make_even_floor(player->cropRect.left));
+                player->cropRect.top = std::max<LONG>(0, make_even_floor(player->cropRect.top));
+                player->cropRect.right = std::min<LONG>(player->frameWidth, make_even_ceil(player->cropRect.right));
+                player->cropRect.bottom = std::min<LONG>(player->frameHeight, make_even_ceil(player->cropRect.bottom));
+
+                if (player->cropRect.right > player->cropRect.left &&
+                    player->cropRect.bottom > player->cropRect.top) {
+                    player->hasCrop = true;
+                } else {
+                    player->hasCrop = false;
+                }
             } else {
                 player->hasCrop = false;
             }
