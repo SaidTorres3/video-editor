@@ -378,19 +378,19 @@ void VideoPlayer::SetAudioTrackVolume(int trackIndex, float volume)
     audioTracks[trackIndex]->volume = clampedVolume;
 }
 
-bool VideoPlayer::IsNoiseReductionEnabled(int trackIndex) const
+NoiseReductionLevel VideoPlayer::GetNoiseReductionLevel(int trackIndex) const
 {
     if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
-        return false;
+        return NoiseReductionLevel::Disabled;
     return audioTracks[trackIndex]->noiseReduction;
 }
 
-void VideoPlayer::SetNoiseReductionEnabled(int trackIndex, bool enabled)
+void VideoPlayer::SetNoiseReductionLevel(int trackIndex, NoiseReductionLevel level)
 {
     if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
         return;
-    audioTracks[trackIndex]->noiseReduction = enabled;
-    if (!enabled)
+    audioTracks[trackIndex]->noiseReduction = level;
+    if (level == NoiseReductionLevel::Disabled)
         audioTracks[trackIndex]->noiseFloor = 0.0;
 }
 

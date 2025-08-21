@@ -44,6 +44,12 @@ extern HBRUSH g_hbrBackground;
 extern HFONT g_hFont;
 extern COLORREF g_textColor;
 
+// Context menu IDs for noise reduction levels
+#define ID_NR_DISABLED 2001
+#define ID_NR_LOW      2002
+#define ID_NR_NORMAL   2003
+#define ID_NR_HIGH     2004
+
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -119,6 +125,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case 1025: // ID_RADIO_USE_SIZE
             UpdateControls();
             break;
+        case ID_NR_DISABLED:
+        case ID_NR_LOW:
+        case ID_NR_NORMAL:
+        case ID_NR_HIGH:
+        {
+            int sel = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+            if (sel != LB_ERR && g_videoPlayer)
+            {
+                NoiseReductionLevel level = NoiseReductionLevel::Disabled;
+                if (LOWORD(wParam) == ID_NR_LOW) level = NoiseReductionLevel::Low;
+                else if (LOWORD(wParam) == ID_NR_NORMAL) level = NoiseReductionLevel::Normal;
+                else if (LOWORD(wParam) == ID_NR_HIGH) level = NoiseReductionLevel::High;
+                g_videoPlayer->SetNoiseReductionLevel(sel, level);
+            }
+            break;
+        }
         }
 
         if ((HWND)lParam == g_hEditStartTime && HIWORD(wParam) == EN_KILLFOCUS)
@@ -178,6 +200,25 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (HIWORD(wParam) == LBN_SELCHANGE && (HWND)lParam == g_hListBoxAudioTracks)
         {
             OnAudioTrackSelectionChanged();
+        }
+        break;
+
+    case WM_CONTEXTMENU:
+        if ((HWND)wParam == g_hListBoxAudioTracks && g_videoPlayer)
+        {
+            int sel = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+            if (sel != LB_ERR)
+            {
+                HMENU menu = CreatePopupMenu();
+                NoiseReductionLevel level = g_videoPlayer->GetNoiseReductionLevel(sel);
+                AppendMenu(menu, MF_STRING | (level == NoiseReductionLevel::Disabled ? MF_CHECKED : 0), ID_NR_DISABLED, L"Disabled");
+                AppendMenu(menu, MF_STRING | (level == NoiseReductionLevel::Low ? MF_CHECKED : 0), ID_NR_LOW, L"Low");
+                AppendMenu(menu, MF_STRING | (level == NoiseReductionLevel::Normal ? MF_CHECKED : 0), ID_NR_NORMAL, L"Normal");
+                AppendMenu(menu, MF_STRING | (level == NoiseReductionLevel::High ? MF_CHECKED : 0), ID_NR_HIGH, L"High");
+                TrackPopupMenu(menu, TPM_RIGHTBUTTON, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), 0, hwnd, NULL);
+                DestroyMenu(menu);
+            }
+            return 0;
         }
         break;
 

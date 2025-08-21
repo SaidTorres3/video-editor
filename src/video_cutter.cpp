@@ -72,7 +72,7 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         SwrContext* swrCtx;
         AVFrame* frame;
         std::deque<int16_t> buffer;
-        bool noiseReduction;
+        NoiseReductionLevel noiseReduction;
         double noiseFloor;
     };
     std::vector<MergeTrack> mergeTracks;
@@ -222,7 +222,7 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             av_opt_set_chlayout(mt.swrCtx, "out_chlayout", &out_ch, 0);
             swr_init(mt.swrCtx);
             mt.frame = av_frame_alloc();
-            mt.noiseReduction = false;
+            mt.noiseReduction = NoiseReductionLevel::Disabled;
             mt.noiseFloor = 0.0;
             for (const auto& t : m_player->audioTracks)
             {
@@ -393,8 +393,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                         int conv = swr_convert(mt.swrCtx, outArr, outSamples,
                                               (const uint8_t**)mt.frame->data,
                                               mt.frame->nb_samples);
-                        if (mt.noiseReduction)
-                            ApplyNoiseReduction(tmp.data(), conv, 2, mt.noiseFloor);
+                        if (mt.noiseReduction != NoiseReductionLevel::Disabled)
+                            ApplyNoiseReduction(tmp.data(), conv, 2, mt.noiseFloor, mt.noiseReduction);
                         mt.buffer.insert(mt.buffer.end(), tmp.begin(),
                                           tmp.begin() + conv * 2);
                     }

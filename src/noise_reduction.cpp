@@ -1,11 +1,36 @@
 #include "noise_reduction.h"
 #include <cmath>
 
-void ApplyNoiseReduction(int16_t* samples, int sampleCount, int channels, double& noiseFloor)
+void ApplyNoiseReduction(int16_t* samples, int sampleCount, int channels,
+                         double& noiseFloor, NoiseReductionLevel level)
 {
-    const double smooth = 0.95;            // smoothing factor for noise floor
-    const double threshold = 1.5;          // noise threshold multiplier
-    const double attenuation = 0.1;        // attenuation factor for noise
+    if (level == NoiseReductionLevel::Disabled)
+        return;
+
+    double smooth = 0.95;
+    double threshold = 1.5;
+    double attenuation = 0.1;
+
+    switch (level)
+    {
+    case NoiseReductionLevel::Low:
+        smooth = 0.98;
+        threshold = 1.2;
+        attenuation = 0.5;
+        break;
+    case NoiseReductionLevel::Normal:
+        smooth = 0.95;
+        threshold = 1.5;
+        attenuation = 0.2;
+        break;
+    case NoiseReductionLevel::High:
+        smooth = 0.90;
+        threshold = 2.0;
+        attenuation = 0.05;
+        break;
+    default:
+        break;
+    }
 
     for (int i = 0; i < sampleCount; ++i)
     {

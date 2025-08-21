@@ -32,6 +32,8 @@ extern "C"
 #include <chrono>
 #include <limits>
 
+#include "noise_reduction.h"
+
 // Audio output using Windows Audio Session API (WASAPI)
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -49,7 +51,7 @@ struct AudioTrack {
     SwrContext *swrContext;
     AVFrame *frame;
     bool isMuted;
-    bool noiseReduction;
+    NoiseReductionLevel noiseReduction;
     float volume;
     std::string name;
     std::deque<int16_t> buffer;
@@ -58,7 +60,7 @@ struct AudioTrack {
     double noiseFloor;
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), noiseReduction(false),
+                   frame(nullptr), isMuted(false), noiseReduction(NoiseReductionLevel::Disabled),
                    volume(1.0f), bufferPts(0.0), noiseFloor(0.0) {}
 };
 
@@ -181,8 +183,8 @@ public:
     void SetAudioTrackMuted(int trackIndex, bool muted);
     float GetAudioTrackVolume(int trackIndex) const;
     void SetAudioTrackVolume(int trackIndex, float volume);
-    bool IsNoiseReductionEnabled(int trackIndex) const;
-    void SetNoiseReductionEnabled(int trackIndex, bool enabled);
+    NoiseReductionLevel GetNoiseReductionLevel(int trackIndex) const;
+    void SetNoiseReductionLevel(int trackIndex, NoiseReductionLevel level);
     void SetMasterVolume(float volume);
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, bool useNvenc,
