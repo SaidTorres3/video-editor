@@ -295,7 +295,7 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
 
     if (track->noiseReduction != NoiseReductionLevel::Disabled)
         ApplyNoiseReduction(outPtr, convertedSamples, m_player->audioChannels,
-                           track->noiseFloor, track->noiseReduction);
+                           track->noiseProfile, track->noiseReduction);
 
     // Store raw samples in track buffer
     {

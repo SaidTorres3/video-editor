@@ -57,11 +57,11 @@ struct AudioTrack {
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
     double bufferPts;
-    double noiseFloor;
+    std::vector<double> noiseProfile;
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
                    frame(nullptr), isMuted(false), noiseReduction(NoiseReductionLevel::Disabled),
-                   volume(1.0f), bufferPts(0.0), noiseFloor(0.0) {}
+                   volume(1.0f), bufferPts(0.0) {}
 };
 
 class VideoPlayer

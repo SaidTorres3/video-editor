@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 // Levels of noise reduction intensity
 enum class NoiseReductionLevel {
@@ -10,12 +11,12 @@ enum class NoiseReductionLevel {
     High
 };
 
-// Apply simple noise reduction in-place on audio samples.
+// Apply spectral noise reduction in-place on audio samples.
 // samples: pointer to interleaved int16 samples
 // sampleCount: number of frames (per channel)
 // channels: number of audio channels
-// noiseFloor: running estimate of noise level (updated in-place)
+// noiseProfile: running estimate of noise spectrum (updated in-place)
 // level: reduction intensity
 void ApplyNoiseReduction(int16_t* samples, int sampleCount, int channels,
-                         double& noiseFloor, NoiseReductionLevel level);
+                         std::vector<double>& noiseProfile, NoiseReductionLevel level);
 

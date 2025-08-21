@@ -391,7 +391,7 @@ void VideoPlayer::SetNoiseReductionLevel(int trackIndex, NoiseReductionLevel lev
         return;
     audioTracks[trackIndex]->noiseReduction = level;
     if (level == NoiseReductionLevel::Disabled)
-        audioTracks[trackIndex]->noiseFloor = 0.0;
+        audioTracks[trackIndex]->noiseProfile.clear();
 }
 
 void VideoPlayer::SetMasterVolume(float volume)
