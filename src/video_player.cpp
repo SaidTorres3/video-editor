@@ -6,6 +6,7 @@
 #include "options_window.h"
 #include <iostream>
 #include <windows.h>
+#include <windowsx.h>
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
 #include <uxtheme.h>
