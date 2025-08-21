@@ -119,6 +119,9 @@ bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND prog
     DebugLog("Catbox response: " + outUrl);
     curl_easy_cleanup(curl);
     bool ok = !outUrl.empty() && outUrl.rfind("http", 0) == 0;
-    DebugLog(ok ? "Catbox upload succeeded" : "Catbox returned invalid URL", true);
+    if (ok)
+        DebugLog("Catbox upload succeeded");
+    else
+        DebugLog("Catbox returned invalid URL", true);
     return ok;
 }
