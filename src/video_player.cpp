@@ -14,6 +14,8 @@
 #include <cstring>
 #include <chrono>
 
+void UpdateControls();
+
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
       frame(nullptr), frameRGB(nullptr), hwFrame(nullptr), hwDeviceCtx(nullptr),
@@ -323,14 +325,6 @@ void VideoPlayer::Render()
     m_renderer->Render();
 }
 
-void VideoPlayer::ClearCrop()
-{
-    hasCrop = false;
-    selectingCrop = false;
-    cropRect = {0,0,0,0};
-    InvalidateRect(videoWindow, nullptr, FALSE);
-}
-
 void CALLBACK VideoPlayer::TimerProc(HWND hwnd, UINT, UINT_PTR, DWORD)
 {
     VideoPlayer *player = (VideoPlayer *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -494,6 +488,7 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
                 player->hasCrop = false;
             }
             InvalidateRect(hwnd, nullptr, FALSE);
+            UpdateControls();
             return 0;
         }
         else if (msg == WM_RBUTTONUP)
@@ -502,6 +497,7 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
             {
                 player->hasCrop = false;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                UpdateControls();
             }
             else
             {
