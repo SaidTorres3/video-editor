@@ -1,6 +1,7 @@
 #include "video_renderer.h"
 #include "video_player.h"
 #include "video_decoder.h"
+#include <algorithm>
 
 VideoRenderer::VideoRenderer(VideoPlayer* player) : m_player(player) {}
 
@@ -56,8 +57,17 @@ void VideoRenderer::UpdateDisplay() {
     m_player->d2dRenderTarget->BeginDraw();
     m_player->d2dRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::Black));
     D2D1_SIZE_F size = m_player->d2dRenderTarget->GetSize();
+    int srcW = m_player->frameWidth;
+    int srcH = m_player->frameHeight;
+    D2D1_RECT_F srcRect = {};
+    if (m_player->hasCrop) {
+        srcW = m_player->cropRect.right - m_player->cropRect.left;
+        srcH = m_player->cropRect.bottom - m_player->cropRect.top;
+        srcRect = D2D1::RectF((FLOAT)m_player->cropRect.left, (FLOAT)m_player->cropRect.top,
+                              (FLOAT)m_player->cropRect.right, (FLOAT)m_player->cropRect.bottom);
+    }
     float targetAspect = size.width / size.height;
-    float videoAspect = static_cast<float>(m_player->frameWidth) / m_player->frameHeight;
+    float videoAspect = static_cast<float>(srcW) / srcH;
     float drawWidth = size.width;
     float drawHeight = size.height;
     float offsetX = 0.0f;
@@ -79,7 +89,20 @@ void VideoRenderer::UpdateDisplay() {
         m_player->d2dBitmap,
         D2D1::RectF(offsetX, offsetY, offsetX + drawWidth, offsetY + drawHeight),
         1.0f,
-        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+        m_player->hasCrop ? &srcRect : nullptr);
+
+    if (m_player->selectingCrop) {
+        D2D1_RECT_F sel = D2D1::RectF(
+            (FLOAT)std::min(m_player->cropStart.x, m_player->cropCurrent.x),
+            (FLOAT)std::min(m_player->cropStart.y, m_player->cropCurrent.y),
+            (FLOAT)std::max(m_player->cropStart.x, m_player->cropCurrent.x),
+            (FLOAT)std::max(m_player->cropStart.y, m_player->cropCurrent.y));
+        ID2D1SolidColorBrush* brush = nullptr;
+        m_player->d2dRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Yellow), &brush);
+        m_player->d2dRenderTarget->DrawRectangle(sel, brush, 2.0f);
+        if (brush) brush->Release();
+    }
     m_player->d2dRenderTarget->EndDraw();
 }
 

@@ -51,8 +51,14 @@ void UpdateControls()
 
    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
    EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
-   EnableWindow(g_hRadioCopyCodec, isLoaded);
+
+   bool hasCrop = g_videoPlayer && g_videoPlayer->hasCrop;
+   EnableWindow(g_hRadioCopyCodec, isLoaded && !hasCrop);
    EnableWindow(g_hRadioH264, isLoaded);
+   if (hasCrop) {
+       SendMessage(g_hRadioH264, BM_SETCHECK, BST_CHECKED, 0);
+       SendMessage(g_hRadioCopyCodec, BM_SETCHECK, BST_UNCHECKED, 0);
+   }
 
    bool convertH264 = SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) == BST_CHECKED;
    bool useBitrate = SendMessage(g_hRadioUseBitrate, BM_GETCHECK, 0, 0) == BST_CHECKED;

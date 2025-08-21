@@ -89,6 +89,14 @@ public:
     double duration;
     double startTimeOffset;
 
+    // Crop selection
+    RECT cropRect;
+    std::vector<RECT> cropStack;
+    bool hasCrop;
+    bool selectingCrop;
+    POINT cropStart;
+    POINT cropCurrent;
+
     HWND parentWindow;
     HWND videoWindow;
     WNDPROC originalVideoWndProc;

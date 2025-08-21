@@ -87,7 +87,6 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_STOP,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonStop);
-
     g_hButtonOptions = CreateWindow(
         L"BUTTON", L"\u2699 Options",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
