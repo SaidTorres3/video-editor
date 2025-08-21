@@ -6,6 +6,7 @@
 #include <sstream>
 #include <commctrl.h>
 #include <libavutil/frame.h>
+#include "noise_reduction.h"
 
 VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player) {}
 
@@ -71,6 +72,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         SwrContext* swrCtx;
         AVFrame* frame;
         std::deque<int16_t> buffer;
+        bool noiseReduction;
+        double noiseFloor;
     };
     std::vector<MergeTrack> mergeTracks;
     AVCodecContext* aEncCtx = nullptr;
@@ -219,6 +222,17 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             av_opt_set_chlayout(mt.swrCtx, "out_chlayout", &out_ch, 0);
             swr_init(mt.swrCtx);
             mt.frame = av_frame_alloc();
+            mt.noiseReduction = false;
+            mt.noiseFloor = 0.0;
+            for (const auto& t : m_player->audioTracks)
+            {
+                if (t->streamIndex == i)
+                {
+                    mt.noiseReduction = t->noiseReduction;
+                    mt.noiseFloor = t->noiseFloor;
+                    break;
+                }
+            }
             mergeTracks.push_back(mt);
             continue; // output stream created later
         } else {
@@ -379,6 +393,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                         int conv = swr_convert(mt.swrCtx, outArr, outSamples,
                                               (const uint8_t**)mt.frame->data,
                                               mt.frame->nb_samples);
+                        if (mt.noiseReduction)
+                            ApplyNoiseReduction(tmp.data(), conv, 2, mt.noiseFloor);
                         mt.buffer.insert(mt.buffer.end(), tmp.begin(),
                                           tmp.begin() + conv * 2);
                     }

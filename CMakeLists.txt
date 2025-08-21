@@ -88,6 +88,7 @@ add_executable(VideoEditor WIN32
     src/timeline.cpp
     src/editing.cpp
     src/utils.cpp
+    src/noise_reduction.cpp
     src/video_decoder.cpp
     src/audio_player.cpp
     src/video_renderer.cpp

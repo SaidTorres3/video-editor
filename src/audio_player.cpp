@@ -1,5 +1,6 @@
 #include "audio_player.h"
 #include "video_player.h"
+#include "noise_reduction.h"
 #include <chrono>
 #include <limits>
 
@@ -291,6 +292,9 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
                                         (const uint8_t**)track->frame->data, track->frame->nb_samples);
     if (convertedSamples < 0)
         return;
+
+    if (track->noiseReduction)
+        ApplyNoiseReduction(outPtr, convertedSamples, m_player->audioChannels, track->noiseFloor);
 
     // Store raw samples in track buffer
     {

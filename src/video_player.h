@@ -49,14 +49,17 @@ struct AudioTrack {
     SwrContext *swrContext;
     AVFrame *frame;
     bool isMuted;
+    bool noiseReduction;
     float volume;
     std::string name;
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
     double bufferPts;
+    double noiseFloor;
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0) {}
+                   frame(nullptr), isMuted(false), noiseReduction(false),
+                   volume(1.0f), bufferPts(0.0), noiseFloor(0.0) {}
 };
 
 class VideoPlayer
@@ -178,6 +181,8 @@ public:
     void SetAudioTrackMuted(int trackIndex, bool muted);
     float GetAudioTrackVolume(int trackIndex) const;
     void SetAudioTrackVolume(int trackIndex, float volume);
+    bool IsNoiseReductionEnabled(int trackIndex) const;
+    void SetNoiseReductionEnabled(int trackIndex, bool enabled);
     void SetMasterVolume(float volume);
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, bool useNvenc,
