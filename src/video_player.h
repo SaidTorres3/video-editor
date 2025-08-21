@@ -169,6 +169,7 @@ public:
 
     void SetPosition(int x, int y, int width, int height);
     void Render();
+    void ClearCrop();
 
     // Audio track management
     int GetAudioTrackCount() const { return static_cast<int>(audioTracks.size()); }

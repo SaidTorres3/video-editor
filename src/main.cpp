@@ -39,6 +39,7 @@ HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
 HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
+HWND g_hButtonClearCrop;
 HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
 HWND g_hRadioUseBitrate, g_hRadioUseSize;
 HWND g_hLabelBitrate;

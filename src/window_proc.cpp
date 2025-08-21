@@ -110,6 +110,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             else
                 OnCutClicked(hwnd);
             break;
+        case 1026: // ID_BUTTON_CLEAR_CROP
+            if (g_videoPlayer)
+                g_videoPlayer->ClearCrop();
+            MessageBox(hwnd, L"Drag on the video preview to select a crop region. Right-click or use 'Clear Crop' to reset.", L"Crop", MB_OK);
+            break;
         case 1015: // ID_RADIO_COPY_CODEC
         case 1016: // ID_RADIO_H264
         case 1024: // ID_RADIO_USE_BITRATE

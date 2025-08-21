@@ -322,6 +322,14 @@ void VideoPlayer::Render()
     m_renderer->Render();
 }
 
+void VideoPlayer::ClearCrop()
+{
+    hasCrop = false;
+    selectingCrop = false;
+    cropRect = {0,0,0,0};
+    InvalidateRect(videoWindow, nullptr, FALSE);
+}
+
 void CALLBACK VideoPlayer::TimerProc(HWND hwnd, UINT, UINT_PTR, DWORD)
 {
     VideoPlayer *player = (VideoPlayer *)GetWindowLongPtr(hwnd, GWLP_USERDATA);

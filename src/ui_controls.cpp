@@ -31,6 +31,7 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_LABEL_TARGETSIZE 1023
 #define ID_RADIO_USE_BITRATE 1024
 #define ID_RADIO_USE_SIZE 1025
+#define ID_BUTTON_CLEAR_CROP 1026
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -41,6 +42,7 @@ extern HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
 extern HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
 extern HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
 extern HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
+extern HWND g_hButtonClearCrop;
 extern HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize;
 extern HWND g_hRadioUseBitrate, g_hRadioUseSize;
 extern HWND g_hLabelBitrate, g_hLabelTargetSize;
@@ -88,10 +90,18 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonStop);
 
+    g_hButtonClearCrop = CreateWindow(
+        L"BUTTON", L"Clear Crop",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        330, 10, 80, 30,
+        hwnd, (HMENU)ID_BUTTON_CLEAR_CROP,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonClearCrop);
+
     g_hButtonOptions = CreateWindow(
         L"BUTTON", L"\u2699 Options",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        330, 10, 80, 30,
+        420, 10, 80, 30,
         hwnd, (HMENU)ID_BUTTON_OPTIONS,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonOptions);
@@ -360,7 +370,10 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonPause, 190, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonStop, 260, mainControlsY, 60, mainControlsHeight, TRUE);
     int optionsWidth = 80;
+    int cropWidth = 80;
     int optionsX = clientRect.right - optionsWidth - 10;
+    int cropX = optionsX - cropWidth - 10;
+    MoveWindow(g_hButtonClearCrop, cropX, mainControlsY, cropWidth, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonOptions, optionsX, mainControlsY, optionsWidth, mainControlsHeight, TRUE);
 
     // Audio controls (aligned to the right)
