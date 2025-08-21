@@ -20,7 +20,10 @@ extern bool g_useNvenc;
 extern bool g_autoUpload;
 extern bool g_useCatbox;
 extern bool g_useB2;
-std::wstring g_uploadedUrl;
+std::wstring g_catboxUploadedUrl;
+std::wstring g_b2UploadedUrl;
+bool g_catboxUploadSuccess = false;
+bool g_b2UploadSuccess = false;
 bool g_uploadSuccess = false;
 bool g_lastOperationWasExport = false;
 
@@ -113,26 +116,41 @@ void OnCutClicked(HWND hwnd)
         std::wstring outFile = szFile;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
             g_uploadSuccess = false;
-            g_uploadedUrl.clear();
+            g_catboxUploadSuccess = false;
+            g_b2UploadSuccess = false;
+            g_catboxUploadedUrl.clear();
+            g_b2UploadedUrl.clear();
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
                 std::wstring title = L"Uploading to ";
-                title += g_useCatbox ? L"catbox.moe" : L"Backblaze B2";
+                if (g_useCatbox && g_useB2)
+                    title += L"catbox.moe and Backblaze B2";
+                else if (g_useCatbox)
+                    title += L"catbox.moe";
+                else
+                    title += L"Backblaze B2";
                 SetWindowTextW(g_hProgressWindow, title.c_str());
-                std::string url;
-                bool up = false;
-                if (g_useCatbox)
-                    up = UploadToCatbox(outFile, url, g_hProgressBar);
-                else if (g_useB2)
-                    up = UploadToB2(outFile, url, g_hProgressBar);
-                if (up) {
-                    int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
-                    g_uploadedUrl.assign(sz - 1, 0);
-                    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);
-                    g_uploadSuccess = true;
+                if (g_useCatbox) {
+                    std::string url;
+                    if (UploadToCatbox(outFile, url, g_hProgressBar)) {
+                        int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
+                        g_catboxUploadedUrl.assign(sz - 1, 0);
+                        MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_catboxUploadedUrl.data(), sz);
+                        g_catboxUploadSuccess = true;
+                    }
                 }
+                if (g_useB2) {
+                    std::string url;
+                    if (UploadToB2(outFile, url, g_hProgressBar)) {
+                        int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
+                        g_b2UploadedUrl.assign(sz - 1, 0);
+                        MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_b2UploadedUrl.data(), sz);
+                        g_b2UploadSuccess = true;
+                    }
+                }
+                g_uploadSuccess = (!g_useCatbox || g_catboxUploadSuccess) && (!g_useB2 || g_b2UploadSuccess);
             }
             PostMessage(hwnd, (WM_APP + 1), ok ? 1 : 0, 0); // WM_APP_CUT_DONE
         }).detach();
@@ -199,26 +217,41 @@ void OnExportClicked(HWND hwnd)
         std::wstring outFile = szFile;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
             g_uploadSuccess = false;
-            g_uploadedUrl.clear();
+            g_catboxUploadSuccess = false;
+            g_b2UploadSuccess = false;
+            g_catboxUploadedUrl.clear();
+            g_b2UploadedUrl.clear();
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
                 std::wstring title = L"Uploading to ";
-                title += g_useCatbox ? L"catbox.moe" : L"Backblaze B2";
+                if (g_useCatbox && g_useB2)
+                    title += L"catbox.moe and Backblaze B2";
+                else if (g_useCatbox)
+                    title += L"catbox.moe";
+                else
+                    title += L"Backblaze B2";
                 SetWindowTextW(g_hProgressWindow, title.c_str());
-                std::string url;
-                bool up = false;
-                if (g_useCatbox)
-                    up = UploadToCatbox(outFile, url, g_hProgressBar);
-                else if (g_useB2)
-                    up = UploadToB2(outFile, url, g_hProgressBar);
-                if (up) {
-                    int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
-                    g_uploadedUrl.assign(sz - 1, 0);
-                    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_uploadedUrl.data(), sz);
-                    g_uploadSuccess = true;
+                if (g_useCatbox) {
+                    std::string url;
+                    if (UploadToCatbox(outFile, url, g_hProgressBar)) {
+                        int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
+                        g_catboxUploadedUrl.assign(sz - 1, 0);
+                        MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_catboxUploadedUrl.data(), sz);
+                        g_catboxUploadSuccess = true;
+                    }
                 }
+                if (g_useB2) {
+                    std::string url;
+                    if (UploadToB2(outFile, url, g_hProgressBar)) {
+                        int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
+                        g_b2UploadedUrl.assign(sz - 1, 0);
+                        MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, g_b2UploadedUrl.data(), sz);
+                        g_b2UploadSuccess = true;
+                    }
+                }
+                g_uploadSuccess = (!g_useCatbox || g_catboxUploadSuccess) && (!g_useB2 || g_b2UploadSuccess);
             }
             PostMessage(hwnd, (WM_APP + 1), ok ? 1 : 0, 0);
         }).detach();

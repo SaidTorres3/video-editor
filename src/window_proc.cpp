@@ -35,7 +35,10 @@ extern double g_cutStartTime;
 extern double g_cutEndTime;
 extern bool g_lastOperationWasExport;
 extern bool g_uploadSuccess;
-extern std::wstring g_uploadedUrl;
+extern std::wstring g_catboxUploadedUrl;
+extern std::wstring g_b2UploadedUrl;
+extern bool g_catboxUploadSuccess;
+extern bool g_b2UploadSuccess;
 extern bool g_autoUpload;
 extern HBRUSH g_hbrBackground;
 extern HFONT g_hFont;
@@ -268,11 +271,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             CloseProgressWindow();
             EnableWindow(hwnd, TRUE);
             bool success = wParam != 0;
-            std::wstring provider = g_useCatbox ? L"catbox.moe" : L"Backblaze B2";
             if (success && g_autoUpload && g_uploadSuccess) {
                 std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
-                m += L"\nUploaded to " + provider + L":";
-                ShowUrlCopyDialog(hwnd, m, g_uploadedUrl);
+                if (g_useCatbox && g_useB2)
+                    m += L"\nUploaded to catbox.moe and Backblaze B2:";
+                else if (g_useCatbox)
+                    m += L"\nUploaded to catbox.moe:";
+                else if (g_useB2)
+                    m += L"\nUploaded to Backblaze B2:";
+                ShowUrlCopyDialog(hwnd, m, g_catboxUploadedUrl, g_b2UploadedUrl);
             } else {
                 const wchar_t* msg;
                 const wchar_t* title;
@@ -281,10 +288,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     if (g_autoUpload) {
                         if (g_useCatbox || g_useB2) {
                             std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
-                            if (g_uploadSuccess)
-                                m += L"\nUploaded to " + provider + L":\n" + g_uploadedUrl;
-                            else
-                                m += L"\nFailed to upload to " + provider + L".";
+                            if (g_useCatbox) {
+                                if (g_catboxUploadSuccess)
+                                    m += L"\nUploaded to catbox.moe:\n" + g_catboxUploadedUrl;
+                                else
+                                    m += L"\nFailed to upload to catbox.moe.";
+                            }
+                            if (g_useB2) {
+                                if (g_b2UploadSuccess)
+                                    m += L"\nUploaded to Backblaze B2:\n" + g_b2UploadedUrl;
+                                else
+                                    m += L"\nFailed to upload to Backblaze B2.";
+                            }
                             msg = m.c_str();
                         } else {
                             msg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
