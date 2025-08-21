@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <commctrl.h>
+#include <libavutil/frame.h>
 
 VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player) {}
 
@@ -55,6 +56,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
     // When re-encoding or merging audio we need to set up decoder/encoder
     // contexts. The previous implementation only supported stream copying.
     // Build encoder state on demand.
+    if (m_player->hasCrop)
+        convertH264 = true;
     bool success = true;
     AVCodecContext* vEncCtx = nullptr;
     AVCodecContext* vDecCtx = nullptr;
@@ -128,8 +131,12 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             outStream = avformat_new_stream(outputCtx, vEnc);
             vEncCtx = avcodec_alloc_context3(vEnc);
             vEncCtx->codec_id = AV_CODEC_ID_H264;
-            vEncCtx->width = inStream->codecpar->width;
-            vEncCtx->height = inStream->codecpar->height;
+            int outW = m_player->hasCrop ? (m_player->cropRect.right - m_player->cropRect.left)
+                                         : inStream->codecpar->width;
+            int outH = m_player->hasCrop ? (m_player->cropRect.bottom - m_player->cropRect.top)
+                                         : inStream->codecpar->height;
+            vEncCtx->width = outW;
+            vEncCtx->height = outH;
             vEncCtx->time_base = inStream->time_base;
             vEncCtx->pix_fmt = AV_PIX_FMT_YUV420P;
             vEncCtx->max_b_frames = 2;
@@ -329,8 +336,15 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         if (convertH264 && pkt.stream_index == m_player->videoStreamIndex) {
             avcodec_send_packet(vDecCtx, &pkt);
             while (avcodec_receive_frame(vDecCtx, decFrame) == 0) {
+                if (m_player->hasCrop) {
+                    decFrame->crop_left = m_player->cropRect.left;
+                    decFrame->crop_top = m_player->cropRect.top;
+                    decFrame->crop_right = vDecCtx->width - m_player->cropRect.right;
+                    decFrame->crop_bottom = vDecCtx->height - m_player->cropRect.bottom;
+                    av_frame_apply_cropping(decFrame, 0);
+                }
                 if (!swsCtx) {
-                    swsCtx = sws_getContext(vDecCtx->width, vDecCtx->height,
+                    swsCtx = sws_getContext(decFrame->width, decFrame->height,
                                             (AVPixelFormat)decFrame->format,
                                             vEncCtx->width, vEncCtx->height,
                                             vEncCtx->pix_fmt, SWS_BILINEAR,
@@ -342,7 +356,7 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                         goto cleanup;
                     }
                 }
-                sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, vDecCtx->height, encFrame->data, encFrame->linesize);
+                sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, decFrame->height, encFrame->data, encFrame->linesize);
                 encFrame->pts = av_rescale_q(decFrame->pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, vEncCtx->time_base);
                 avcodec_send_frame(vEncCtx, encFrame);
                 while (avcodec_receive_packet(vEncCtx, &outPkt) == 0) {

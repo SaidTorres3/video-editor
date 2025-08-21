@@ -19,7 +19,9 @@ VideoPlayer::VideoPlayer(HWND parent)
       hwPixelFormat(AV_PIX_FMT_NONE), useHwAccel(false), packet(nullptr), swsContext(nullptr),
       buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
-      totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0), videoWindow(nullptr),
+      totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
+      cropRect{0,0,0,0}, hasCrop(false), selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
+      videoWindow(nullptr),
       d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
@@ -413,6 +415,68 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
         else if (msg == WM_ERASEBKGND)
         {
             return 1;
+        }
+        else if (msg == WM_LBUTTONDOWN && player->isLoaded)
+        {
+            player->selectingCrop = true;
+            player->cropStart = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            player->cropCurrent = player->cropStart;
+            SetCapture(hwnd);
+            return 0;
+        }
+        else if (msg == WM_MOUSEMOVE && player->selectingCrop)
+        {
+            player->cropCurrent = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        else if (msg == WM_LBUTTONUP && player->selectingCrop)
+        {
+            player->selectingCrop = false;
+            ReleaseCapture();
+            player->cropCurrent = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            RECT winRect = { std::min(player->cropStart.x, player->cropCurrent.x),
+                             std::min(player->cropStart.y, player->cropCurrent.y),
+                             std::max(player->cropStart.x, player->cropCurrent.x),
+                             std::max(player->cropStart.y, player->cropCurrent.y) };
+            RECT client; GetClientRect(hwnd, &client);
+            float wndW = (float)(client.right - client.left);
+            float wndH = (float)(client.bottom - client.top);
+            float videoAspect = static_cast<float>(player->frameWidth) / player->frameHeight;
+            float targetAspect = wndW / wndH;
+            float drawW, drawH, offsetX, offsetY;
+            if (targetAspect > videoAspect) {
+                drawH = wndH;
+                drawW = drawH * videoAspect;
+                offsetX = (wndW - drawW) / 2.0f;
+                offsetY = 0.0f;
+            } else {
+                drawW = wndW;
+                drawH = drawW / videoAspect;
+                offsetX = 0.0f;
+                offsetY = (wndH - drawH) / 2.0f;
+            }
+            float x1 = std::clamp((float)winRect.left - offsetX, 0.0f, drawW);
+            float y1 = std::clamp((float)winRect.top - offsetY, 0.0f, drawH);
+            float x2 = std::clamp((float)winRect.right - offsetX, 0.0f, drawW);
+            float y2 = std::clamp((float)winRect.bottom - offsetY, 0.0f, drawH);
+            if (x2 > x1 && y2 > y1) {
+                player->cropRect.left = (LONG)(x1 / drawW * player->frameWidth);
+                player->cropRect.top = (LONG)(y1 / drawH * player->frameHeight);
+                player->cropRect.right = (LONG)(x2 / drawW * player->frameWidth);
+                player->cropRect.bottom = (LONG)(y2 / drawH * player->frameHeight);
+                player->hasCrop = true;
+            } else {
+                player->hasCrop = false;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        else if (msg == WM_RBUTTONUP && player->hasCrop)
+        {
+            player->hasCrop = false;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         }
         return CallWindowProc(player->originalVideoWndProc, hwnd, msg, wParam, lParam);
     }
