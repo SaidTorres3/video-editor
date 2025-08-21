@@ -481,10 +481,17 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
-        else if (msg == WM_RBUTTONUP && player->hasCrop)
+        else if (msg == WM_RBUTTONUP)
         {
-            player->hasCrop = false;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            if (player->hasCrop)
+            {
+                player->hasCrop = false;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            else
+            {
+                MessageBox(hwnd, L"Drag with the left mouse button to select a crop region. Right-click clears the crop.", L"Crop", MB_OK);
+            }
             return 0;
         }
         return CallWindowProc(player->originalVideoWndProc, hwnd, msg, wParam, lParam);

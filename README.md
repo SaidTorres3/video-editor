@@ -41,7 +41,7 @@ All source files now reside under the `src/` directory to keep the project organ
 ### Cutting and Exporting Clips
 
 - **Set Start/End Points**: Mark the portion of the video to export
-- **Interactive Crop**: Drag on the video preview to select a cropped region for export; use the **Clear Crop** button or right-click to reset
+- **Interactive Crop**: Hold the left mouse button and drag on the video preview to draw a selection rectangle. Release to apply the crop. Right-click or use the **Clear Crop** button to reset.
 - **Merge Audio Tracks**: Combine all unmuted tracks into one output stream
 - **Codec Options**: Copy video/audio codecs for a fast cut or convert to H.264
 - **Bitrate or Target Size**: When converting to H.264 you can either set a bitrate or specify a desired final size; only the chosen option is shown
