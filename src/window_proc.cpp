@@ -8,6 +8,7 @@
 #include "editing.h"
 #include "upload_dialog.h"
 #include "utils.h"
+#include <windowsx.h>
 
 // Forward declarations for functions in other files
 void ApplyDarkTheme(HWND hwnd);
