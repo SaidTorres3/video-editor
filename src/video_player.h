@@ -91,6 +91,7 @@ public:
 
     // Crop selection
     RECT cropRect;
+    std::vector<RECT> cropStack;
     bool hasCrop;
     bool selectingCrop;
     POINT cropStart;

@@ -191,6 +191,9 @@ void VideoPlayer::UnloadVideo()
     currentPts = 0.0;
     totalFrames = 0;
     duration = 0.0;
+    cropRect = {0,0,0,0};
+    cropStack.clear();
+    hasCrop = false;
 }
 
 bool VideoPlayer::Play()
@@ -446,7 +449,12 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
             RECT client; GetClientRect(hwnd, &client);
             float wndW = (float)(client.right - client.left);
             float wndH = (float)(client.bottom - client.top);
-            float videoAspect = static_cast<float>(player->frameWidth) / player->frameHeight;
+
+            RECT base = player->hasCrop ? player->cropRect : RECT{0,0,player->frameWidth, player->frameHeight};
+            float baseW = (float)(base.right - base.left);
+            float baseH = (float)(base.bottom - base.top);
+
+            float videoAspect = baseW / baseH;
             float targetAspect = wndW / wndH;
             float drawW, drawH, offsetX, offsetY;
             if (targetAspect > videoAspect) {
@@ -465,27 +473,26 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
             float x2 = std::clamp((float)winRect.right - offsetX, 0.0f, drawW);
             float y2 = std::clamp((float)winRect.bottom - offsetY, 0.0f, drawH);
             if (x2 > x1 && y2 > y1) {
-                player->cropRect.left = (LONG)(x1 / drawW * player->frameWidth);
-                player->cropRect.top = (LONG)(y1 / drawH * player->frameHeight);
-                player->cropRect.right = (LONG)(x2 / drawW * player->frameWidth);
-                player->cropRect.bottom = (LONG)(y2 / drawH * player->frameHeight);
+                RECT newRect;
+                newRect.left = base.left + (LONG)(x1 / drawW * baseW);
+                newRect.top = base.top + (LONG)(y1 / drawH * baseH);
+                newRect.right = base.left + (LONG)(x2 / drawW * baseW);
+                newRect.bottom = base.top + (LONG)(y2 / drawH * baseH);
 
                 // Ensure cropping dimensions are even so the H.264 encoder can open
                 auto make_even_floor = [](LONG v) { return v & ~1; };
                 auto make_even_ceil  = [](LONG v) { return (v + 1) & ~1; };
-                player->cropRect.left = std::max<LONG>(0, make_even_floor(player->cropRect.left));
-                player->cropRect.top = std::max<LONG>(0, make_even_floor(player->cropRect.top));
-                player->cropRect.right = std::min<LONG>(player->frameWidth, make_even_ceil(player->cropRect.right));
-                player->cropRect.bottom = std::min<LONG>(player->frameHeight, make_even_ceil(player->cropRect.bottom));
+                newRect.left = std::max<LONG>(base.left, make_even_floor(newRect.left));
+                newRect.top = std::max<LONG>(base.top, make_even_floor(newRect.top));
+                newRect.right = std::min<LONG>(base.right, make_even_ceil(newRect.right));
+                newRect.bottom = std::min<LONG>(base.bottom, make_even_ceil(newRect.bottom));
 
-                if (player->cropRect.right > player->cropRect.left &&
-                    player->cropRect.bottom > player->cropRect.top) {
+                if (newRect.right > newRect.left &&
+                    newRect.bottom > newRect.top) {
+                    player->cropStack.push_back(newRect);
+                    player->cropRect = newRect;
                     player->hasCrop = true;
-                } else {
-                    player->hasCrop = false;
                 }
-            } else {
-                player->hasCrop = false;
             }
             InvalidateRect(hwnd, nullptr, FALSE);
             UpdateControls();
@@ -493,15 +500,22 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
         }
         else if (msg == WM_RBUTTONUP)
         {
-            if (player->hasCrop)
+            if (!player->cropStack.empty())
             {
-                player->hasCrop = false;
+                player->cropStack.pop_back();
+                if (!player->cropStack.empty()) {
+                    player->cropRect = player->cropStack.back();
+                    player->hasCrop = true;
+                } else {
+                    player->cropRect = {0,0,0,0};
+                    player->hasCrop = false;
+                }
                 InvalidateRect(hwnd, nullptr, FALSE);
                 UpdateControls();
             }
             else
             {
-                MessageBox(hwnd, L"Drag with the left mouse button to select a crop region. Right-click clears the crop.", L"Crop", MB_OK);
+                MessageBox(hwnd, L"Drag with the left mouse button to select a crop region. Right-click steps back one crop.", L"Crop", MB_OK);
             }
             return 0;
         }
