@@ -60,13 +60,17 @@ struct AudioTrack {
     // Voice isolation support
     bool voiceIsolationEnabled;
     DenoiseState* denoiseState;
+    SwrContext* voiceIsolationSwrContext;  // For 48kHz mono conversion
+    SwrContext* voiceIsolationBackSwrContext; // For converting back to original format
     std::vector<float> voiceIsolationInputBuffer;   // Input buffer for RNNoise (480 samples)
-    std::vector<float> voiceIsolationOutputBuffer;  // Output buffer for RNNoise (480 samples)
+    std::vector<int16_t> voiceIsolationMonoBuffer;  // 48kHz mono buffer
+    std::vector<int16_t> voiceIsolationProcessedBuffer; // Processed 48kHz mono buffer
     std::deque<float> voiceIsolationSampleQueue;    // Queue for incomplete frames
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
                    frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0),
-                   voiceIsolationEnabled(false), denoiseState(nullptr) {}
+                   voiceIsolationEnabled(false), denoiseState(nullptr), 
+                   voiceIsolationSwrContext(nullptr), voiceIsolationBackSwrContext(nullptr) {}
 };
 
 class VideoPlayer

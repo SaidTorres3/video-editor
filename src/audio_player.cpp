@@ -215,13 +215,24 @@ void AudioPlayer::CleanupTracks() {
         if (track->codecContext)
             avcodec_free_context(&track->codecContext);
         // Cleanup voice isolation
+        if (track->voiceIsolationBackSwrContext)
+        {
+            swr_free(&track->voiceIsolationBackSwrContext);
+            track->voiceIsolationBackSwrContext = nullptr;
+        }
+        if (track->voiceIsolationSwrContext)
+        {
+            swr_free(&track->voiceIsolationSwrContext);
+            track->voiceIsolationSwrContext = nullptr;
+        }
         if (track->denoiseState)
         {
             rnnoise_destroy(track->denoiseState);
             track->denoiseState = nullptr;
         }
         track->voiceIsolationInputBuffer.clear();
-        track->voiceIsolationOutputBuffer.clear();
+        track->voiceIsolationMonoBuffer.clear();
+        track->voiceIsolationProcessedBuffer.clear();
         track->voiceIsolationSampleQueue.clear();
         track->buffer.clear();
         track->bufferPts = 0.0;
@@ -302,78 +313,77 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
         return;
 
     // Apply voice isolation if enabled
-    if (track->voiceIsolationEnabled && track->denoiseState)
+    if (track->voiceIsolationEnabled && track->denoiseState && 
+        track->voiceIsolationSwrContext && track->voiceIsolationBackSwrContext)
     {
-        // Work directly with the resampled stereo data (44.1kHz or original rate)
-        // RNNoise will work with any sample rate, we just need to adjust processing
+        // Convert stereo audio to 48kHz mono for RNNoise processing
+        int maxOutSamples = swr_get_out_samples(track->voiceIsolationSwrContext, convertedSamples);
+        if (track->voiceIsolationMonoBuffer.size() < static_cast<size_t>(maxOutSamples))
+            track->voiceIsolationMonoBuffer.resize(maxOutSamples);
         
-        int frameSize = rnnoise_get_frame_size(); // 480 samples (designed for 48kHz)
+        int16_t* monoPtr = track->voiceIsolationMonoBuffer.data();
+        int convertedMono = swr_convert(track->voiceIsolationSwrContext, 
+                                       (uint8_t**)&monoPtr, maxOutSamples,
+                                       (const uint8_t**)&outPtr, convertedSamples);
         
-        // Calculate equivalent frame size for our sample rate
-        int actualFrameSize = static_cast<int>((frameSize * m_player->audioSampleRate) / 48000.0f);
-        if (actualFrameSize <= 0) actualFrameSize = frameSize;
-        
-        // Ensure we have enough data to process
-        if (convertedSamples * m_player->audioChannels >= actualFrameSize)
+        if (convertedMono > 0)
         {
-            // Process the audio in chunks
-            for (int sample = 0; sample < convertedSamples; sample += actualFrameSize)
+            // Add new samples to the queue
+            for (int i = 0; i < convertedMono; ++i)
             {
-                int samplesToProcess = std::min(actualFrameSize, convertedSamples - sample);
-                
-                if (samplesToProcess >= actualFrameSize / 2) // Only process reasonably sized chunks
+                track->voiceIsolationSampleQueue.push_back(static_cast<float>(monoPtr[i]));
+            }
+            
+            int frameSize = rnnoise_get_frame_size(); // 480 samples
+            int processedSamples = 0;
+            
+            // Ensure processed buffer is large enough
+            if (track->voiceIsolationProcessedBuffer.size() < static_cast<size_t>(convertedMono))
+                track->voiceIsolationProcessedBuffer.resize(convertedMono);
+            
+            // Process complete 480-sample frames
+            while (track->voiceIsolationSampleQueue.size() >= static_cast<size_t>(frameSize))
+            {
+                // Fill input buffer with exactly 480 samples
+                for (int i = 0; i < frameSize; ++i)
                 {
-                    // Convert stereo to mono by averaging channels and convert to float
-                    for (int i = 0; i < actualFrameSize && i < samplesToProcess; ++i)
+                    track->voiceIsolationInputBuffer[i] = track->voiceIsolationSampleQueue.front();
+                    track->voiceIsolationSampleQueue.pop_front();
+                }
+                
+                // Apply RNNoise processing - this modifies the input buffer in place
+                rnnoise_process_frame(track->denoiseState, 
+                                    track->voiceIsolationInputBuffer.data(), 
+                                    track->voiceIsolationInputBuffer.data());
+                
+                // Convert processed output back to int16 and store
+                for (int i = 0; i < frameSize; ++i)
+                {
+                    float sample = track->voiceIsolationInputBuffer[i];
+                    sample = std::max(-32768.0f, std::min(32767.0f, sample));
+                    if (processedSamples + i < static_cast<int>(track->voiceIsolationProcessedBuffer.size()))
                     {
-                        int stereoIndex = (sample + i) * m_player->audioChannels;
-                        if (stereoIndex + 1 < convertedSamples * m_player->audioChannels)
-                        {
-                            // Average stereo channels to mono
-                            float left = static_cast<float>(outPtr[stereoIndex]) / 32768.0f;
-                            float right = static_cast<float>(outPtr[stereoIndex + 1]) / 32768.0f;
-                            
-                            if (i < static_cast<int>(track->voiceIsolationInputBuffer.size()))
-                            {
-                                track->voiceIsolationInputBuffer[i] = (left + right) * 0.5f;
-                            }
-                        }
-                    }
-                    
-                    // Pad remaining samples with zeros if needed
-                    for (int i = samplesToProcess; i < actualFrameSize && i < static_cast<int>(track->voiceIsolationInputBuffer.size()); ++i)
-                    {
-                        track->voiceIsolationInputBuffer[i] = 0.0f;
-                    }
-                    
-                    // Apply RNNoise processing
-                    if (track->voiceIsolationInputBuffer.size() >= static_cast<size_t>(actualFrameSize) &&
-                        track->voiceIsolationOutputBuffer.size() >= static_cast<size_t>(actualFrameSize))
-                    {
-                        rnnoise_process_frame(track->denoiseState, 
-                                            track->voiceIsolationOutputBuffer.data(), 
-                                            track->voiceIsolationInputBuffer.data());
-                        
-                        // Convert back to stereo int16 and replace original samples
-                        for (int i = 0; i < samplesToProcess; ++i)
-                        {
-                            int stereoIndex = (sample + i) * m_player->audioChannels;
-                            if (stereoIndex + 1 < convertedSamples * m_player->audioChannels &&
-                                i < static_cast<int>(track->voiceIsolationOutputBuffer.size()))
-                            {
-                                // Convert processed mono back to stereo
-                                float processedSample = track->voiceIsolationOutputBuffer[i];
-                                int16_t finalSample = static_cast<int16_t>(
-                                    std::max(-32768.0f, std::min(32767.0f, processedSample * 32768.0f))
-                                );
-                                
-                                // Apply to both channels
-                                outPtr[stereoIndex] = finalSample;     // Left
-                                outPtr[stereoIndex + 1] = finalSample; // Right
-                            }
-                        }
+                        track->voiceIsolationProcessedBuffer[processedSamples + i] = static_cast<int16_t>(sample);
                     }
                 }
+                processedSamples += frameSize;
+            }
+            
+            // Convert processed 48kHz mono back to original rate stereo
+            if (processedSamples > 0)
+            {
+                int16_t* processedPtr = track->voiceIsolationProcessedBuffer.data();
+                int backConverted = swr_convert(track->voiceIsolationBackSwrContext, 
+                                               (uint8_t**)&outPtr, convertedSamples,
+                                               (const uint8_t**)&processedPtr, processedSamples);
+                
+                if (backConverted > 0)
+                {
+                    // The processed audio is now in outPtr, with the correct number of samples.
+                    // We need to update convertedSamples to reflect the actual output size.
+                    convertedSamples = backConverted;
+                }
+                // If conversion fails, the original audio remains in outPtr.
             }
         }
     }

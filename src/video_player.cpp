@@ -403,16 +403,88 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
         track->denoiseState = rnnoise_create(nullptr);
         if (track->denoiseState)
         {
-            track->voiceIsolationEnabled = true;
-            // Pre-allocate buffers for RNNoise processing
-            int frameSize = rnnoise_get_frame_size(); // 480 samples
-            track->voiceIsolationInputBuffer.resize(frameSize);
-            track->voiceIsolationOutputBuffer.resize(frameSize);
+            // Set up forward resampler: stereo original rate -> mono 48kHz
+            track->voiceIsolationSwrContext = swr_alloc();
+            if (track->voiceIsolationSwrContext)
+            {
+                AVChannelLayout in_ch_layout, out_ch_layout;
+                av_channel_layout_from_mask(&in_ch_layout, AV_CH_LAYOUT_STEREO);
+                av_channel_layout_from_mask(&out_ch_layout, AV_CH_LAYOUT_MONO);
+                
+                av_opt_set_chlayout(track->voiceIsolationSwrContext, "in_chlayout", &in_ch_layout, 0);
+                av_opt_set_chlayout(track->voiceIsolationSwrContext, "out_chlayout", &out_ch_layout, 0);
+                av_opt_set_int(track->voiceIsolationSwrContext, "in_sample_rate", audioSampleRate, 0);
+                av_opt_set_int(track->voiceIsolationSwrContext, "out_sample_rate", 48000, 0);
+                av_opt_set_sample_fmt(track->voiceIsolationSwrContext, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                av_opt_set_sample_fmt(track->voiceIsolationSwrContext, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                
+                if (swr_init(track->voiceIsolationSwrContext) >= 0)
+                {
+                    // Set up backward resampler: mono 48kHz -> stereo original rate
+                    track->voiceIsolationBackSwrContext = swr_alloc();
+                    if (track->voiceIsolationBackSwrContext)
+                    {
+                        av_channel_layout_from_mask(&in_ch_layout, AV_CH_LAYOUT_MONO);
+                        av_channel_layout_from_mask(&out_ch_layout, AV_CH_LAYOUT_STEREO);
+                        
+                        av_opt_set_chlayout(track->voiceIsolationBackSwrContext, "in_chlayout", &in_ch_layout, 0);
+                        av_opt_set_chlayout(track->voiceIsolationBackSwrContext, "out_chlayout", &out_ch_layout, 0);
+                        av_opt_set_int(track->voiceIsolationBackSwrContext, "in_sample_rate", 48000, 0);
+                        av_opt_set_int(track->voiceIsolationBackSwrContext, "out_sample_rate", audioSampleRate, 0);
+                        av_opt_set_sample_fmt(track->voiceIsolationBackSwrContext, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                        av_opt_set_sample_fmt(track->voiceIsolationBackSwrContext, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                        
+                        if (swr_init(track->voiceIsolationBackSwrContext) >= 0)
+                        {
+                            track->voiceIsolationEnabled = true;
+                            // Pre-allocate buffers for RNNoise processing
+                            int frameSize = rnnoise_get_frame_size(); // 480 samples
+                            track->voiceIsolationInputBuffer.resize(frameSize);
+                            track->voiceIsolationMonoBuffer.resize(frameSize * 4); // Extra space for resampling
+                            track->voiceIsolationProcessedBuffer.resize(frameSize * 4);
+                        }
+                        else
+                        {
+                            swr_free(&track->voiceIsolationBackSwrContext);
+                            swr_free(&track->voiceIsolationSwrContext);
+                            rnnoise_destroy(track->denoiseState);
+                            track->denoiseState = nullptr;
+                        }
+                    }
+                    else
+                    {
+                        swr_free(&track->voiceIsolationSwrContext);
+                        rnnoise_destroy(track->denoiseState);
+                        track->denoiseState = nullptr;
+                    }
+                }
+                else
+                {
+                    swr_free(&track->voiceIsolationSwrContext);
+                    rnnoise_destroy(track->denoiseState);
+                    track->denoiseState = nullptr;
+                }
+            }
+            else
+            {
+                rnnoise_destroy(track->denoiseState);
+                track->denoiseState = nullptr;
+            }
         }
     }
     else if (!enabled && track->voiceIsolationEnabled)
     {
         // Cleanup voice isolation resources
+        if (track->voiceIsolationBackSwrContext)
+        {
+            swr_free(&track->voiceIsolationBackSwrContext);
+            track->voiceIsolationBackSwrContext = nullptr;
+        }
+        if (track->voiceIsolationSwrContext)
+        {
+            swr_free(&track->voiceIsolationSwrContext);
+            track->voiceIsolationSwrContext = nullptr;
+        }
         if (track->denoiseState)
         {
             rnnoise_destroy(track->denoiseState);
@@ -420,7 +492,8 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
         }
         track->voiceIsolationEnabled = false;
         track->voiceIsolationInputBuffer.clear();
-        track->voiceIsolationOutputBuffer.clear();
+        track->voiceIsolationMonoBuffer.clear();
+        track->voiceIsolationProcessedBuffer.clear();
         track->voiceIsolationSampleQueue.clear();
     }
 }
