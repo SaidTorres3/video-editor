@@ -41,6 +41,7 @@ class VideoDecoder;
 class AudioPlayer;
 class VideoRenderer;
 class VideoCutter;
+struct DenoiseState;
 
 // Audio track structure
 struct AudioTrack {
@@ -54,9 +55,13 @@ struct AudioTrack {
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
     double bufferPts;
+    bool voiceIsolation;
+    DenoiseState *rnnoiseState;
+    std::vector<float> rnnoiseBuffer;
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0) {}
+                   frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0),
+                   voiceIsolation(false), rnnoiseState(nullptr) {}
 };
 
 class VideoPlayer
@@ -178,6 +183,8 @@ public:
     void SetAudioTrackMuted(int trackIndex, bool muted);
     float GetAudioTrackVolume(int trackIndex) const;
     void SetAudioTrackVolume(int trackIndex, float volume);
+    bool IsAudioTrackVoiceIsolated(int trackIndex) const;
+    void SetAudioTrackVoiceIsolation(int trackIndex, bool enabled);
     void SetMasterVolume(float volume);
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, bool useNvenc,

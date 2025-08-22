@@ -1,5 +1,6 @@
 #include "audio_player.h"
 #include "video_player.h"
+#include "rnnoise.h"
 #include <chrono>
 #include <limits>
 
@@ -214,8 +215,13 @@ void AudioPlayer::CleanupTracks() {
             av_frame_free(&track->frame);
         if (track->codecContext)
             avcodec_free_context(&track->codecContext);
+        if (track->rnnoiseState)
+            rnnoise_destroy(track->rnnoiseState);
+        track->rnnoiseState = nullptr;
+        track->rnnoiseBuffer.clear();
         track->buffer.clear();
         track->bufferPts = 0.0;
+        track->voiceIsolation = false;
     }
     m_player->audioTracks.clear();
 }
@@ -292,14 +298,47 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
     if (convertedSamples < 0)
         return;
 
-    // Store raw samples in track buffer
+    // Store processed samples in track buffer
     {
         std::lock_guard<std::mutex> lock(m_player->audioMutex);
-        if (track->buffer.empty())
-            track->bufferPts = framePts - m_player->startTimeOffset;
-        track->buffer.insert(track->buffer.end(),
-                             outPtr,
-                             outPtr + convertedSamples * m_player->audioChannels);
+        if (track->voiceIsolation && track->rnnoiseState)
+        {
+            if (track->buffer.empty() && track->rnnoiseBuffer.empty())
+                track->bufferPts = framePts - m_player->startTimeOffset;
+            for (int i = 0; i < convertedSamples; ++i)
+            {
+                int16_t *framePtr = outPtr + i * m_player->audioChannels;
+                float sampleMono;
+                if (m_player->audioChannels == 1)
+                    sampleMono = framePtr[0] / 32768.0f;
+                else
+                    sampleMono = (framePtr[0] + framePtr[1]) / (2.0f * 32768.0f);
+                track->rnnoiseBuffer.push_back(sampleMono);
+                if (track->rnnoiseBuffer.size() >= RNNOISE_FRAME_SIZE)
+                {
+                    float denoised[RNNOISE_FRAME_SIZE];
+                    rnnoise_process_frame(track->rnnoiseState, denoised, track->rnnoiseBuffer.data());
+                    for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j)
+                    {
+                        int val = static_cast<int>(denoised[j] * 32768.0f);
+                        if (val > 32767) val = 32767;
+                        if (val < -32768) val = -32768;
+                        int16_t s = static_cast<int16_t>(val);
+                        for (int ch = 0; ch < m_player->audioChannels; ++ch)
+                            track->buffer.push_back(s);
+                    }
+                    track->rnnoiseBuffer.erase(track->rnnoiseBuffer.begin(), track->rnnoiseBuffer.begin() + RNNOISE_FRAME_SIZE);
+                }
+            }
+        }
+        else
+        {
+            if (track->buffer.empty())
+                track->bufferPts = framePts - m_player->startTimeOffset;
+            track->buffer.insert(track->buffer.end(),
+                                 outPtr,
+                                 outPtr + convertedSamples * m_player->audioChannels);
+        }
     }
     m_player->audioCondition.notify_one();
 }

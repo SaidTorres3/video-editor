@@ -4,6 +4,7 @@
 #include "video_renderer.h"
 #include "video_cutter.h"
 #include "options_window.h"
+#include "rnnoise.h"
 #include <iostream>
 #include <windows.h>
 #include <windowsx.h>
@@ -376,6 +377,37 @@ void VideoPlayer::SetAudioTrackVolume(int trackIndex, float volume)
         return;
     float clampedVolume = volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume);
     audioTracks[trackIndex]->volume = clampedVolume;
+}
+
+bool VideoPlayer::IsAudioTrackVoiceIsolated(int trackIndex) const
+{
+    if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+        return false;
+    return audioTracks[trackIndex]->voiceIsolation;
+}
+
+void VideoPlayer::SetAudioTrackVoiceIsolation(int trackIndex, bool enabled)
+{
+    if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+        return;
+    auto &track = audioTracks[trackIndex];
+    if (track->voiceIsolation == enabled)
+        return;
+    track->voiceIsolation = enabled;
+    if (enabled)
+    {
+        if (!track->rnnoiseState)
+            track->rnnoiseState = rnnoise_create();
+    }
+    else
+    {
+        if (track->rnnoiseState)
+        {
+            rnnoise_destroy(track->rnnoiseState);
+            track->rnnoiseState = nullptr;
+        }
+        track->rnnoiseBuffer.clear();
+    }
 }
 
 void VideoPlayer::SetMasterVolume(float volume)

@@ -123,6 +123,8 @@ void UpdateAudioTrackList()
         // Add mute status to the display name
         if (g_videoPlayer->IsAudioTrackMuted(i))
             wTrackName += L" (MUTED)";
+        if (g_videoPlayer->IsAudioTrackVoiceIsolated(i))
+            wTrackName += L" (ISOLATED)";
         
         SendMessage(g_hListBoxAudioTracks, LB_ADDSTRING, 0, (LPARAM)wTrackName.c_str());
     }

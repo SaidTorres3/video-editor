@@ -9,6 +9,10 @@
 #include "upload_dialog.h"
 #include "utils.h"
 
+#include <windowsx.h>
+
+#define ID_TOGGLE_VOICE_ISOLATION 1100
+
 // Forward declarations for functions in other files
 void ApplyDarkTheme(HWND hwnd);
 void RepositionControls(HWND hwnd);
@@ -119,6 +123,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case 1025: // ID_RADIO_USE_SIZE
             UpdateControls();
             break;
+        case ID_TOGGLE_VOICE_ISOLATION:
+        {
+            int sel = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+            if (sel != LB_ERR && g_videoPlayer)
+            {
+                bool enabled = g_videoPlayer->IsAudioTrackVoiceIsolated(sel);
+                g_videoPlayer->SetAudioTrackVoiceIsolation(sel, !enabled);
+                UpdateAudioTrackList();
+                SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, sel, 0);
+            }
+            break;
+        }
         }
 
         if ((HWND)lParam == g_hEditStartTime && HIWORD(wParam) == EN_KILLFOCUS)
@@ -178,6 +194,31 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (HIWORD(wParam) == LBN_SELCHANGE && (HWND)lParam == g_hListBoxAudioTracks)
         {
             OnAudioTrackSelectionChanged();
+        }
+        break;
+
+    case WM_CONTEXTMENU:
+        if ((HWND)wParam == g_hListBoxAudioTracks)
+        {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (pt.x == -1 && pt.y == -1)
+            {
+                RECT rc; GetClientRect(g_hListBoxAudioTracks, &rc);
+                pt.x = rc.left; pt.y = rc.top;
+                ClientToScreen(g_hListBoxAudioTracks, &pt);
+            }
+            int sel = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+            if (sel != LB_ERR && g_videoPlayer)
+            {
+                HMENU menu = CreatePopupMenu();
+                bool enabled = g_videoPlayer->IsAudioTrackVoiceIsolated(sel);
+                AppendMenu(menu, MF_STRING, ID_TOGGLE_VOICE_ISOLATION,
+                           enabled ? L"Disable Voice Isolation" : L"Enable Voice Isolation");
+                TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
+                               pt.x, pt.y, 0, hwnd, nullptr);
+                DestroyMenu(menu);
+            }
+            return 0;
         }
         break;
 
