@@ -32,6 +32,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(48000), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
+      audioIsFloat(false),
       originalVideoWndProc(nullptr)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);

@@ -138,6 +138,7 @@ public:
     int audioSampleRate;
     int audioChannels;
     AVSampleFormat audioSampleFormat;
+    bool audioIsFloat;
 
     // Shared master clock for A/V synchronization
     std::chrono::high_resolution_clock::time_point masterStartTime;
