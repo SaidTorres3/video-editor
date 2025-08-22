@@ -305,12 +305,12 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
                 track->bufferPts = framePts - m_player->startTimeOffset;
             for (int i = 0; i < convertedSamples; ++i)
             {
-                int16_t *framePtr = outPtr + i * m_player->audioChannels;
+                int16_t* framePtr = outPtr + i * m_player->audioChannels;
                 float sampleMono;
                 if (m_player->audioChannels == 1)
-                    sampleMono = framePtr[0] / 32768.0f;
+                    sampleMono = static_cast<float>(framePtr[0]);
                 else
-                    sampleMono = (framePtr[0] + framePtr[1]) / (2.0f * 32768.0f);
+                    sampleMono = 0.5f * (static_cast<float>(framePtr[0]) + static_cast<float>(framePtr[1]));
                 track->rnnoiseBuffer.push_back(sampleMono);
                 if (static_cast<int>(track->rnnoiseBuffer.size()) >= frameSize)
                 {
@@ -318,7 +318,7 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
                     rnnoise_process_frame(track->rnnoiseState, denoised.data(), track->rnnoiseBuffer.data());
                     for (int j = 0; j < frameSize; ++j)
                     {
-                        int val = static_cast<int>(denoised[j] * 32768.0f);
+                        int val = static_cast<int>(denoised[j]);
                         if (val > 32767) val = 32767;
                         if (val < -32768) val = -32768;
                         int16_t s = static_cast<int16_t>(val);
