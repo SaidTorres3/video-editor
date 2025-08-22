@@ -29,7 +29,7 @@ add_compile_definitions(UNICODE _UNICODE)
 # Default paths (can override with -DFFMPEG_ROOT=... or -DCURL_ROOT=...)
 set(FFMPEG_ROOT "${CMAKE_SOURCE_DIR}/third_party/ffmpeg" CACHE PATH "Path to FFmpeg installation")
 set(CURL_ROOT   "${CMAKE_SOURCE_DIR}/vendor/libcurl" CACHE PATH "Path to libcurl installation")
-set(RNNOISE_ROOT "${CMAKE_SOURCE_DIR}/third_party/rnnoise" CACHE PATH "Path to RNNoise installation")
+set(RNNOISE_ROOT "${CMAKE_SOURCE_DIR}/vendor/rnnoise" CACHE PATH "Path to RNNoise installation")
 
 # ==== FIND FFmpeg ====
 find_path(FFMPEG_INCLUDE_DIR
