@@ -31,7 +31,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
-      audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
+      audioSampleRate(48000), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
       originalVideoWndProc(nullptr)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
@@ -396,8 +396,14 @@ void VideoPlayer::SetAudioTrackVoiceIsolation(int trackIndex, bool enabled)
     track->voiceIsolation = enabled;
     if (enabled)
     {
+        // RNNoise expects 48 kHz, mono, 16-bit audio
+        if (audioSampleRate != 48000 || audioSampleFormat != AV_SAMPLE_FMT_S16)
+        {
+            track->voiceIsolation = false;
+            return;
+        }
         if (!track->rnnoiseState)
-            track->rnnoiseState = rnnoise_create();
+            track->rnnoiseState = rnnoise_create(nullptr);
     }
     else
     {

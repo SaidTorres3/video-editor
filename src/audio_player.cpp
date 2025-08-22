@@ -3,6 +3,7 @@
 #include "rnnoise.h"
 #include <chrono>
 #include <limits>
+#include <vector>
 
 AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player), m_framesWritten(0) {}
 
@@ -35,11 +36,11 @@ bool AudioPlayer::Initialize() {
     if (FAILED(hr))
         return false;
 
-    // Set up our desired format (16-bit stereo at 44.1kHz)
+    // Set up our desired format (16-bit stereo at 48kHz) so RNNoise receives 48kHz input
     m_player->audioFormat = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
     m_player->audioFormat->wFormatTag = WAVE_FORMAT_PCM;
     m_player->audioFormat->nChannels = 2;
-    m_player->audioFormat->nSamplesPerSec = 44100;
+    m_player->audioFormat->nSamplesPerSec = 48000;
     m_player->audioFormat->wBitsPerSample = 16;
     m_player->audioFormat->nBlockAlign = (m_player->audioFormat->nChannels * m_player->audioFormat->wBitsPerSample) / 8;
     m_player->audioFormat->nAvgBytesPerSec = m_player->audioFormat->nSamplesPerSec * m_player->audioFormat->nBlockAlign;
@@ -303,6 +304,7 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
         std::lock_guard<std::mutex> lock(m_player->audioMutex);
         if (track->voiceIsolation && track->rnnoiseState)
         {
+            const int frameSize = rnnoise_get_frame_size();
             if (track->buffer.empty() && track->rnnoiseBuffer.empty())
                 track->bufferPts = framePts - m_player->startTimeOffset;
             for (int i = 0; i < convertedSamples; ++i)
@@ -314,11 +316,11 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
                 else
                     sampleMono = (framePtr[0] + framePtr[1]) / (2.0f * 32768.0f);
                 track->rnnoiseBuffer.push_back(sampleMono);
-                if (track->rnnoiseBuffer.size() >= RNNOISE_FRAME_SIZE)
+                if (static_cast<int>(track->rnnoiseBuffer.size()) >= frameSize)
                 {
-                    float denoised[RNNOISE_FRAME_SIZE];
-                    rnnoise_process_frame(track->rnnoiseState, denoised, track->rnnoiseBuffer.data());
-                    for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j)
+                    std::vector<float> denoised(frameSize);
+                    rnnoise_process_frame(track->rnnoiseState, denoised.data(), track->rnnoiseBuffer.data());
+                    for (int j = 0; j < frameSize; ++j)
                     {
                         int val = static_cast<int>(denoised[j] * 32768.0f);
                         if (val > 32767) val = 32767;
@@ -327,7 +329,7 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
                         for (int ch = 0; ch < m_player->audioChannels; ++ch)
                             track->buffer.push_back(s);
                     }
-                    track->rnnoiseBuffer.erase(track->rnnoiseBuffer.begin(), track->rnnoiseBuffer.begin() + RNNOISE_FRAME_SIZE);
+                    track->rnnoiseBuffer.erase(track->rnnoiseBuffer.begin(), track->rnnoiseBuffer.begin() + frameSize);
                 }
             }
         }
