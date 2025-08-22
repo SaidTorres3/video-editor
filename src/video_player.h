@@ -22,6 +22,8 @@ extern "C"
 #include <libavutil/avutil.h>
 }
 
+#include <rnnoise.h>
+
 #include <vector>
 #include <memory>
 #include <thread>
@@ -54,9 +56,17 @@ struct AudioTrack {
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
     double bufferPts;
+    
+    // Voice isolation support
+    bool voiceIsolationEnabled;
+    DenoiseState* denoiseState;
+    std::vector<float> voiceIsolationInputBuffer;   // Input buffer for RNNoise (480 samples)
+    std::vector<float> voiceIsolationOutputBuffer;  // Output buffer for RNNoise (480 samples)
+    std::deque<float> voiceIsolationSampleQueue;    // Queue for incomplete frames
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
-                   frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0) {}
+                   frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0),
+                   voiceIsolationEnabled(false), denoiseState(nullptr) {}
 };
 
 class VideoPlayer
@@ -179,6 +189,8 @@ public:
     float GetAudioTrackVolume(int trackIndex) const;
     void SetAudioTrackVolume(int trackIndex, float volume);
     void SetMasterVolume(float volume);
+    bool IsVoiceIsolationEnabled(int trackIndex) const;
+    void SetVoiceIsolationEnabled(int trackIndex, bool enabled);
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, bool useNvenc,
                   int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);

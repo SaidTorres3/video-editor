@@ -8,6 +8,7 @@
 #include "editing.h"
 #include "upload_dialog.h"
 #include "utils.h"
+#include <windowsx.h>
 
 // Forward declarations for functions in other files
 void ApplyDarkTheme(HWND hwnd);
@@ -24,6 +25,7 @@ void OnSetEndClicked(HWND hwnd);
 void OnCutClicked(HWND hwnd);
 void OnExportClicked(HWND hwnd);
 void OnAudioTrackSelectionChanged();
+void UpdateAudioTrackList();
 double ParseTimeString(const std::wstring& str);
 void UpdateCutInfoLabel(HWND hwnd);
 void UpdateCutTimeEdits();
@@ -119,6 +121,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case 1025: // ID_RADIO_USE_SIZE
             UpdateControls();
             break;
+        case 1026: // ID_CONTEXT_VOICE_ISOLATION
+            {
+                int selectedIndex = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+                if (selectedIndex != LB_ERR && g_videoPlayer)
+                {
+                    bool currentState = g_videoPlayer->IsVoiceIsolationEnabled(selectedIndex);
+                    g_videoPlayer->SetVoiceIsolationEnabled(selectedIndex, !currentState);
+                    
+                    // Update the audio track list display to show the change
+                    UpdateAudioTrackList();
+                    SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, selectedIndex, 0);
+                    OnAudioTrackSelectionChanged();
+                }
+            }
+            break;
         }
 
         if ((HWND)lParam == g_hEditStartTime && HIWORD(wParam) == EN_KILLFOCUS)
@@ -178,6 +195,32 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (HIWORD(wParam) == LBN_SELCHANGE && (HWND)lParam == g_hListBoxAudioTracks)
         {
             OnAudioTrackSelectionChanged();
+        }
+        break;
+
+    case WM_CONTEXTMENU:
+        {
+            HWND targetHwnd = (HWND)wParam;
+            if (targetHwnd == g_hListBoxAudioTracks && g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 0)
+            {
+                // Get the selected track
+                int selectedIndex = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
+                if (selectedIndex != LB_ERR)
+                {
+                    // Create context menu
+                    HMENU hMenu = CreatePopupMenu();
+                    bool voiceIsolationEnabled = g_videoPlayer->IsVoiceIsolationEnabled(selectedIndex);
+                    
+                    AppendMenuW(hMenu, MF_STRING | (voiceIsolationEnabled ? MF_CHECKED : MF_UNCHECKED),
+                               1026, L"Enable Voice Isolation"); // ID_CONTEXT_VOICE_ISOLATION
+                    
+                    // Show the menu
+                    POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
+                    
+                    DestroyMenu(hMenu);
+                }
+            }
         }
         break;
 

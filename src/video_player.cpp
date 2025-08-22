@@ -383,6 +383,48 @@ void VideoPlayer::SetMasterVolume(float volume)
     m_audioPlayer->SetMasterVolume(volume);
 }
 
+bool VideoPlayer::IsVoiceIsolationEnabled(int trackIndex) const
+{
+    if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+        return false;
+    return audioTracks[trackIndex]->voiceIsolationEnabled;
+}
+
+void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
+{
+    if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
+        return;
+        
+    auto& track = audioTracks[trackIndex];
+    
+    if (enabled && !track->voiceIsolationEnabled)
+    {
+        // Initialize RNNoise denoiser with default model
+        track->denoiseState = rnnoise_create(nullptr);
+        if (track->denoiseState)
+        {
+            track->voiceIsolationEnabled = true;
+            // Pre-allocate buffers for RNNoise processing
+            int frameSize = rnnoise_get_frame_size(); // 480 samples
+            track->voiceIsolationInputBuffer.resize(frameSize);
+            track->voiceIsolationOutputBuffer.resize(frameSize);
+        }
+    }
+    else if (!enabled && track->voiceIsolationEnabled)
+    {
+        // Cleanup voice isolation resources
+        if (track->denoiseState)
+        {
+            rnnoise_destroy(track->denoiseState);
+            track->denoiseState = nullptr;
+        }
+        track->voiceIsolationEnabled = false;
+        track->voiceIsolationInputBuffer.clear();
+        track->voiceIsolationOutputBuffer.clear();
+        track->voiceIsolationSampleQueue.clear();
+    }
+}
+
 void VideoPlayer::PlaybackThreadFunction()
 {
     auto startTime = masterStartTime;
