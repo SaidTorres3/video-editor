@@ -4,6 +4,8 @@
 #include <chrono>
 #include <limits>
 #include <vector>
+#include <mmreg.h>
+#include <ksmedia.h>
 
 AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player), m_framesWritten(0) {}
 
@@ -30,21 +32,11 @@ bool AudioPlayer::Initialize() {
     if (FAILED(hr))
         return false;
 
-    // Get the default audio format
+    // Get the default audio format and initialize using it
     WAVEFORMATEX *deviceFormat = nullptr;
     hr = m_player->audioClient->GetMixFormat(&deviceFormat);
     if (FAILED(hr))
         return false;
-
-    // Set up our desired format (16-bit stereo at 48kHz) so RNNoise receives 48kHz input
-    m_player->audioFormat = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
-    m_player->audioFormat->wFormatTag = WAVE_FORMAT_PCM;
-    m_player->audioFormat->nChannels = 2;
-    m_player->audioFormat->nSamplesPerSec = 48000;
-    m_player->audioFormat->wBitsPerSample = 16;
-    m_player->audioFormat->nBlockAlign = (m_player->audioFormat->nChannels * m_player->audioFormat->wBitsPerSample) / 8;
-    m_player->audioFormat->nAvgBytesPerSec = m_player->audioFormat->nSamplesPerSec * m_player->audioFormat->nBlockAlign;
-    m_player->audioFormat->cbSize = 0;
 
     REFERENCE_TIME devicePeriod = 0;
     hr = m_player->audioClient->GetDevicePeriod(nullptr, &devicePeriod);
@@ -52,25 +44,28 @@ bool AudioPlayer::Initialize() {
         devicePeriod = 100000; // fall back to 10ms
     REFERENCE_TIME bufferDuration = devicePeriod * 4; // approx 40ms
 
+    m_player->audioFormat = deviceFormat;
     hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0, m_player->audioFormat, nullptr);
     if (FAILED(hr))
-    {
-        // Try with device format if our format fails
-        CoTaskMemFree(m_player->audioFormat);
-        m_player->audioFormat = deviceFormat;
-        hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, bufferDuration, 0, m_player->audioFormat, nullptr);
-        if (FAILED(hr))
-            return false;
-    }
-    else
-    {
-        CoTaskMemFree(deviceFormat);
-    }
+        return false;
 
     // Update audio configuration to match the initialized format
     m_player->audioSampleRate = m_player->audioFormat->nSamplesPerSec;
     m_player->audioChannels = m_player->audioFormat->nChannels;
-    m_player->audioIsFloat = (m_player->audioFormat->wBitsPerSample == 32);
+
+    bool isFloat = false;
+    if (m_player->audioFormat->wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
+    {
+        isFloat = true;
+    }
+    else if (m_player->audioFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+    {
+        WAVEFORMATEXTENSIBLE *ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(m_player->audioFormat);
+        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT))
+            isFloat = true;
+    }
+    m_player->audioIsFloat = isFloat;
+    m_player->audioSampleFormat = isFloat ? AV_SAMPLE_FMT_FLT : AV_SAMPLE_FMT_S16;
 
     hr = m_player->audioClient->GetBufferSize(&m_player->bufferFrameCount);
     if (FAILED(hr))
@@ -435,7 +430,7 @@ void AudioPlayer::AudioThreadFunction() {
 }
 
 void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double startPts) {
-    int bytesPerSample = m_player->audioIsFloat ? sizeof(float) : sizeof(int16_t);
+    int bytesPerSample = m_player->audioFormat->wBitsPerSample / 8;
     memset(outputBuffer, 0, frameCount * m_player->audioChannels * bytesPerSample);
 
     for (int frame = 0; frame < frameCount; ++frame)
@@ -475,6 +470,42 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
                 if (v > 1.0f) v = 1.0f;
                 if (v < -1.0f) v = -1.0f;
                 out[frame * m_player->audioChannels + ch] = v;
+            }
+        }
+        else if (bytesPerSample == 4)
+        {
+            std::vector<int64_t> mix(m_player->audioChannels, 0);
+            for (auto& track : m_player->audioTracks)
+            {
+                if (track->isMuted)
+                    continue;
+
+                while (!track->buffer.empty() &&
+                       track->bufferPts + 1.0 / m_player->audioSampleRate <= samplePts)
+                {
+                    for (int ch = 0; ch < m_player->audioChannels && !track->buffer.empty(); ++ch)
+                        track->buffer.pop_front();
+                    track->bufferPts += 1.0 / m_player->audioSampleRate;
+                }
+
+                if (track->buffer.size() >= static_cast<size_t>(m_player->audioChannels))
+                {
+                    for (int ch = 0; ch < m_player->audioChannels; ++ch)
+                    {
+                        int16_t val = track->buffer.front();
+                        track->buffer.pop_front();
+                        mix[ch] += static_cast<int64_t>(val * track->volume * 65536.0f);
+                    }
+                    track->bufferPts += 1.0 / m_player->audioSampleRate;
+                }
+            }
+            int32_t *out = reinterpret_cast<int32_t*>(outputBuffer);
+            for (int ch = 0; ch < m_player->audioChannels; ++ch)
+            {
+                int64_t v = mix[ch];
+                if (v > INT32_MAX) v = INT32_MAX;
+                if (v < INT32_MIN) v = INT32_MIN;
+                out[frame * m_player->audioChannels + ch] = static_cast<int32_t>(v);
             }
         }
         else
