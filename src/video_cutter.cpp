@@ -2,10 +2,13 @@
 #include "video_player.h"
 #include "options_window.h"
 #include "debug_log.h"
+#include "rnnoise.h"
 #include <iostream>
 #include <sstream>
 #include <commctrl.h>
 #include <libavutil/frame.h>
+
+#define RNNOISE_FRAME_SIZE 480
 
 VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player) {}
 
@@ -53,6 +56,20 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         DebugLog(oss.str());
     }
 
+    // If any active audio track has Voice Isolation enabled, force audio merge/re-encode.
+    // Otherwise audio would be stream-copied and the effect wouldn't apply.
+    bool anyVoiceIsolation = false;
+    for (const auto& track : m_player->audioTracks) {
+        if (!track->isMuted && track->voiceIsolationEnabled) {
+            anyVoiceIsolation = true;
+            break;
+        }
+    }
+    if (anyVoiceIsolation && !mergeAudio) {
+        DebugLog("Voice isolation detected on active track(s); enabling audio merge for export");
+        mergeAudio = true;
+    }
+
     // When re-encoding or merging audio we need to set up decoder/encoder
     // contexts. The previous implementation only supported stream copying.
     // Build encoder state on demand.
@@ -71,6 +88,14 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         SwrContext* swrCtx;
         AVFrame* frame;
         std::deque<int16_t> buffer;
+
+        // For voice isolation
+        bool voiceIsolationEnabled = false;
+        DenoiseState* denoiseState = nullptr;
+        SwrContext* voiceIsolationSwrContext = nullptr;
+        SwrContext* voiceIsolationBackSwrContext = nullptr;
+        std::vector<float> voiceIsolationMonoBuffer;
+        std::deque<int16_t> voiceIsolationSampleQueue;
     };
     std::vector<MergeTrack> mergeTracks;
     AVCodecContext* aEncCtx = nullptr;
@@ -235,6 +260,41 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         streamMapping[i] = outStream ? outStream->index : -1;
     }
 
+    for (auto& mt : mergeTracks) {
+        for (const auto& playerTrack : m_player->audioTracks) {
+            if (playerTrack->streamIndex == mt.index) {
+                mt.voiceIsolationEnabled = playerTrack->voiceIsolationEnabled;
+                if (mt.voiceIsolationEnabled) {
+                    mt.denoiseState = rnnoise_create(nullptr);
+                    // Initialize resamplers for RNNoise (to 48kHz mono)
+                    mt.voiceIsolationSwrContext = swr_alloc();
+                    av_opt_set_int(mt.voiceIsolationSwrContext, "in_sample_rate", mt.decCtx->sample_rate, 0);
+                    av_opt_set_sample_fmt(mt.voiceIsolationSwrContext, "in_sample_fmt", mt.decCtx->sample_fmt, 0);
+                    av_opt_set_chlayout(mt.voiceIsolationSwrContext, "in_chlayout", &mt.decCtx->ch_layout, 0);
+                    av_opt_set_int(mt.voiceIsolationSwrContext, "out_sample_rate", 48000, 0);
+                    av_opt_set_sample_fmt(mt.voiceIsolationSwrContext, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    AVChannelLayout mono_layout;
+                    av_channel_layout_default(&mono_layout, 1);
+                    av_opt_set_chlayout(mt.voiceIsolationSwrContext, "out_chlayout", &mono_layout, 0);
+                    swr_init(mt.voiceIsolationSwrContext);
+
+                    // Initialize resampler back to final mix format
+                    mt.voiceIsolationBackSwrContext = swr_alloc();
+                    av_opt_set_int(mt.voiceIsolationBackSwrContext, "in_sample_rate", 48000, 0);
+                    av_opt_set_sample_fmt(mt.voiceIsolationBackSwrContext, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    av_opt_set_chlayout(mt.voiceIsolationBackSwrContext, "in_chlayout", &mono_layout, 0);
+                    av_opt_set_int(mt.voiceIsolationBackSwrContext, "out_sample_rate", 44100, 0);
+                    av_opt_set_sample_fmt(mt.voiceIsolationBackSwrContext, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    AVChannelLayout stereo_layout;
+                    av_channel_layout_default(&stereo_layout, 2);
+                    av_opt_set_chlayout(mt.voiceIsolationBackSwrContext, "out_chlayout", &stereo_layout, 0);
+                    swr_init(mt.voiceIsolationBackSwrContext);
+                }
+                break;
+            }
+        }
+    }
+
     if (mergeAudio && !mergeTracks.empty()) {
         const AVCodec* aEnc = avcodec_find_encoder(AV_CODEC_ID_AAC);
         if (!aEnc) {
@@ -373,14 +433,59 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 if (mt.index == pkt.stream_index) {
                     avcodec_send_packet(mt.decCtx, &pkt);
                     while (avcodec_receive_frame(mt.decCtx, mt.frame) == 0) {
-                        int outSamples = swr_get_out_samples(mt.swrCtx, mt.frame->nb_samples);
-                        std::vector<int16_t> tmp(outSamples * 2);
-                        uint8_t* outArr[1] = { reinterpret_cast<uint8_t*>(tmp.data()) };
-                        int conv = swr_convert(mt.swrCtx, outArr, outSamples,
-                                              (const uint8_t**)mt.frame->data,
-                                              mt.frame->nb_samples);
-                        mt.buffer.insert(mt.buffer.end(), tmp.begin(),
-                                          tmp.begin() + conv * 2);
+                        if (mt.voiceIsolationEnabled && mt.denoiseState) {
+                            // Resample to 48kHz mono for RNNoise
+                            int guess = swr_get_out_samples(mt.voiceIsolationSwrContext, mt.frame->nb_samples);
+                            std::vector<int16_t> mono_tmp(std::max(guess, mt.frame->nb_samples));
+                            uint8_t* out_ptr = reinterpret_cast<uint8_t*>(mono_tmp.data());
+                            int got = swr_convert(mt.voiceIsolationSwrContext, &out_ptr, (int)mono_tmp.size(), (const uint8_t**)mt.frame->data, mt.frame->nb_samples);
+                            if (got < 0) got = 0;
+
+                            // Accumulate into 48k mono queue and process exact 480-sample frames
+                            for (int n = 0; n < got; ++n) mt.voiceIsolationSampleQueue.push_back(mono_tmp[n]);
+
+                            std::vector<int16_t> processed_mono;
+                            while ((int)mt.voiceIsolationSampleQueue.size() >= RNNOISE_FRAME_SIZE) {
+                                // Fill RNNoise frame
+                                mt.voiceIsolationMonoBuffer.resize(RNNOISE_FRAME_SIZE);
+                                for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                                    int16_t s = mt.voiceIsolationSampleQueue.front();
+                                    mt.voiceIsolationSampleQueue.pop_front();
+                                    mt.voiceIsolationMonoBuffer[j] = static_cast<float>(s);
+                                }
+                                // Denoise in place
+                                rnnoise_process_frame(mt.denoiseState, mt.voiceIsolationMonoBuffer.data(), mt.voiceIsolationMonoBuffer.data());
+                                // Back to int16_t scale
+                                for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                                    float v = mt.voiceIsolationMonoBuffer[j];
+                                    if (v > 32767.0f) v = 32767.0f;
+                                    if (v < -32768.0f) v = -32768.0f;
+                                    processed_mono.push_back(static_cast<int16_t>(v));
+                                }
+                            }
+
+                            // Resample processed mono to final mix format (44.1kHz Stereo S16)
+                            if (!processed_mono.empty()) {
+                                int back_guess = swr_get_out_samples(mt.voiceIsolationBackSwrContext, (int)processed_mono.size());
+                                std::vector<int16_t> processed_stereo(std::max(back_guess, (int)processed_mono.size()) * 2);
+                                uint8_t* back_out_ptr = reinterpret_cast<uint8_t*>(processed_stereo.data());
+                                const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(processed_mono.data());
+                                int back_got = swr_convert(mt.voiceIsolationBackSwrContext, &back_out_ptr, (int)processed_stereo.size() / 2, &in_ptr, (int)processed_mono.size());
+                                if (back_got > 0) {
+                                    mt.buffer.insert(mt.buffer.end(), processed_stereo.begin(), processed_stereo.begin() + back_got * 2);
+                                }
+                            }
+                        } else {
+                            // Standard resampling to mix format
+                            int outSamples = swr_get_out_samples(mt.swrCtx, mt.frame->nb_samples);
+                            std::vector<int16_t> tmp(outSamples * 2);
+                            uint8_t* outArr[1] = { reinterpret_cast<uint8_t*>(tmp.data()) };
+                            int conv = swr_convert(mt.swrCtx, outArr, outSamples,
+                                                  (const uint8_t**)mt.frame->data,
+                                                  mt.frame->nb_samples);
+                            mt.buffer.insert(mt.buffer.end(), tmp.begin(),
+                                              tmp.begin() + conv * 2);
+                        }
                     }
                     handled = true;
                     break;
@@ -471,6 +576,41 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
     }
     if (mergeAudio && aEncCtx) {
         // flush remaining samples
+        // First, for each track with RNNoise, flush any residual 48k mono samples
+        for (auto &mt : mergeTracks) {
+            if (mt.voiceIsolationEnabled && mt.denoiseState && !mt.voiceIsolationSampleQueue.empty()) {
+                // Pad to full frame with zeros
+                std::vector<int16_t> processed_mono;
+                while (!mt.voiceIsolationSampleQueue.empty()) {
+                    mt.voiceIsolationMonoBuffer.resize(RNNOISE_FRAME_SIZE, 0.0f);
+                    int take = std::min((int)mt.voiceIsolationSampleQueue.size(), RNNOISE_FRAME_SIZE);
+                    for (int j = 0; j < take; ++j) {
+                        int16_t s = mt.voiceIsolationSampleQueue.front();
+                        mt.voiceIsolationSampleQueue.pop_front();
+                        mt.voiceIsolationMonoBuffer[j] = static_cast<float>(s);
+                    }
+                    // Denoise
+                    rnnoise_process_frame(mt.denoiseState, mt.voiceIsolationMonoBuffer.data(), mt.voiceIsolationMonoBuffer.data());
+                    for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                        float v = mt.voiceIsolationMonoBuffer[j];
+                        if (v > 32767.0f) v = 32767.0f;
+                        if (v < -32768.0f) v = -32768.0f;
+                        processed_mono.push_back(static_cast<int16_t>(v));
+                    }
+                }
+                if (!processed_mono.empty()) {
+                    int back_guess = swr_get_out_samples(mt.voiceIsolationBackSwrContext, (int)processed_mono.size());
+                    std::vector<int16_t> processed_stereo(std::max(back_guess, (int)processed_mono.size()) * 2);
+                    uint8_t* back_out_ptr = reinterpret_cast<uint8_t*>(processed_stereo.data());
+                    const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(processed_mono.data());
+                    int back_got = swr_convert(mt.voiceIsolationBackSwrContext, &back_out_ptr, (int)processed_stereo.size() / 2, &in_ptr, (int)processed_mono.size());
+                    if (back_got > 0) {
+                        mt.buffer.insert(mt.buffer.end(), processed_stereo.begin(), processed_stereo.begin() + back_got * 2);
+                    }
+                }
+            }
+        }
+
         while (true) {
             if (cancelFlag && *cancelFlag) { success = false; goto cleanup; }
             bool ready = true;
@@ -540,6 +680,9 @@ cleanup:
         if (mt.swrCtx) swr_free(&mt.swrCtx);
         if (mt.decCtx) avcodec_free_context(&mt.decCtx);
         if (mt.frame) av_frame_free(&mt.frame);
+        if (mt.denoiseState) rnnoise_destroy(mt.denoiseState);
+        if (mt.voiceIsolationSwrContext) swr_free(&mt.voiceIsolationSwrContext);
+        if (mt.voiceIsolationBackSwrContext) swr_free(&mt.voiceIsolationBackSwrContext);
     }
     avformat_free_context(outputCtx);
     avformat_close_input(&inputCtx);
