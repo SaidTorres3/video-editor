@@ -263,10 +263,14 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         return;
 
     double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
-    SeekToTime(seconds);
+    // Seek without decoding extra frames so we can step precisely
+    SeekToTime(seconds, 0);
+    // Adjust currentFrame so DecodeNextFrame sets it to the requested frame
+    currentFrame = frameNumber - 1;
+    m_decoder->DecodeNextFrame(true);
 }
 
-void VideoPlayer::SeekToTime(double seconds)
+void VideoPlayer::SeekToTime(double seconds, int decodeCount)
 {
     if (!isLoaded)
         return;
@@ -298,8 +302,8 @@ void VideoPlayer::SeekToTime(double seconds)
         currentPts = seconds;
     }
 
-    // Decode a few frames after seeking so the display updates immediately
-    for (int i = 0; i < 3; ++i)
+    // Decode frames after seeking so the display updates immediately
+    for (int i = 0; i < decodeCount; ++i)
     {
         if (!m_decoder->DecodeNextFrame(true))
             break;

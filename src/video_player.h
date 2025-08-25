@@ -175,7 +175,7 @@ public:
     bool IsLoaded() const { return isLoaded; }
 
     void SeekToFrame(int64_t frameNumber);
-    void SeekToTime(double seconds);
+    void SeekToTime(double seconds, int decodeCount = 3);
 
     double GetDuration() const;
     double GetCurrentTime() const;
