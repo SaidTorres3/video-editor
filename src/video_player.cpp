@@ -262,12 +262,29 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     if (!isLoaded || frameNumber < 0 || frameNumber >= totalFrames)
         return;
 
+    if (frameNumber == currentFrame)
+        return;
+
+    // If stepping forward one frame, avoid seeking and just decode the next frame
+    if (frameNumber == currentFrame + 1)
+    {
+        m_decoder->DecodeNextFrame(true);
+        return;
+    }
+
+    // For all other cases (stepping backward or jumping), seek based on time
     double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
-    // Seek without decoding extra frames so we can step precisely
     SeekToTime(seconds, 0);
-    // Adjust currentFrame so DecodeNextFrame sets it to the requested frame
+
+    // Adjust currentFrame so the next decoded frame becomes the requested one
     currentFrame = frameNumber - 1;
-    m_decoder->DecodeNextFrame(true);
+
+    // Decode frames until we reach the requested frame
+    while (currentFrame < frameNumber)
+    {
+        if (!m_decoder->DecodeNextFrame(true))
+            break;
+    }
 }
 
 void VideoPlayer::SeekToTime(double seconds, int decodeCount)
