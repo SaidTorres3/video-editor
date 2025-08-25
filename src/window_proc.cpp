@@ -224,6 +224,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         break;
 
+    case WM_LBUTTONDOWN:
+        SetFocus(hwnd);
+        break;
+
     case WM_HSCROLL:
         if ((HWND)lParam == g_hSliderTrackVolume)
         {

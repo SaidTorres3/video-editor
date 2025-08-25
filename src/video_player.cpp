@@ -538,12 +538,16 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
         {
             return 1;
         }
-        else if (msg == WM_LBUTTONDOWN && player->isLoaded)
+        else if (msg == WM_LBUTTONDOWN)
         {
-            player->selectingCrop = true;
-            player->cropStart = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            player->cropCurrent = player->cropStart;
-            SetCapture(hwnd);
+            SetFocus(hwnd);
+            if (player->isLoaded)
+            {
+                player->selectingCrop = true;
+                player->cropStart = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                player->cropCurrent = player->cropStart;
+                SetCapture(hwnd);
+            }
             return 0;
         }
         else if (msg == WM_MOUSEMOVE && player->selectingCrop)
