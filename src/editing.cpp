@@ -5,8 +5,10 @@
 #include <commdlg.h>
 #include <thread>
 #include <string>
+#include <filesystem>
 #include "b2_upload.h"
 #include "catbox_upload.h"
+#include "file_handling.h"
 
 // Forward declarations
 void UpdateCutInfoLabel(HWND hwnd);
@@ -74,9 +76,12 @@ void OnCutClicked(HWND hwnd)
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
     ofn.lpstrDefExt = L"mp4";
+    if (!g_lastSaveDir.empty())
+        ofn.lpstrInitialDir = g_lastSaveDir.c_str();
 
     if (GetSaveFileNameW(&ofn))
     {
+        g_lastSaveDir = std::filesystem::path(szFile).parent_path().wstring();
         SetWindowTextW(g_hStatusText, L"Cutting video... Please wait.");
         EnableWindow(hwnd, FALSE); // Disable UI during cut
 
@@ -175,9 +180,12 @@ void OnExportClicked(HWND hwnd)
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
     ofn.lpstrDefExt = L"mp4";
+    if (!g_lastSaveDir.empty())
+        ofn.lpstrInitialDir = g_lastSaveDir.c_str();
 
     if (GetSaveFileNameW(&ofn))
     {
+        g_lastSaveDir = std::filesystem::path(szFile).parent_path().wstring();
         SetWindowTextW(g_hStatusText, L"Exporting video... Please wait.");
         EnableWindow(hwnd, FALSE);
 
