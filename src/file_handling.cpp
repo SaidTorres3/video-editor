@@ -4,6 +4,7 @@
 #include "editing.h"
 #include "options_window.h"
 #include <commdlg.h>
+#include <filesystem>
 
 // Forward declarations
 void UpdateAudioTrackList();
@@ -18,6 +19,10 @@ extern VideoPlayer *g_videoPlayer;
 extern HWND g_hStatusText, g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hLabelTargetSize, g_hRadioUseBitrate, g_hRadioUseSize;
 extern double g_cutStartTime, g_cutEndTime;
 
+// Remember last directories for open and save dialogs
+std::wstring g_lastOpenDir;
+std::wstring g_lastSaveDir;
+
 void OpenVideoFile(HWND hwnd)
 {
     OPENFILENAMEW ofn;
@@ -31,9 +36,12 @@ void OpenVideoFile(HWND hwnd)
     ofn.lpstrFilter = L"Video Files\0*.mp4;*.avi;*.mov;*.mkv;*.wmv;*.flv;*.webm;*.m4v;*.3gp\0All Files\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+    if (!g_lastOpenDir.empty())
+        ofn.lpstrInitialDir = g_lastOpenDir.c_str();
 
     if (GetOpenFileNameW(&ofn))
     {
+        g_lastOpenDir = std::filesystem::path(szFile).parent_path().wstring();
         LoadVideoFile(hwnd, std::wstring(szFile));
     }
 }
@@ -43,6 +51,9 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
     if (g_videoPlayer && g_videoPlayer->LoadVideo(filename))
     {
         SetWindowTextW(g_hStatusText, (L"Loaded: " + filename).c_str());
+        g_lastOpenDir = std::filesystem::path(filename).parent_path().wstring();
+        std::wstring title = L"Video Editor - " + std::filesystem::path(filename).filename().wstring();
+        SetWindowTextW(hwnd, title.c_str());
         EnableWindow(g_hButtonPlay, TRUE);
         EnableWindow(g_hButtonPause, TRUE);
         EnableWindow(g_hButtonStop, TRUE);
