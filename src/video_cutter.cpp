@@ -371,6 +371,16 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                     streamMapping[i] = it.outIndex;
                     continue; // done for this stream
                 }
+                // If this track doesn't require isolation, just copy it
+                outStream = avformat_new_stream(outputCtx, nullptr);
+                if (avcodec_parameters_copy(outStream->codecpar, inStream->codecpar) < 0) {
+                    DebugLog("Failed to copy codec parameters", true);
+                    avformat_free_context(outputCtx);
+                    avformat_close_input(&inputCtx);
+                    return false;
+                }
+                outStream->codecpar->codec_tag = 0;
+                outStream->time_base = inStream->time_base;
             }
             // fall through to stream copy if no isolation processing required
         } else {
