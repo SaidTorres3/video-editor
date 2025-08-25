@@ -120,9 +120,14 @@ void UpdateAudioTrackList()
         std::string trackName = g_videoPlayer->GetAudioTrackName(i);
         std::wstring wTrackName(trackName.begin(), trackName.end());
         
-        // Add mute status to the display name
+        // Add status indicators to the display name
+        std::wstring status = L"";
         if (g_videoPlayer->IsAudioTrackMuted(i))
-            wTrackName += L" (MUTED)";
+            status += L" (MUTED)";
+        if (g_videoPlayer->IsVoiceIsolationEnabled(i))
+            status += L" (VOICE)";
+        
+        wTrackName += status;
         
         SendMessage(g_hListBoxAudioTracks, LB_ADDSTRING, 0, (LPARAM)wTrackName.c_str());
     }

@@ -29,6 +29,7 @@ add_compile_definitions(UNICODE _UNICODE)
 # Default paths (can override with -DFFMPEG_ROOT=... or -DCURL_ROOT=...)
 set(FFMPEG_ROOT "${CMAKE_SOURCE_DIR}/third_party/ffmpeg" CACHE PATH "Path to FFmpeg installation")
 set(CURL_ROOT   "${CMAKE_SOURCE_DIR}/vendor/libcurl" CACHE PATH "Path to libcurl installation")
+set(RNNOISE_ROOT "${CMAKE_SOURCE_DIR}/vendor/rnnoise" CACHE PATH "Path to RNNoise installation")
 
 # ==== FIND FFmpeg ====
 find_path(FFMPEG_INCLUDE_DIR
@@ -44,6 +45,17 @@ find_library(SWRESAMPLE_LIBRARY NAMES swresample PATHS ${FFMPEG_ROOT}/lib NO_DEF
 
 message(STATUS ">> FFmpeg include: ${FFMPEG_INCLUDE_DIR}")
 message(STATUS ">> avcodec lib:    ${AVCODEC_LIBRARY}")
+
+# ==== FIND RNNoise ====
+find_path(RNNOISE_INCLUDE_DIR
+    NAMES rnnoise.h
+    PATHS ${RNNOISE_ROOT}/include
+    NO_DEFAULT_PATH
+)
+find_library(RNNOISE_LIBRARY NAMES rnnoise PATHS ${RNNOISE_ROOT}/lib NO_DEFAULT_PATH)
+
+message(STATUS ">> RNNoise include: ${RNNOISE_INCLUDE_DIR}")
+message(STATUS ">> RNNoise lib:     ${RNNOISE_LIBRARY}")
 
 # ==== IMPORTED TARGET: libcurl ====
 add_library(VENDOR_LIBCURL STATIC IMPORTED GLOBAL)
@@ -105,6 +117,7 @@ add_executable(VideoEditor WIN32
 target_include_directories(VideoEditor PRIVATE
     src
     ${FFMPEG_INCLUDE_DIR}
+    ${RNNOISE_INCLUDE_DIR}
 )
 
 # ==== WINDOWS PLATFORM LIBS ====
@@ -133,6 +146,7 @@ endif()
 target_link_libraries(VideoEditor PRIVATE
     ${PLATFORM_LIBS}
     ${FFMPEG_LIBS}
+    ${RNNOISE_LIBRARY}
     VENDOR_LIBCURL
     $<$<BOOL:NOT USE_STATIC_FFMPEG>:VENDOR_ZLIB>
 )

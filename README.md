@@ -28,6 +28,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Mute/Unmute Tracks**: Toggle audio tracks on/off without affecting other tracks
 - **Per-Track Volume Control**: Adjust volume for each audio track individually (0-200%)
 - **Master Volume Control**: Control overall audio volume for all tracks
+- **AI-Powered Voice Isolation**: Uses RNNoise to remove background noise from audio tracks, isolating speech for clearer dialogue.
 - **Real-time Audio Mixing**: Multiple audio tracks are mixed together in real-time
 - **Audio Track Names**: Displays track names from metadata when available
 
@@ -37,6 +38,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Mute/Unmute Button**: Toggle mute state for the selected audio track
 - **Track Volume Slider**: Adjust volume for the currently selected track (0-200%)
 - **Master Volume Slider**: Control overall volume for all audio tracks
+- **Voice Isolation**: Right-click an audio track and select "Voice Isolation" to enable AI-powered noise reduction. This feature is ideal for cleaning up dialogue and reducing background noise.
 
 ### Cutting and Exporting Clips
 

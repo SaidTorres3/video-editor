@@ -2,10 +2,14 @@
 #include "video_player.h"
 #include "options_window.h"
 #include "debug_log.h"
+#include "rnnoise.h"
 #include <iostream>
 #include <sstream>
 #include <commctrl.h>
 #include <libavutil/frame.h>
+#include <algorithm>
+
+#define RNNOISE_FRAME_SIZE 480
 
 VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player) {}
 
@@ -53,6 +57,17 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         DebugLog(oss.str());
     }
 
+    // Check if any track has Voice Isolation enabled. Previously this forced
+    // audio merging which surprised users who did not explicitly request it.
+    // Instead we simply note that re-encoding is required for those tracks.
+    bool anyVoiceIsolation = false;
+    for (const auto& track : m_player->audioTracks) {
+        if (!track->isMuted && track->voiceIsolationEnabled) {
+            anyVoiceIsolation = true;
+            break;
+        }
+    }
+
     // When re-encoding or merging audio we need to set up decoder/encoder
     // contexts. The previous implementation only supported stream copying.
     // Build encoder state on demand.
@@ -71,16 +86,47 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         SwrContext* swrCtx;
         AVFrame* frame;
         std::deque<int16_t> buffer;
+
+        // For voice isolation
+        bool voiceIsolationEnabled = false;
+        DenoiseState* denoiseState = nullptr;
+        SwrContext* voiceIsolationSwrContext = nullptr;
+        SwrContext* voiceIsolationBackSwrContext = nullptr;
+        std::vector<float> voiceIsolationMonoBuffer;
+        std::deque<int16_t> voiceIsolationSampleQueue;
         float volume{1.0f};
     };
     std::vector<MergeTrack> mergeTracks;
+
+    // Tracks that need re-encoding individually (voice isolation without merge)
+    struct IsolationTrack {
+        int index;
+        AVCodecContext* decCtx;
+        AVCodecContext* encCtx;
+        SwrContext* encSwrCtx;
+        AVFrame* frame;
+        std::deque<int16_t> buffer;
+
+        bool voiceIsolationEnabled = false;
+        DenoiseState* denoiseState = nullptr;
+        SwrContext* voiceIsolationSwrContext = nullptr;
+        SwrContext* voiceIsolationBackSwrContext = nullptr;
+        std::vector<float> voiceIsolationMonoBuffer;
+        std::deque<int16_t> voiceIsolationSampleQueue;
+        float volume{1.0f};
+        int encFrameSamples = 0;
+        int outIndex = -1;
+        int64_t pts = 0;
+    };
+    std::vector<IsolationTrack> isoTracks;
+
     AVCodecContext* aEncCtx = nullptr;
     int encFrameSamples = 0;
     std::vector<int16_t> mixBuffer;
     SwrContext* mixSwr = nullptr;
     bool headerWritten = false;
 
-    bool needReencode = convertH264 || mergeAudio;
+    bool needReencode = convertH264 || mergeAudio || anyVoiceIsolation;
 
     AVFormatContext* inputCtx = nullptr;
     if (avformat_open_input(&inputCtx, utf8Input.c_str(), nullptr, nullptr) < 0) {
@@ -198,37 +244,145 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 success = false;
                 goto cleanup;
             }
-        } else if (needReencode && inStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && mergeAudio) {
-            // We'll create a single output audio stream later
-            MergeTrack mt{};
-            mt.index = i;
-            // Preserve the current track volume so export obeys UI settings
-            for (const auto& at : m_player->audioTracks) {
-                if (at->streamIndex == i) {
-                    mt.volume = at->volume;
-                    break;
+        } else if (needReencode && inStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            if (mergeAudio) {
+                // We'll create a single output audio stream later
+                MergeTrack mt{};
+                mt.index = i;
+                // Preserve the current track volume so export obeys UI settings
+                for (const auto& at : m_player->audioTracks) {
+                    if (at->streamIndex == i) {
+                        mt.volume = at->volume;
+                        break;
+                    }
                 }
+                const AVCodec* dec = avcodec_find_decoder(inStream->codecpar->codec_id);
+                mt.decCtx = avcodec_alloc_context3(dec);
+                avcodec_parameters_to_context(mt.decCtx, inStream->codecpar);
+                avcodec_open2(mt.decCtx, dec, nullptr);
+                mt.swrCtx = swr_alloc();
+                av_opt_set_int(mt.swrCtx, "in_sample_rate", mt.decCtx->sample_rate, 0);
+                av_opt_set_int(mt.swrCtx, "out_sample_rate", 44100, 0);
+                av_opt_set_sample_fmt(mt.swrCtx, "in_sample_fmt", mt.decCtx->sample_fmt, 0);
+                av_opt_set_sample_fmt(mt.swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                av_channel_layout_default(&mt.decCtx->ch_layout,
+                                          mt.decCtx->ch_layout.nb_channels ?
+                                              mt.decCtx->ch_layout.nb_channels : 2);
+                AVChannelLayout out_ch{};
+                av_channel_layout_default(&out_ch, 2);
+                av_opt_set_chlayout(mt.swrCtx, "in_chlayout", &mt.decCtx->ch_layout, 0);
+                av_opt_set_chlayout(mt.swrCtx, "out_chlayout", &out_ch, 0);
+                swr_init(mt.swrCtx);
+                mt.frame = av_frame_alloc();
+                mergeTracks.push_back(mt);
+                continue; // output stream created later
+            } else {
+                bool isolate = false;
+                float vol = 1.0f;
+                for (const auto& at : m_player->audioTracks) {
+                    if (at->streamIndex == (int)i) {
+                        isolate = at->voiceIsolationEnabled;
+                        vol = at->volume;
+                        break;
+                    }
+                }
+                if (isolate) {
+                    IsolationTrack it{};
+                    it.index = i;
+                    it.volume = vol;
+                    const AVCodec* dec = avcodec_find_decoder(inStream->codecpar->codec_id);
+                    it.decCtx = avcodec_alloc_context3(dec);
+                    avcodec_parameters_to_context(it.decCtx, inStream->codecpar);
+                    avcodec_open2(it.decCtx, dec, nullptr);
+                    it.frame = av_frame_alloc();
+                    it.voiceIsolationEnabled = true;
+                    it.denoiseState = rnnoise_create(nullptr);
+                    it.voiceIsolationSwrContext = swr_alloc();
+                    av_opt_set_int(it.voiceIsolationSwrContext, "in_sample_rate", it.decCtx->sample_rate, 0);
+                    av_opt_set_sample_fmt(it.voiceIsolationSwrContext, "in_sample_fmt", it.decCtx->sample_fmt, 0);
+                    av_opt_set_chlayout(it.voiceIsolationSwrContext, "in_chlayout", &it.decCtx->ch_layout, 0);
+                    av_opt_set_int(it.voiceIsolationSwrContext, "out_sample_rate", 48000, 0);
+                    av_opt_set_sample_fmt(it.voiceIsolationSwrContext, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    AVChannelLayout mono_layout;
+                    av_channel_layout_default(&mono_layout, 1);
+                    av_opt_set_chlayout(it.voiceIsolationSwrContext, "out_chlayout", &mono_layout, 0);
+                    swr_init(it.voiceIsolationSwrContext);
+
+                    it.voiceIsolationBackSwrContext = swr_alloc();
+                    av_opt_set_int(it.voiceIsolationBackSwrContext, "in_sample_rate", 48000, 0);
+                    av_opt_set_sample_fmt(it.voiceIsolationBackSwrContext, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    av_opt_set_chlayout(it.voiceIsolationBackSwrContext, "in_chlayout", &mono_layout, 0);
+                    av_opt_set_int(it.voiceIsolationBackSwrContext, "out_sample_rate", 44100, 0);
+                    av_opt_set_sample_fmt(it.voiceIsolationBackSwrContext, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    AVChannelLayout stereo_layout;
+                    av_channel_layout_default(&stereo_layout, 2);
+                    av_opt_set_chlayout(it.voiceIsolationBackSwrContext, "out_chlayout", &stereo_layout, 0);
+                    swr_init(it.voiceIsolationBackSwrContext);
+
+                    const AVCodec* aEnc = avcodec_find_encoder(AV_CODEC_ID_AAC);
+                    if (!aEnc) {
+                        DebugLog("AAC encoder not found", true);
+                        avformat_free_context(outputCtx);
+                        avformat_close_input(&inputCtx);
+                        return false;
+                    }
+                    outStream = avformat_new_stream(outputCtx, aEnc);
+                    it.encCtx = avcodec_alloc_context3(aEnc);
+                    it.encCtx->sample_rate = 44100;
+                    av_channel_layout_default(&it.encCtx->ch_layout, 2);
+                    it.encCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+                    it.encCtx->time_base = {1, it.encCtx->sample_rate};
+                    it.encCtx->bit_rate = 128000;
+                    if (avcodec_open2(it.encCtx, aEnc, nullptr) < 0) {
+                        DebugLog("Failed to open AAC encoder", true);
+                        avcodec_free_context(&it.encCtx);
+                        avformat_free_context(outputCtx);
+                        avformat_close_input(&inputCtx);
+                        return false;
+                    }
+                    if (avcodec_parameters_from_context(outStream->codecpar, it.encCtx) < 0) {
+                        DebugLog("Failed to copy AAC encoder parameters", true);
+                        avcodec_free_context(&it.encCtx);
+                        avformat_free_context(outputCtx);
+                        avformat_close_input(&inputCtx);
+                        return false;
+                    }
+                    outStream->time_base = it.encCtx->time_base;
+                    it.encFrameSamples = it.encCtx->frame_size > 0 ? it.encCtx->frame_size : 1024;
+                    it.encSwrCtx = swr_alloc();
+                    AVChannelLayout stereo;
+                    av_channel_layout_default(&stereo, 2);
+                    av_opt_set_int   (it.encSwrCtx, "in_sample_rate", 44100, 0);
+                    av_opt_set_sample_fmt(it.encSwrCtx, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    av_opt_set_chlayout  (it.encSwrCtx, "in_chlayout", &stereo, 0);
+                    av_opt_set_int   (it.encSwrCtx, "out_sample_rate", it.encCtx->sample_rate, 0);
+                    av_opt_set_sample_fmt(it.encSwrCtx, "out_sample_fmt", it.encCtx->sample_fmt, 0);
+                    av_opt_set_chlayout  (it.encSwrCtx, "out_chlayout", &it.encCtx->ch_layout, 0);
+                    if (swr_init(it.encSwrCtx) < 0) {
+                        DebugLog("Failed to init isolation resampler", true);
+                        swr_free(&it.encSwrCtx);
+                        avcodec_free_context(&it.encCtx);
+                        avformat_free_context(outputCtx);
+                        avformat_close_input(&inputCtx);
+                        return false;
+                    }
+                    it.outIndex = outStream->index;
+                    isoTracks.push_back(it);
+                    streamMapping[i] = it.outIndex;
+                    continue; // done for this stream
+                }
+                // If this track doesn't require isolation, just copy it
+                outStream = avformat_new_stream(outputCtx, nullptr);
+                if (avcodec_parameters_copy(outStream->codecpar, inStream->codecpar) < 0) {
+                    DebugLog("Failed to copy codec parameters", true);
+                    avformat_free_context(outputCtx);
+                    avformat_close_input(&inputCtx);
+                    return false;
+                }
+                outStream->codecpar->codec_tag = 0;
+                outStream->time_base = inStream->time_base;
             }
-            const AVCodec* dec = avcodec_find_decoder(inStream->codecpar->codec_id);
-            mt.decCtx = avcodec_alloc_context3(dec);
-            avcodec_parameters_to_context(mt.decCtx, inStream->codecpar);
-            avcodec_open2(mt.decCtx, dec, nullptr);
-            mt.swrCtx = swr_alloc();
-            av_opt_set_int(mt.swrCtx, "in_sample_rate", mt.decCtx->sample_rate, 0);
-            av_opt_set_int(mt.swrCtx, "out_sample_rate", 44100, 0);
-            av_opt_set_sample_fmt(mt.swrCtx, "in_sample_fmt", mt.decCtx->sample_fmt, 0);
-            av_opt_set_sample_fmt(mt.swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-            av_channel_layout_default(&mt.decCtx->ch_layout,
-                                      mt.decCtx->ch_layout.nb_channels ?
-                                          mt.decCtx->ch_layout.nb_channels : 2);
-            AVChannelLayout out_ch{};
-            av_channel_layout_default(&out_ch, 2);
-            av_opt_set_chlayout(mt.swrCtx, "in_chlayout", &mt.decCtx->ch_layout, 0);
-            av_opt_set_chlayout(mt.swrCtx, "out_chlayout", &out_ch, 0);
-            swr_init(mt.swrCtx);
-            mt.frame = av_frame_alloc();
-            mergeTracks.push_back(mt);
-            continue; // output stream created later
+            // fall through to stream copy if no isolation processing required
         } else {
             outStream = avformat_new_stream(outputCtx, nullptr);
             if (avcodec_parameters_copy(outStream->codecpar, inStream->codecpar) < 0) {
@@ -241,6 +395,41 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             outStream->time_base = inStream->time_base;
         }
         streamMapping[i] = outStream ? outStream->index : -1;
+    }
+
+    for (auto& mt : mergeTracks) {
+        for (const auto& playerTrack : m_player->audioTracks) {
+            if (playerTrack->streamIndex == mt.index) {
+                mt.voiceIsolationEnabled = playerTrack->voiceIsolationEnabled;
+                if (mt.voiceIsolationEnabled) {
+                    mt.denoiseState = rnnoise_create(nullptr);
+                    // Initialize resamplers for RNNoise (to 48kHz mono)
+                    mt.voiceIsolationSwrContext = swr_alloc();
+                    av_opt_set_int(mt.voiceIsolationSwrContext, "in_sample_rate", mt.decCtx->sample_rate, 0);
+                    av_opt_set_sample_fmt(mt.voiceIsolationSwrContext, "in_sample_fmt", mt.decCtx->sample_fmt, 0);
+                    av_opt_set_chlayout(mt.voiceIsolationSwrContext, "in_chlayout", &mt.decCtx->ch_layout, 0);
+                    av_opt_set_int(mt.voiceIsolationSwrContext, "out_sample_rate", 48000, 0);
+                    av_opt_set_sample_fmt(mt.voiceIsolationSwrContext, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    AVChannelLayout mono_layout;
+                    av_channel_layout_default(&mono_layout, 1);
+                    av_opt_set_chlayout(mt.voiceIsolationSwrContext, "out_chlayout", &mono_layout, 0);
+                    swr_init(mt.voiceIsolationSwrContext);
+
+                    // Initialize resampler back to final mix format
+                    mt.voiceIsolationBackSwrContext = swr_alloc();
+                    av_opt_set_int(mt.voiceIsolationBackSwrContext, "in_sample_rate", 48000, 0);
+                    av_opt_set_sample_fmt(mt.voiceIsolationBackSwrContext, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    av_opt_set_chlayout(mt.voiceIsolationBackSwrContext, "in_chlayout", &mono_layout, 0);
+                    av_opt_set_int(mt.voiceIsolationBackSwrContext, "out_sample_rate", 44100, 0);
+                    av_opt_set_sample_fmt(mt.voiceIsolationBackSwrContext, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+                    AVChannelLayout stereo_layout;
+                    av_channel_layout_default(&stereo_layout, 2);
+                    av_opt_set_chlayout(mt.voiceIsolationBackSwrContext, "out_chlayout", &stereo_layout, 0);
+                    swr_init(mt.voiceIsolationBackSwrContext);
+                }
+                break;
+            }
+        }
     }
 
     if (mergeAudio && !mergeTracks.empty()) {
@@ -381,14 +570,109 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 if (mt.index == pkt.stream_index) {
                     avcodec_send_packet(mt.decCtx, &pkt);
                     while (avcodec_receive_frame(mt.decCtx, mt.frame) == 0) {
-                        int outSamples = swr_get_out_samples(mt.swrCtx, mt.frame->nb_samples);
-                        std::vector<int16_t> tmp(outSamples * 2);
-                        uint8_t* outArr[1] = { reinterpret_cast<uint8_t*>(tmp.data()) };
-                        int conv = swr_convert(mt.swrCtx, outArr, outSamples,
-                                              (const uint8_t**)mt.frame->data,
-                                              mt.frame->nb_samples);
-                        mt.buffer.insert(mt.buffer.end(), tmp.begin(),
-                                          tmp.begin() + conv * 2);
+                        if (mt.voiceIsolationEnabled && mt.denoiseState) {
+                            // Resample to 48kHz mono for RNNoise
+                            int guess = swr_get_out_samples(mt.voiceIsolationSwrContext, mt.frame->nb_samples);
+                            std::vector<int16_t> mono_tmp(std::max(guess, mt.frame->nb_samples));
+                            uint8_t* out_ptr = reinterpret_cast<uint8_t*>(mono_tmp.data());
+                            int got = swr_convert(mt.voiceIsolationSwrContext, &out_ptr, (int)mono_tmp.size(), (const uint8_t**)mt.frame->data, mt.frame->nb_samples);
+                            if (got < 0) got = 0;
+
+                            // Accumulate into 48k mono queue and process exact 480-sample frames
+                            for (int n = 0; n < got; ++n) mt.voiceIsolationSampleQueue.push_back(mono_tmp[n]);
+
+                            std::vector<int16_t> processed_mono;
+                            while ((int)mt.voiceIsolationSampleQueue.size() >= RNNOISE_FRAME_SIZE) {
+                                // Fill RNNoise frame
+                                mt.voiceIsolationMonoBuffer.resize(RNNOISE_FRAME_SIZE);
+                                for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                                    int16_t s = mt.voiceIsolationSampleQueue.front();
+                                    mt.voiceIsolationSampleQueue.pop_front();
+                                    mt.voiceIsolationMonoBuffer[j] = static_cast<float>(s);
+                                }
+                                // Denoise in place
+                                rnnoise_process_frame(mt.denoiseState, mt.voiceIsolationMonoBuffer.data(), mt.voiceIsolationMonoBuffer.data());
+                                // Back to int16_t scale
+                                for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                                    float v = mt.voiceIsolationMonoBuffer[j];
+                                    if (v > 32767.0f) v = 32767.0f;
+                                    if (v < -32768.0f) v = -32768.0f;
+                                    processed_mono.push_back(static_cast<int16_t>(v));
+                                }
+                            }
+
+                            // Resample processed mono to final mix format (44.1kHz Stereo S16)
+                            if (!processed_mono.empty()) {
+                                int back_guess = swr_get_out_samples(mt.voiceIsolationBackSwrContext, (int)processed_mono.size());
+                                std::vector<int16_t> processed_stereo(std::max(back_guess, (int)processed_mono.size()) * 2);
+                                uint8_t* back_out_ptr = reinterpret_cast<uint8_t*>(processed_stereo.data());
+                                const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(processed_mono.data());
+                                int back_got = swr_convert(mt.voiceIsolationBackSwrContext, &back_out_ptr, (int)processed_stereo.size() / 2, &in_ptr, (int)processed_mono.size());
+                                if (back_got > 0) {
+                                    mt.buffer.insert(mt.buffer.end(), processed_stereo.begin(), processed_stereo.begin() + back_got * 2);
+                                }
+                            }
+                        } else {
+                            // Standard resampling to mix format
+                            int outSamples = swr_get_out_samples(mt.swrCtx, mt.frame->nb_samples);
+                            std::vector<int16_t> tmp(outSamples * 2);
+                            uint8_t* outArr[1] = { reinterpret_cast<uint8_t*>(tmp.data()) };
+                            int conv = swr_convert(mt.swrCtx, outArr, outSamples,
+                                                  (const uint8_t**)mt.frame->data,
+                                                  mt.frame->nb_samples);
+                            mt.buffer.insert(mt.buffer.end(), tmp.begin(),
+                                              tmp.begin() + conv * 2);
+                        }
+                    }
+                    handled = true;
+                    break;
+                }
+            }
+        } else if (!isoTracks.empty()) {
+            for (auto &it : isoTracks) {
+                if (it.index == pkt.stream_index) {
+                    avcodec_send_packet(it.decCtx, &pkt);
+                    while (avcodec_receive_frame(it.decCtx, it.frame) == 0) {
+                        // Resample to 48kHz mono for RNNoise
+                        int guess = swr_get_out_samples(it.voiceIsolationSwrContext, it.frame->nb_samples);
+                        std::vector<int16_t> mono_tmp(std::max(guess, it.frame->nb_samples));
+                        uint8_t* out_ptr = reinterpret_cast<uint8_t*>(mono_tmp.data());
+                        int got = swr_convert(it.voiceIsolationSwrContext, &out_ptr, (int)mono_tmp.size(), (const uint8_t**)it.frame->data, it.frame->nb_samples);
+                        if (got < 0) got = 0;
+                        for (int n = 0; n < got; ++n) it.voiceIsolationSampleQueue.push_back(mono_tmp[n]);
+
+                        std::vector<int16_t> processed_mono;
+                        while ((int)it.voiceIsolationSampleQueue.size() >= RNNOISE_FRAME_SIZE) {
+                            it.voiceIsolationMonoBuffer.resize(RNNOISE_FRAME_SIZE);
+                            for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                                int16_t s = it.voiceIsolationSampleQueue.front();
+                                it.voiceIsolationSampleQueue.pop_front();
+                                it.voiceIsolationMonoBuffer[j] = static_cast<float>(s);
+                            }
+                            rnnoise_process_frame(it.denoiseState, it.voiceIsolationMonoBuffer.data(), it.voiceIsolationMonoBuffer.data());
+                            for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                                float v = it.voiceIsolationMonoBuffer[j];
+                                if (v > 32767.0f) v = 32767.0f;
+                                if (v < -32768.0f) v = -32768.0f;
+                                processed_mono.push_back(static_cast<int16_t>(v));
+                            }
+                        }
+
+                        if (!processed_mono.empty()) {
+                            int back_guess = swr_get_out_samples(it.voiceIsolationBackSwrContext, (int)processed_mono.size());
+                            std::vector<int16_t> processed_stereo(std::max(back_guess, (int)processed_mono.size()) * 2);
+                            uint8_t* back_out_ptr = reinterpret_cast<uint8_t*>(processed_stereo.data());
+                            const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(processed_mono.data());
+                            int back_got = swr_convert(it.voiceIsolationBackSwrContext, &back_out_ptr, (int)processed_stereo.size() / 2, &in_ptr, (int)processed_mono.size());
+                            if (back_got > 0) {
+                                for (int j = 0; j < back_got * 2; ++j) {
+                                    int val = static_cast<int>(processed_stereo[j] * it.volume);
+                                    if (val > 32767) val = 32767;
+                                    if (val < -32768) val = -32768;
+                                    it.buffer.push_back(static_cast<int16_t>(val));
+                                }
+                            }
+                        }
                     }
                     handled = true;
                     break;
@@ -458,6 +742,44 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 }
                 av_frame_free(&af);
             }
+        } else if (!mergeAudio && !isoTracks.empty()) {
+            for (auto &it : isoTracks) {
+                while ((int)it.buffer.size() >= it.encFrameSamples * 2) {
+                    AVFrame* af = av_frame_alloc();
+                    af->nb_samples = it.encFrameSamples;
+                    av_channel_layout_copy(&af->ch_layout, &it.encCtx->ch_layout);
+                    af->format = it.encCtx->sample_fmt;
+                    af->sample_rate = it.encCtx->sample_rate;
+                    if (av_frame_get_buffer(af, 0) < 0) {
+                        DebugLog("Failed to allocate audio frame buffer", true);
+                        av_frame_free(&af);
+                        success = false;
+                        goto cleanup;
+                    }
+                    std::vector<int16_t> tmp(it.encFrameSamples * 2);
+                    for (int j = 0; j < it.encFrameSamples * 2; ++j) {
+                        tmp[j] = it.buffer.front();
+                        it.buffer.pop_front();
+                    }
+                    const uint8_t* inBuf[1] = { (const uint8_t*)tmp.data() };
+                    if (swr_convert(it.encSwrCtx, af->data, it.encFrameSamples, inBuf, it.encFrameSamples) < 0) {
+                        DebugLog("Failed to convert isolation samples", true);
+                        av_frame_free(&af);
+                        success = false;
+                        goto cleanup;
+                    }
+                    af->pts = it.pts;
+                    it.pts += it.encFrameSamples;
+                    avcodec_send_frame(it.encCtx, af);
+                    while (avcodec_receive_packet(it.encCtx, &outPkt) == 0) {
+                        av_packet_rescale_ts(&outPkt, it.encCtx->time_base, outputCtx->streams[it.outIndex]->time_base);
+                        outPkt.stream_index = it.outIndex;
+                        av_interleaved_write_frame(outputCtx, &outPkt);
+                        av_packet_unref(&outPkt);
+                    }
+                    av_frame_free(&af);
+                }
+            }
         }
 
         double progress = (pktPtsUs - startPts) / double(endPts - startPts);
@@ -478,6 +800,41 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
     }
     if (mergeAudio && aEncCtx) {
         // flush remaining samples
+        // First, for each track with RNNoise, flush any residual 48k mono samples
+        for (auto &mt : mergeTracks) {
+            if (mt.voiceIsolationEnabled && mt.denoiseState && !mt.voiceIsolationSampleQueue.empty()) {
+                // Pad to full frame with zeros
+                std::vector<int16_t> processed_mono;
+                while (!mt.voiceIsolationSampleQueue.empty()) {
+                    mt.voiceIsolationMonoBuffer.resize(RNNOISE_FRAME_SIZE, 0.0f);
+                    int take = std::min((int)mt.voiceIsolationSampleQueue.size(), RNNOISE_FRAME_SIZE);
+                    for (int j = 0; j < take; ++j) {
+                        int16_t s = mt.voiceIsolationSampleQueue.front();
+                        mt.voiceIsolationSampleQueue.pop_front();
+                        mt.voiceIsolationMonoBuffer[j] = static_cast<float>(s);
+                    }
+                    // Denoise
+                    rnnoise_process_frame(mt.denoiseState, mt.voiceIsolationMonoBuffer.data(), mt.voiceIsolationMonoBuffer.data());
+                    for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                        float v = mt.voiceIsolationMonoBuffer[j];
+                        if (v > 32767.0f) v = 32767.0f;
+                        if (v < -32768.0f) v = -32768.0f;
+                        processed_mono.push_back(static_cast<int16_t>(v));
+                    }
+                }
+                if (!processed_mono.empty()) {
+                    int back_guess = swr_get_out_samples(mt.voiceIsolationBackSwrContext, (int)processed_mono.size());
+                    std::vector<int16_t> processed_stereo(std::max(back_guess, (int)processed_mono.size()) * 2);
+                    uint8_t* back_out_ptr = reinterpret_cast<uint8_t*>(processed_stereo.data());
+                    const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(processed_mono.data());
+                    int back_got = swr_convert(mt.voiceIsolationBackSwrContext, &back_out_ptr, (int)processed_stereo.size() / 2, &in_ptr, (int)processed_mono.size());
+                    if (back_got > 0) {
+                        mt.buffer.insert(mt.buffer.end(), processed_stereo.begin(), processed_stereo.begin() + back_got * 2);
+                    }
+                }
+            }
+        }
+
         while (true) {
             if (cancelFlag && *cancelFlag) { success = false; goto cleanup; }
             bool ready = true;
@@ -530,6 +887,85 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             av_interleaved_write_frame(outputCtx, &outPkt);
             av_packet_unref(&outPkt);
         }
+    } else if (!mergeAudio) {
+        for (auto &it : isoTracks) {
+            if (it.voiceIsolationEnabled && it.denoiseState && !it.voiceIsolationSampleQueue.empty()) {
+                std::vector<int16_t> processed_mono;
+                while (!it.voiceIsolationSampleQueue.empty()) {
+                    it.voiceIsolationMonoBuffer.resize(RNNOISE_FRAME_SIZE, 0.0f);
+                    int take = std::min((int)it.voiceIsolationSampleQueue.size(), RNNOISE_FRAME_SIZE);
+                    for (int j = 0; j < take; ++j) {
+                        int16_t s = it.voiceIsolationSampleQueue.front();
+                        it.voiceIsolationSampleQueue.pop_front();
+                        it.voiceIsolationMonoBuffer[j] = static_cast<float>(s);
+                    }
+                    rnnoise_process_frame(it.denoiseState, it.voiceIsolationMonoBuffer.data(), it.voiceIsolationMonoBuffer.data());
+                    for (int j = 0; j < RNNOISE_FRAME_SIZE; ++j) {
+                        float v = it.voiceIsolationMonoBuffer[j];
+                        if (v > 32767.0f) v = 32767.0f;
+                        if (v < -32768.0f) v = -32768.0f;
+                        processed_mono.push_back(static_cast<int16_t>(v));
+                    }
+                }
+                if (!processed_mono.empty()) {
+                    int back_guess = swr_get_out_samples(it.voiceIsolationBackSwrContext, (int)processed_mono.size());
+                    std::vector<int16_t> processed_stereo(std::max(back_guess, (int)processed_mono.size()) * 2);
+                    uint8_t* back_out_ptr = reinterpret_cast<uint8_t*>(processed_stereo.data());
+                    const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(processed_mono.data());
+                    int back_got = swr_convert(it.voiceIsolationBackSwrContext, &back_out_ptr, (int)processed_stereo.size() / 2, &in_ptr, (int)processed_mono.size());
+                    if (back_got > 0) {
+                        for (int j = 0; j < back_got * 2; ++j) {
+                            int val = static_cast<int>(processed_stereo[j] * it.volume);
+                            if (val > 32767) val = 32767;
+                            if (val < -32768) val = -32768;
+                            it.buffer.push_back(static_cast<int16_t>(val));
+                        }
+                    }
+                }
+            }
+            while ((int)it.buffer.size() >= it.encFrameSamples * 2) {
+                AVFrame* af = av_frame_alloc();
+                af->nb_samples = it.encFrameSamples;
+                av_channel_layout_copy(&af->ch_layout, &it.encCtx->ch_layout);
+                af->format = it.encCtx->sample_fmt;
+                af->sample_rate = it.encCtx->sample_rate;
+                if (av_frame_get_buffer(af, 0) < 0) {
+                    DebugLog("Failed to allocate audio frame buffer", true);
+                    av_frame_free(&af);
+                    success = false;
+                    goto cleanup;
+                }
+                std::vector<int16_t> tmp(it.encFrameSamples * 2);
+                for (int j = 0; j < it.encFrameSamples * 2; ++j) {
+                    tmp[j] = it.buffer.front();
+                    it.buffer.pop_front();
+                }
+                const uint8_t* inBuf[1] = { (const uint8_t*)tmp.data() };
+                if (swr_convert(it.encSwrCtx, af->data, it.encFrameSamples, inBuf, it.encFrameSamples) < 0) {
+                    DebugLog("Failed to convert isolation samples", true);
+                    av_frame_free(&af);
+                    success = false;
+                    goto cleanup;
+                }
+                af->pts = it.pts;
+                it.pts += it.encFrameSamples;
+                avcodec_send_frame(it.encCtx, af);
+                while (avcodec_receive_packet(it.encCtx, &outPkt) == 0) {
+                    av_packet_rescale_ts(&outPkt, it.encCtx->time_base, outputCtx->streams[it.outIndex]->time_base);
+                    outPkt.stream_index = it.outIndex;
+                    av_interleaved_write_frame(outputCtx, &outPkt);
+                    av_packet_unref(&outPkt);
+                }
+                av_frame_free(&af);
+            }
+            avcodec_send_frame(it.encCtx, nullptr);
+            while (avcodec_receive_packet(it.encCtx, &outPkt) == 0) {
+                av_packet_rescale_ts(&outPkt, it.encCtx->time_base, outputCtx->streams[it.outIndex]->time_base);
+                outPkt.stream_index = it.outIndex;
+                av_interleaved_write_frame(outputCtx, &outPkt);
+                av_packet_unref(&outPkt);
+            }
+        }
     }
 
 cleanup:
@@ -549,6 +985,18 @@ cleanup:
         if (mt.swrCtx) swr_free(&mt.swrCtx);
         if (mt.decCtx) avcodec_free_context(&mt.decCtx);
         if (mt.frame) av_frame_free(&mt.frame);
+        if (mt.denoiseState) rnnoise_destroy(mt.denoiseState);
+        if (mt.voiceIsolationSwrContext) swr_free(&mt.voiceIsolationSwrContext);
+        if (mt.voiceIsolationBackSwrContext) swr_free(&mt.voiceIsolationBackSwrContext);
+    }
+    for (auto &it : isoTracks) {
+        if (it.encCtx) avcodec_free_context(&it.encCtx);
+        if (it.encSwrCtx) swr_free(&it.encSwrCtx);
+        if (it.decCtx) avcodec_free_context(&it.decCtx);
+        if (it.frame) av_frame_free(&it.frame);
+        if (it.denoiseState) rnnoise_destroy(it.denoiseState);
+        if (it.voiceIsolationSwrContext) swr_free(&it.voiceIsolationSwrContext);
+        if (it.voiceIsolationBackSwrContext) swr_free(&it.voiceIsolationBackSwrContext);
     }
     avformat_free_context(outputCtx);
     avformat_close_input(&inputCtx);

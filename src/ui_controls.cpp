@@ -31,6 +31,7 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_LABEL_TARGETSIZE 1023
 #define ID_RADIO_USE_BITRATE 1024
 #define ID_RADIO_USE_SIZE 1025
+#define ID_CONTEXT_VOICE_ISOLATION 1026
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
