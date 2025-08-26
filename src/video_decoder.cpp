@@ -3,6 +3,7 @@
 #include "audio_player.h"
 #include "video_renderer.h"
 #include "ui_updates.h"
+#include <algorithm> // For std::lower_bound
 
 VideoDecoder::VideoDecoder(VideoPlayer* player) : m_player(player) {}
 
@@ -182,11 +183,42 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
 
                 // Cache frame for responsive backward stepping
                 if (m_player->frameCache.size() >= m_player->frameCacheLimit)
-                    m_player->frameCache.pop_front();
-                m_player->frameCache.push_back({m_player->currentFrame,
-                                              m_player->currentPts,
-                                              std::vector<uint8_t>(m_player->buffer,
-                                                                   m_player->buffer + m_player->rgbBufferSize)});
+                {
+                    // Smart cache management: remove frames with larger gaps between them
+                    // This helps keep more keyframes and evenly spaced frames in the cache
+                    if (m_player->frameCache.size() >= 2)
+                    {
+                        size_t largestGapIndex = 0;
+                        int64_t largestGap = 0;
+                        
+                        for (size_t i = 0; i < m_player->frameCache.size() - 1; i++)
+                        {
+                            int64_t gap = m_player->frameCache[i+1].number - m_player->frameCache[i].number;
+                            if (gap > largestGap)
+                            {
+                                largestGap = gap;
+                                largestGapIndex = i;
+                            }
+                        }
+                        
+                        // If we found a large gap and it's not the first frame, remove the second frame of the pair
+                        if (largestGap > 1 && largestGapIndex < m_player->frameCache.size() - 1)
+                            m_player->frameCache.erase(m_player->frameCache.begin() + largestGapIndex + 1);
+                        else
+                            m_player->frameCache.pop_front();  // Fall back to removing oldest
+                    }
+                    else
+                    {
+                        m_player->frameCache.pop_front();
+                    }
+                }
+                
+                // Create a more efficient cache by avoiding duplicate memory copy
+                m_player->frameCache.push_back({
+                    m_player->currentFrame,
+                    m_player->currentPts,
+                    std::vector<uint8_t>(m_player->buffer, m_player->buffer + m_player->rgbBufferSize)
+                });
 
                 av_frame_unref(m_player->hwFrame);
                 if (swFrame != m_player->hwFrame)
