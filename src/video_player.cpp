@@ -282,8 +282,16 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     // Decode frames until we reach the requested frame
     while (currentFrame < frameNumber)
     {
-        if (!m_decoder->DecodeNextFrame(true))
+        bool showFrame = (currentFrame + 1 == frameNumber);
+        if (!m_decoder->DecodeNextFrame(showFrame))
             break;
+    }
+
+    // Discard any audio decoded during stepping
+    {
+        std::lock_guard<std::mutex> lock(audioMutex);
+        for (auto& tr : audioTracks)
+            tr->buffer.clear();
     }
 }
 
