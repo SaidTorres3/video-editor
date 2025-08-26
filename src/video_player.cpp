@@ -33,7 +33,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
     audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
-    dropAudioDuringStepping(false), frameCacheLimit(120)
+      dropAudioDuringStepping(false), frameCacheLimit(240)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -292,7 +292,26 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         return;
     }
 
-    // For any other frame (including stepping backward), perform a seek
+    // When stepping backward beyond the cache, seek slightly earlier and
+    // decode forward to populate the cache so subsequent steps are instant.
+    if (frameNumber < currentFrame)
+    {
+        int64_t startFrame = std::max<int64_t>(0, frameNumber - (int64_t)frameCacheLimit + 1);
+        double startSeconds = frameRate > 0 ? (startFrame / frameRate) : 0.0;
+        SeekToTime(startSeconds, 0);
+
+        while (currentFrame < frameNumber)
+        {
+            bool last = (currentFrame + 1 >= frameNumber);
+            if (!m_decoder->DecodeNextFrame(last, false))
+                break;
+        }
+
+        dropAudioDuringStepping = false;
+        return;
+    }
+
+    // For forward jumps, perform a regular seek
     double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
     SeekToTime(seconds, 0);
 
