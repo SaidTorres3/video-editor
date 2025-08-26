@@ -163,18 +163,6 @@ public:
 private:
     // When true, audio packets are dropped while stepping to avoid stalls
     bool dropAudioDuringStepping;
-    // Temporary pixel buffer to restore the last frame during precise backward stepping
-    std::vector<uint8_t> stepBackupBuffer;
-
-    // Frame history for precise single-frame navigation without seeking
-    struct FrameHistoryEntry {
-        std::vector<uint8_t> rgb; // BGRA bytes of the frameRGB at decode time
-        double pts{0.0};
-        int64_t frameIndex{0};
-    };
-    std::deque<FrameHistoryEntry> frameHistory; // ordered oldest -> newest
-    int historyDisplayIndex{-1}; // -1 when empty; else 0..size-1 points to current displayed frame in history
-    size_t maxHistoryFrames{16}; // keep last N frames; tune for memory/precision
 
 public:
     VideoPlayer(HWND parent);

@@ -87,8 +87,6 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
 {
     UnloadVideo();
     loadedFilename = filename;
-    frameHistory.clear();
-    historyDisplayIndex = -1;
 
     int bufSize = WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1, nullptr, 0, nullptr, nullptr);
     std::string utf8Filename(bufSize, 0);
@@ -241,8 +239,6 @@ void VideoPlayer::Stop()
     Pause();
     currentFrame = 0;
     currentPts = 0.0;
-    frameHistory.clear();
-    historyDisplayIndex = -1;
     if (isLoaded)
     {
         av_seek_frame(formatContext, videoStreamIndex, 0, AVSEEK_FLAG_FRAME);
@@ -270,61 +266,22 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     if (frameNumber == currentFrame)
         return;
 
-    // If stepping forward one frame, use history if available, else decode next
+    // Optimize stepping forward one frame by decoding without seeking
     if (frameNumber == currentFrame + 1)
     {
-        if (historyDisplayIndex >= 0 && (size_t)historyDisplayIndex + 1 < frameHistory.size())
-        {
-            // Move forward within history
-            historyDisplayIndex++;
-            const auto &entry = frameHistory[historyDisplayIndex];
-            std::memcpy(buffer, entry.rgb.data(), entry.rgb.size());
-            currentPts = entry.pts;
-            currentFrame = entry.frameIndex;
-            m_renderer->UpdateDisplay();
-        }
-        else
-        {
-            // Decode to extend history
-            m_decoder->DecodeNextFrame(true);
-        }
+        m_decoder->DecodeNextFrame(true);
         return;
     }
 
-    // If stepping backward one frame, prefer history for exactness
-    if (frameNumber == currentFrame - 1)
-    {
-        if (historyDisplayIndex > 0 && (size_t)historyDisplayIndex <= frameHistory.size())
-        {
-            historyDisplayIndex--;
-            const auto &entry = frameHistory[historyDisplayIndex];
-            std::memcpy(buffer, entry.rgb.data(), entry.rgb.size());
-            currentPts = entry.pts;
-            currentFrame = entry.frameIndex;
-            m_renderer->UpdateDisplay();
-            return;
-        }
-        // Fall back: if no history, do a minimal seek+decode
-        double seconds = frameRate > 0 ? ((frameNumber) / frameRate) : 0.0;
-        SeekToTime(seconds, 1);
-        return;
-    }
-
-    // For all other cases (larger jumps), use normal seeking
+    // For any other frame (including stepping backward), perform a seek
     double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
     SeekToTime(seconds, 0);
 
-    // Simple approach: if we're not at the exact frame, decode a few more
-    if (currentFrame < frameNumber)
+    // Decode frames until the requested frame is reached
+    while (currentFrame < frameNumber)
     {
-        int framesToDecode = std::min(5, (int)(frameNumber - currentFrame));
-        for (int i = 0; i < framesToDecode; i++)
-        {
-            if (!m_decoder->DecodeNextFrame(true))
-                break;
-            if (currentFrame >= frameNumber)
-                break;
-        }
+        if (!m_decoder->DecodeNextFrame(true))
+            break;
     }
 }
 
@@ -371,9 +328,6 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
             currentPts = seconds;
             currentFrame = (int64_t)(seconds * frameRate);
         }
-    // Seeking invalidates frame history relative to display
-    frameHistory.clear();
-    historyDisplayIndex = -1;
     }
 
     // Decode frames after seeking so the display updates immediately
