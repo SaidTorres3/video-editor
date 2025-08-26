@@ -264,7 +264,7 @@ void VideoPlayer::Stop()
 
 void VideoPlayer::SeekToFrame(int64_t frameNumber)
 {
-    if (!isLoaded || frameNumber < 0 || frameNumber >= totalFrames)
+     if (!isLoaded || frameNumber < 0 || (totalFrames > 0 && frameNumber >= totalFrames))
         return;
 
     if (frameNumber == currentFrame)
