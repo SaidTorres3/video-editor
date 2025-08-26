@@ -276,8 +276,8 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
     SeekToTime(seconds, 0);
 
-    // Adjust currentFrame so the next decoded frame becomes the requested one
-    currentFrame = frameNumber - 1;
+    // Ensure the next decoded frame is processed
+    currentFrame--;
 
     // Decode frames until we reach the requested frame
     while (currentFrame < frameNumber)
@@ -315,8 +315,20 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
                 tr->buffer.clear();
         }
 
-        currentFrame = (int64_t)(seconds * frameRate);
-        currentPts = seconds;
+        // Estimate the frame and PTS we landed on using the stream index
+        int idx = av_index_search_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
+        if (idx >= 0 && vs->index_entries)
+        {
+            int64_t keyTs = vs->index_entries[idx].timestamp;
+            double keyTime = keyTs * av_q2d(vs->time_base) - startTimeOffset;
+            currentPts = keyTime;
+            currentFrame = (int64_t)(currentPts * frameRate);
+        }
+        else
+        {
+            currentPts = seconds;
+            currentFrame = (int64_t)(seconds * frameRate);
+        }
     }
 
     // Decode frames after seeking so the display updates immediately
