@@ -178,6 +178,39 @@ bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
                     0, m_player->frameHeight,
                     m_player->frameRGB->data, m_player->frameRGB->linesize);
 
+                // Record frame into history for exact back/forward stepping
+                {
+                    int rgbBytes = av_image_get_buffer_size(AV_PIX_FMT_BGRA, m_player->frameWidth, m_player->frameHeight, 32);
+                    if (rgbBytes < 0) rgbBytes = m_player->frameWidth * m_player->frameHeight * 4;
+                    // Avoid pushing exact duplicate PTS consecutively
+                    bool push = true;
+                    if (!m_player->frameHistory.empty())
+                    {
+                        if (std::abs(m_player->frameHistory.back().pts - m_player->currentPts) < 1e-9)
+                            push = false;
+                    }
+                    if (push)
+                    {
+                        VideoPlayer::FrameHistoryEntry entry;
+                        entry.rgb.resize(rgbBytes);
+                        std::memcpy(entry.rgb.data(), m_player->buffer, rgbBytes);
+                        entry.pts = m_player->currentPts;
+                        entry.frameIndex = m_player->currentFrame;
+
+                        // When we decode a new frame, discard any "redo" portion (if user rewound and then continued)
+                        if (m_player->historyDisplayIndex >= 0 && (size_t)m_player->historyDisplayIndex + 1 < m_player->frameHistory.size())
+                        {
+                            m_player->frameHistory.erase(m_player->frameHistory.begin() + m_player->historyDisplayIndex + 1, m_player->frameHistory.end());
+                        }
+                        m_player->frameHistory.push_back(std::move(entry));
+                        // Trim to max
+                        while (m_player->frameHistory.size() > m_player->maxHistoryFrames)
+                            m_player->frameHistory.pop_front();
+                        // Point display to the newest
+                        m_player->historyDisplayIndex = (int)m_player->frameHistory.size() - 1;
+                    }
+                }
+
                 av_frame_unref(m_player->hwFrame);
                 if (swFrame != m_player->hwFrame)
                     av_frame_unref(swFrame);
@@ -185,13 +218,9 @@ bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
                 lock.unlock();
 
                 if (updateDisplay)
-                {
                     m_player->m_renderer->UpdateDisplay();
-                }
                 else
-                {
                     InvalidateRect(m_player->videoWindow, nullptr, FALSE);
-                }
 
                 UpdateTimeline();
 
@@ -205,7 +234,9 @@ bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
             {
                 if (m_player->packet->stream_index == track->streamIndex)
                 {
-                    m_player->m_audioPlayer->ProcessFrame(m_player->packet);
+                    // Drop audio while single-stepping to keep UI responsive and avoid A/V drift
+                    if (!m_player->dropAudioDuringStepping)
+                        m_player->m_audioPlayer->ProcessFrame(m_player->packet);
                     break;
                 }
             }
