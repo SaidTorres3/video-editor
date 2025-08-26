@@ -92,6 +92,7 @@ public:
     AVPacket *packet;
     struct SwsContext *swsContext;
     uint8_t *buffer;
+    int rgbBufferSize;
     int videoStreamIndex;
     int frameWidth, frameHeight;
     bool isLoaded;
@@ -163,6 +164,14 @@ public:
 private:
     // When true, audio packets are dropped while stepping to avoid stalls
     bool dropAudioDuringStepping;
+
+    struct CachedFrame {
+        int64_t number;
+        double pts;
+        std::vector<uint8_t> pixels;
+    };
+    std::deque<CachedFrame> frameCache;
+    size_t frameCacheLimit;
 
 public:
     VideoPlayer(HWND parent);

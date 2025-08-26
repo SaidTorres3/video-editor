@@ -4,6 +4,7 @@
 #include "video_renderer.h"
 #include "video_cutter.h"
 #include "options_window.h"
+#include "ui_updates.h"
 #include <iostream>
 #include <windows.h>
 #include <windowsx.h>
@@ -20,7 +21,7 @@ VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
       frame(nullptr), frameRGB(nullptr), hwFrame(nullptr), hwDeviceCtx(nullptr),
       hwPixelFormat(AV_PIX_FMT_NONE), useHwAccel(false), packet(nullptr), swsContext(nullptr),
-      buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
+      buffer(nullptr), rgbBufferSize(0), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
       cropRect{0,0,0,0}, hasCrop(false), selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
@@ -32,7 +33,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
     audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
-    dropAudioDuringStepping(false)
+    dropAudioDuringStepping(false), frameCacheLimit(120)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -195,6 +196,7 @@ void VideoPlayer::UnloadVideo()
     cropRect = {0,0,0,0};
     cropStack.clear();
     hasCrop = false;
+    frameCache.clear();
 }
 
 bool VideoPlayer::Play()
@@ -266,6 +268,20 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     if (frameNumber == currentFrame)
         return;
 
+    // Use cached frame if available for instant display
+    for (auto it = frameCache.rbegin(); it != frameCache.rend(); ++it)
+    {
+        if (it->number == frameNumber)
+        {
+            std::copy(it->pixels.begin(), it->pixels.end(), buffer);
+            currentFrame = frameNumber;
+            currentPts = it->pts;
+            m_renderer->UpdateDisplay();
+            UpdateTimeline();
+            return;
+        }
+    }
+
     dropAudioDuringStepping = true;
 
     // Optimize stepping forward one frame by decoding without seeking
@@ -307,6 +323,7 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
 
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
+        frameCache.clear();
 
         AVStream *vs = formatContext->streams[videoStreamIndex];
         int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));

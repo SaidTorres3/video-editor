@@ -83,6 +83,7 @@ bool VideoDecoder::Initialize() {
     }
 
     int numBytes = av_image_get_buffer_size(AV_PIX_FMT_BGRA, m_player->frameWidth, m_player->frameHeight, 32);
+    m_player->rgbBufferSize = numBytes;
     m_player->buffer = (uint8_t *)av_malloc(numBytes);
     av_image_fill_arrays(m_player->frameRGB->data, m_player->frameRGB->linesize, m_player->buffer,
                          AV_PIX_FMT_BGRA, m_player->frameWidth, m_player->frameHeight, 32);
@@ -107,6 +108,7 @@ void VideoDecoder::Cleanup() {
         sws_freeContext(m_player->swsContext), m_player->swsContext = nullptr;
     if (m_player->buffer)
         av_free(m_player->buffer), m_player->buffer = nullptr;
+    m_player->rgbBufferSize = 0;
     if (m_player->packet)
         av_packet_free(&m_player->packet), m_player->packet = nullptr;
     if (m_player->frameRGB)
@@ -178,7 +180,13 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
                     0, m_player->frameHeight,
                     m_player->frameRGB->data, m_player->frameRGB->linesize);
 
-                // No frame history: frame data is already in m_player->buffer for display
+                // Cache frame for responsive backward stepping
+                if (m_player->frameCache.size() >= m_player->frameCacheLimit)
+                    m_player->frameCache.pop_front();
+                m_player->frameCache.push_back({m_player->currentFrame,
+                                              m_player->currentPts,
+                                              std::vector<uint8_t>(m_player->buffer,
+                                                                   m_player->buffer + m_player->rgbBufferSize)});
 
                 av_frame_unref(m_player->hwFrame);
                 if (swFrame != m_player->hwFrame)
