@@ -292,44 +292,26 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         return;
     }
 
-    // When stepping backward beyond the cache, seek slightly earlier and
-    // decode forward to populate the cache so subsequent steps are instant.
-    if (frameNumber < currentFrame)
-    {
-        int64_t startFrame = std::max<int64_t>(0, frameNumber - (int64_t)frameCacheLimit + 1);
-        double startSeconds = frameRate > 0 ? (startFrame / frameRate) : 0.0;
-        SeekToTime(startSeconds, 0);
+    // Seek directly to the requested frame time so no extra frames are decoded
+    double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
+    SeekToTime(seconds, 0);
 
+    if (currentFrame >= frameNumber)
+    {
+        // Decode once to present the exact frame if we already landed on it
+        m_decoder->DecodeNextFrame(true, false);
+        // currentFrame was advanced inside DecodeNextFrame, adjust back
+        currentFrame--;
+    }
+    else
+    {
+        // Decode frames until the requested frame is reached without showing intermediates
         while (currentFrame < frameNumber)
         {
             bool last = (currentFrame + 1 >= frameNumber);
             if (!m_decoder->DecodeNextFrame(last, false))
                 break;
         }
-
-        dropAudioDuringStepping = false;
-        return;
-    }
-
-    // For forward jumps, perform a regular seek
-    double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
-    SeekToTime(seconds, 0);
-
-    // If the seek landed on the target frame, decode once to display it
-    if (currentFrame >= frameNumber)
-    {
-        m_decoder->DecodeNextFrame(true, false);
-        currentFrame--;
-        dropAudioDuringStepping = false;
-        return;
-    }
-
-    // Decode frames until the requested frame is reached without displaying intermediate ones
-    while (currentFrame < frameNumber)
-    {
-        bool last = (currentFrame + 1 >= frameNumber);
-        if (!m_decoder->DecodeNextFrame(last, false))
-            break;
     }
 
     dropAudioDuringStepping = false;
