@@ -260,16 +260,19 @@ void VideoPlayer::Stop()
 
 void VideoPlayer::SeekToFrame(int64_t frameNumber)
 {
-     if (!isLoaded || frameNumber < 0 || (totalFrames > 0 && frameNumber >= totalFrames))
+    if (!isLoaded || frameNumber < 0 || (totalFrames > 0 && frameNumber >= totalFrames))
         return;
 
     if (frameNumber == currentFrame)
         return;
 
+    dropAudioDuringStepping = true;
+
     // Optimize stepping forward one frame by decoding without seeking
     if (frameNumber == currentFrame + 1)
     {
         m_decoder->DecodeNextFrame(true);
+        dropAudioDuringStepping = false;
         return;
     }
 
@@ -277,12 +280,24 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
     SeekToTime(seconds, 0);
 
-    // Decode frames until the requested frame is reached
+    // If the seek landed on the target frame, decode once to display it
+    if (currentFrame >= frameNumber)
+    {
+        m_decoder->DecodeNextFrame(true, false);
+        currentFrame--;
+        dropAudioDuringStepping = false;
+        return;
+    }
+
+    // Decode frames until the requested frame is reached without displaying intermediate ones
     while (currentFrame < frameNumber)
     {
-        if (!m_decoder->DecodeNextFrame(true))
+        bool last = (currentFrame + 1 >= frameNumber);
+        if (!m_decoder->DecodeNextFrame(last, false))
             break;
     }
+
+    dropAudioDuringStepping = false;
 }
 
 void VideoPlayer::SeekToTime(double seconds, int decodeCount)
@@ -536,7 +551,7 @@ void VideoPlayer::PlaybackThreadFunction()
     double startPts = masterStartPts;
     while (playbackThreadRunning)
     {
-        if (!m_decoder->DecodeNextFrame(false))
+        if (!m_decoder->DecodeNextFrame(false, true))
             break;
 
         double target = currentPts - startPts;

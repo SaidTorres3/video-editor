@@ -122,7 +122,7 @@ void VideoDecoder::Cleanup() {
     m_player->useHwAccel = false;
 }
 
-bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
+bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
     if (!m_player->isLoaded)
         return false;
 
@@ -186,12 +186,13 @@ bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
 
                 lock.unlock();
 
-                if (updateDisplay)
+                if (presentFrame)
                     m_player->m_renderer->UpdateDisplay();
-                else
+                else if (scheduleDisplay)
                     InvalidateRect(m_player->videoWindow, nullptr, FALSE);
 
-                UpdateTimeline();
+                if (presentFrame || scheduleDisplay)
+                    UpdateTimeline();
 
                 return true;
             }
