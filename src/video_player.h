@@ -172,6 +172,7 @@ private:
     };
     std::deque<CachedFrame> frameCache;
     size_t frameCacheLimit;
+    size_t backwardPrefetch;
 
 public:
     VideoPlayer(HWND parent);

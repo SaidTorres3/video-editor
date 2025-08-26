@@ -33,7 +33,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
     audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
-      dropAudioDuringStepping(false), frameCacheLimit(240)
+      dropAudioDuringStepping(false), frameCacheLimit(120), backwardPrefetch(30)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -294,12 +294,11 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 
     if (frameNumber < currentFrame)
     {
-        // Prefetch a block of earlier frames so repeated rewinds stay smooth
-        int64_t startFrame = std::max<int64_t>(0, frameNumber - (int64_t)frameCacheLimit + 1);
+        // Decode only a small block before the target to avoid long stalls
+        int64_t startFrame = std::max<int64_t>(0, frameNumber - (int64_t)backwardPrefetch);
         double startSeconds = frameRate > 0 ? (startFrame / frameRate) : 0.0;
         SeekToTime(startSeconds, 0);
 
-        // Decode forward until the requested frame is reached, presenting only the last frame
         while (currentFrame < frameNumber)
         {
             bool last = (currentFrame + 1 >= frameNumber);
