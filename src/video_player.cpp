@@ -316,10 +316,11 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
         }
 
         // Estimate the frame and PTS we landed on using the stream index
-        int idx = av_index_search_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
-        if (idx >= 0 && vs->index_entries)
+        const AVIndexEntry *entry =
+            avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
+        if (entry)
         {
-            int64_t keyTs = vs->index_entries[idx].timestamp;
+            int64_t keyTs = entry->timestamp;
             double keyTime = keyTs * av_q2d(vs->time_base) - startTimeOffset;
             currentPts = keyTime;
             currentFrame = (int64_t)(currentPts * frameRate);
