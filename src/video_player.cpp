@@ -272,7 +272,29 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         return;
     }
 
-    // For all other cases (stepping backward or jumping), seek based on time
+    // If stepping backward one frame, base the seek on the current timestamp
+    if (frameNumber == currentFrame - 1)
+    {
+        double seconds = currentPts - (frameRate > 0 ? (1.0 / frameRate) : 0.0);
+        if (seconds < 0.0)
+            seconds = 0.0;
+        SeekToTime(seconds, 0);
+        currentFrame--;
+        while (currentFrame < frameNumber)
+        {
+            bool showFrame = (currentFrame + 1 == frameNumber);
+            if (!m_decoder->DecodeNextFrame(showFrame))
+                break;
+        }
+        {
+            std::lock_guard<std::mutex> lock(audioMutex);
+            for (auto& tr : audioTracks)
+                tr->buffer.clear();
+        }
+        return;
+    }
+
+    // For all other cases (jumping), seek based on frame number
     double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
     SeekToTime(seconds, 0);
 
