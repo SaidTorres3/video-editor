@@ -33,7 +33,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
     audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
-      dropAudioDuringStepping(false), frameCacheLimit(240), backwardPrefetch(5)
+      dropAudioDuringStepping(false), frameCacheLimit(240)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -292,34 +292,15 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         return;
     }
 
-    if (frameNumber < currentFrame)
-    {
-        // Decode only a small block before the target to avoid long stalls
-        int64_t startFrame = std::max<int64_t>(0, frameNumber - (int64_t)backwardPrefetch);
-        double startSeconds = frameRate > 0 ? (startFrame / frameRate) : 0.0;
-        SeekToTime(startSeconds, 0);
-        currentFrame = startFrame;
-        currentPts = startSeconds;
+    // Seek directly to the requested frame time so no extra frames are decoded
+    double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
+    SeekToTime(seconds, 0);
 
-        while (currentFrame < frameNumber)
-        {
-            bool last = (currentFrame + 1 >= frameNumber);
-            if (!m_decoder->DecodeNextFrame(last, false))
-                break;
-        }
-    }
-    else
+    while (currentFrame < frameNumber)
     {
-        // Seek directly to the requested frame time so no extra frames are decoded
-        double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
-        SeekToTime(seconds, 0);
-
-        while (currentFrame < frameNumber)
-        {
-            bool last = (currentFrame + 1 >= frameNumber);
-            if (!m_decoder->DecodeNextFrame(last, false))
-                break;
-        }
+        bool last = (currentFrame + 1 >= frameNumber);
+        if (!m_decoder->DecodeNextFrame(last, false))
+            break;
     }
 
     dropAudioDuringStepping = false;
