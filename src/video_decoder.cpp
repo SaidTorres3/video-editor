@@ -187,13 +187,8 @@ bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
                 if (updateDisplay)
                 {
                     m_player->m_renderer->UpdateDisplay();
+                    UpdateTimeline();
                 }
-                else
-                {
-                    InvalidateRect(m_player->videoWindow, nullptr, FALSE);
-                }
-
-                UpdateTimeline();
 
                 return true;
             }
