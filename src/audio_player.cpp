@@ -410,6 +410,10 @@ void AudioPlayer::SetMasterVolume(float volume) {
     }
 }
 
+void AudioPlayer::ResetPlaybackPosition() {
+    m_framesWritten = 0;
+}
+
 void AudioPlayer::AudioThreadFunction() {
     // Each thread interacting with WASAPI must initialize COM separately
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)))

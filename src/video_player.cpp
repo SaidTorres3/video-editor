@@ -309,13 +309,16 @@ void VideoPlayer::ChangePlaybackSpeed(double delta)
         else
             codecContext->skip_frame = AVDISCARD_DEFAULT;
     }
-    bool mute = playbackSpeed > 4.0;
+
+    bool mute = (playbackSpeed > 3.0) || (playbackSpeed < 0.5);
     for (auto &track : audioTracks)
         track->isMuted = mute;
+
     auto now = std::chrono::high_resolution_clock::now();
-    double elapsed = pos - masterStartPts;
-    masterStartTime = now - std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
-                                std::chrono::duration<double>(elapsed / playbackSpeed));
+    masterStartPts = currentPts = pos;
+    masterStartTime = now;
+    if (m_audioPlayer)
+        m_audioPlayer->ResetPlaybackPosition();
     std::wstringstream ss;
     ss << std::fixed << std::setprecision(1) << playbackSpeed << L"x";
     speedText = ss.str();
