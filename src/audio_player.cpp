@@ -258,6 +258,8 @@ void AudioPlayer::StopThread() {
     if (m_player->audioThreadRunning)
     {
         m_player->audioThreadRunning = false;
+        if (m_player->audioClient)
+            m_player->audioClient->Stop();
         m_player->audioCondition.notify_all();
         if (m_player->audioThread.joinable())
             m_player->audioThread.join();

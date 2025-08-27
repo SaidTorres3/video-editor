@@ -294,6 +294,7 @@ void VideoPlayer::CancelClipPreview()
 
 void VideoPlayer::ChangePlaybackSpeed(double delta)
 {
+    double pos = GetCurrentTime();
     playbackSpeed += delta;
     if (playbackSpeed < 0.1)
         playbackSpeed = 0.1;
@@ -311,8 +312,9 @@ void VideoPlayer::ChangePlaybackSpeed(double delta)
     bool mute = playbackSpeed > 4.0;
     for (auto &track : audioTracks)
         track->isMuted = mute;
-    masterStartPts = currentPts;
-    masterStartTime = std::chrono::high_resolution_clock::now();
+    auto now = std::chrono::high_resolution_clock::now();
+    double elapsed = pos - masterStartPts;
+    masterStartTime = now - std::chrono::duration<double>(elapsed / playbackSpeed);
     std::wstringstream ss;
     ss << std::fixed << std::setprecision(1) << playbackSpeed << L"x";
     speedText = ss.str();
