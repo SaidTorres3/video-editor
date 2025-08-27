@@ -297,6 +297,8 @@ void VideoPlayer::ChangePlaybackSpeed(double delta)
     playbackSpeed += delta;
     if (playbackSpeed < 0.1)
         playbackSpeed = 0.1;
+    if (playbackSpeed > 10.0)
+        playbackSpeed = 10.0;
     masterStartPts = currentPts;
     masterStartTime = std::chrono::high_resolution_clock::now();
     std::wstringstream ss;
@@ -544,6 +546,17 @@ double VideoPlayer::GetDuration() const
 
 double VideoPlayer::GetCurrentTime() const
 {
+    if (isPlaying)
+    {
+        double elapsed = std::chrono::duration<double>(
+            std::chrono::high_resolution_clock::now() - masterStartTime).count();
+        double t = masterStartPts + elapsed * playbackSpeed;
+        if (clipPreviewActive && t > clipPreviewEndTime)
+            t = clipPreviewEndTime;
+        if (duration > 0.0 && t > duration)
+            t = duration;
+        return t;
+    }
     return currentPts;
 }
 
