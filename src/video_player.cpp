@@ -267,6 +267,9 @@ void VideoPlayer::PlayClip(double startTime, double endTime)
 {
     if (!isLoaded)
         return;
+    if (isPlaying)
+        Pause();
+
     clipPreviewEndTime = endTime;
     clipPreviewActive = true;
     SeekToTime(startTime);
