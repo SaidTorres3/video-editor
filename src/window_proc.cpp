@@ -24,6 +24,8 @@ void OnSetStartClicked(HWND hwnd);
 void OnSetEndClicked(HWND hwnd);
 void OnCutClicked(HWND hwnd);
 void OnExportClicked(HWND hwnd);
+void OnPlayClipClicked(HWND hwnd);
+void OnPlayEndClipClicked(HWND hwnd);
 void OnAudioTrackSelectionChanged();
 void UpdateAudioTrackList();
 double ParseTimeString(const std::wstring& str);
@@ -108,6 +110,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case 1012: // ID_BUTTON_SET_END
             OnSetEndClicked(hwnd);
+            break;
+        case 1027: // ID_BUTTON_PLAY_CLIP
+            OnPlayClipClicked(hwnd);
+            break;
+        case 1028: // ID_BUTTON_PLAY_END_CLIP
+            OnPlayEndClipClicked(hwnd);
             break;
         case 1013: // ID_BUTTON_CUT
             if (g_cutStartTime < 0 && g_cutEndTime < 0)

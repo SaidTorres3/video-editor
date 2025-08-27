@@ -55,6 +55,35 @@ void OnSetEndClicked(HWND hwnd)
     UpdateCutTimeEdits();
 }
 
+void OnPlayClipClicked(HWND hwnd)
+{
+    if (!g_videoPlayer || g_cutStartTime < 0 || g_cutEndTime <= g_cutStartTime)
+    {
+        MessageBoxW(hwnd, L"Please set valid start and end points for the clip.", L"Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+    g_videoPlayer->PlayClip(g_cutStartTime, g_cutEndTime);
+    UpdateControls();
+}
+
+void OnPlayEndClipClicked(HWND hwnd)
+{
+    if (!g_videoPlayer || g_cutStartTime < 0 || g_cutEndTime <= g_cutStartTime)
+    {
+        MessageBoxW(hwnd, L"Please set valid start and end points for the clip.", L"Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    double previewStart = g_cutEndTime - 3.0;
+    if (previewStart < g_cutStartTime)
+        previewStart = g_cutStartTime;
+    if (previewStart < 0)
+        previewStart = 0;
+
+    g_videoPlayer->PlayClip(previewStart, g_cutEndTime);
+    UpdateControls();
+}
+
 void OnCutClicked(HWND hwnd)
 {
     g_lastOperationWasExport = false;

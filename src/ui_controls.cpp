@@ -32,6 +32,8 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_RADIO_USE_BITRATE 1024
 #define ID_RADIO_USE_SIZE 1025
 #define ID_CONTEXT_VOICE_ISOLATION 1026
+#define ID_BUTTON_PLAY_CLIP 1027
+#define ID_BUTTON_PLAY_END 1028
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -45,7 +47,7 @@ extern HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAu
 extern HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize;
 extern HWND g_hRadioUseBitrate, g_hRadioUseSize;
 extern HWND g_hLabelBitrate, g_hLabelTargetSize;
-extern HWND g_hEditStartTime, g_hEditEndTime;
+extern HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd;
 extern HWND g_hLabelCutInfo;
 extern HWND g_hButtonOptions;
 
@@ -223,6 +225,22 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hEditEndTime);
 
+    g_hButtonPlayClip = CreateWindow(
+        L"BUTTON", L"\x25B6",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        550, 405, 30, 20,
+        hwnd, (HMENU)ID_BUTTON_PLAY_CLIP,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonPlayClip);
+
+    g_hButtonPlayEnd = CreateWindow(
+        L"BUTTON", L"\x25B6",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        585, 405, 30, 20,
+        hwnd, (HMENU)ID_BUTTON_PLAY_END,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonPlayEnd);
+
     g_hLabelCutInfo = CreateWindow(
         L"STATIC", L"Cut points not set.",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
@@ -328,6 +346,8 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hButtonSetEnd, FALSE);
     EnableWindow(g_hEditStartTime, FALSE);
     EnableWindow(g_hEditEndTime, FALSE);
+    EnableWindow(g_hButtonPlayClip, FALSE);
+    EnableWindow(g_hButtonPlayEnd, FALSE);
     EnableWindow(g_hButtonCut, FALSE);
     EnableWindow(g_hCheckboxMergeAudio, FALSE);
     EnableWindow(g_hRadioCopyCodec, FALSE);
@@ -364,7 +384,7 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonOptions, optionsX, mainControlsY, optionsWidth, mainControlsHeight, TRUE);
 
     // Audio controls (aligned to the right)
-    int audioControlsWidth = 220;
+    int audioControlsWidth = 250;
     int audioControlsX = clientRect.right - audioControlsWidth - 10;
     int audioControlsY = 50;
 
@@ -385,6 +405,8 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonSetEnd, audioControlsX + 105, editingControlsY + 25, 95, 25, TRUE);
     MoveWindow(g_hEditStartTime, audioControlsX, editingControlsY + 55, 95, 20, TRUE);
     MoveWindow(g_hEditEndTime, audioControlsX + 105, editingControlsY + 55, 95, 20, TRUE);
+    MoveWindow(g_hButtonPlayClip, audioControlsX + 200, editingControlsY + 55, 20, 20, TRUE);
+    MoveWindow(g_hButtonPlayEnd, audioControlsX + 225, editingControlsY + 55, 20, 20, TRUE);
     MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 80, 200, 40, TRUE);
     MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 125, 200, 30, TRUE);
     MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 160, 200, 25, TRUE);
