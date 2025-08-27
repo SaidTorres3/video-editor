@@ -89,6 +89,43 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
 
         UpdateControls();
         UpdateTimeline();
+
+        // Set bitrate field to the video's average bitrate
+        if (g_hEditBitrate && g_videoPlayer && g_videoPlayer->formatContext)
+        {
+            int videoKbps = 0;
+            int64_t containerBitRate = g_videoPlayer->formatContext->bit_rate;
+            if (containerBitRate <= 0 && g_videoPlayer->duration > 0)
+            {
+                try
+                {
+                    auto fileSize = std::filesystem::file_size(filename);
+                    containerBitRate = static_cast<int64_t>((fileSize * 8) / g_videoPlayer->duration);
+                }
+                catch (...)
+                {
+                    containerBitRate = 0;
+                }
+            }
+
+            if (containerBitRate > 0)
+            {
+                int64_t audioBitrate = 0;
+                for (const auto& track : g_videoPlayer->audioTracks)
+                {
+                    AVStream* stream = g_videoPlayer->formatContext->streams[track->streamIndex];
+                    int br = stream->codecpar->bit_rate > 0 ? stream->codecpar->bit_rate : 128000;
+                    audioBitrate += br;
+                }
+                int64_t videoBitrate = containerBitRate - audioBitrate;
+                if (videoBitrate <= 0)
+                    videoBitrate = containerBitRate;
+                videoKbps = static_cast<int>(videoBitrate / 1000);
+            }
+
+            SetWindowTextW(g_hEditBitrate, std::to_wstring(videoKbps).c_str());
+        }
+
         if (g_autoPlay)
         {
             g_videoPlayer->Play();
