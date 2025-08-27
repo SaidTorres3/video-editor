@@ -302,11 +302,11 @@ void VideoPlayer::ChangePlaybackSpeed(double delta)
     if (codecContext)
     {
         if (playbackSpeed >= 4.0)
-            codecContext->skip_frame = AVDISCARD_NONKEY;
+            codecContext->skip_frame = AVDISCARD_NONREF;
         else if (playbackSpeed >= 2.0)
             codecContext->skip_frame = AVDISCARD_BIDIR;
         else
-            codecContext->skip_frame = AVDISCARD_NONREF;
+            codecContext->skip_frame = AVDISCARD_DEFAULT;
     }
     bool mute = playbackSpeed > 4.0;
     for (auto &track : audioTracks)
@@ -558,7 +558,17 @@ double VideoPlayer::GetDuration() const
 
 double VideoPlayer::GetCurrentTime() const
 {
-    double t = currentPts;
+    double t;
+    if (isPlaying)
+    {
+        auto now = std::chrono::high_resolution_clock::now();
+        double elapsed = std::chrono::duration<double>(now - masterStartTime).count();
+        t = masterStartPts + elapsed * playbackSpeed;
+    }
+    else
+    {
+        t = currentPts;
+    }
     if (clipPreviewActive && t > clipPreviewEndTime)
         t = clipPreviewEndTime;
     if (duration > 0.0 && t > duration)
