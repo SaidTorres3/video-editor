@@ -787,11 +787,12 @@ void VideoPlayer::PlaybackThreadFunction()
 
         double frameDur = frameRate > 0.0 ? 1.0 / frameRate : 0.0;
         int catchup = 0;
+        int maxCatchup = static_cast<int>(std::max(8.0, playbackSpeed * 8.0));
         while (playbackThreadRunning)
         {
             double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - masterStartTime).count();
             double expected = masterStartPts + elapsed * playbackSpeed;
-            if (currentPts + frameDur >= expected || catchup >= 8)
+            if (currentPts + frameDur >= expected || catchup >= maxCatchup)
                 break;
             if (!m_decoder->DecodeNextFrame(false, false))
             {
