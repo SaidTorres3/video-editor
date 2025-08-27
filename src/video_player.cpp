@@ -33,7 +33,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
     audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
-      dropAudioDuringStepping(false), frameCacheLimit(480)
+      dropAudioDuringStepping(false), frameCacheLimit(50)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
