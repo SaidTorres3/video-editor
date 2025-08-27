@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+#include <sstream>
+#include <iomanip>
 
 void UpdateControls();
 
@@ -34,7 +36,8 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
     audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
-      dropAudioDuringStepping(false), frameCacheLimit(50)
+      dropAudioDuringStepping(false), frameCacheLimit(50),
+      playbackSpeed(1.0), speedTextUntil(std::chrono::steady_clock::time_point::min())
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -286,6 +289,42 @@ void VideoPlayer::CancelClipPreview()
             Pause();
             UpdateControls();
         }
+    }
+}
+
+void VideoPlayer::ChangePlaybackSpeed(double delta)
+{
+    playbackSpeed += delta;
+    if (playbackSpeed < 0.1)
+        playbackSpeed = 0.1;
+    masterStartPts = currentPts;
+    masterStartTime = std::chrono::high_resolution_clock::now();
+    std::wstringstream ss;
+    ss << std::fixed << std::setprecision(1) << playbackSpeed << L"x";
+    speedText = ss.str();
+    speedTextUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    if (m_renderer)
+        m_renderer->UpdateDisplay();
+    audioCondition.notify_all();
+}
+
+bool VideoPlayer::IsSpeedTextVisible() const
+{
+    return !speedText.empty() && std::chrono::steady_clock::now() < speedTextUntil;
+}
+
+const std::wstring& VideoPlayer::GetSpeedText() const
+{
+    return speedText;
+}
+
+void VideoPlayer::CheckSpeedDisplay()
+{
+    if (!speedText.empty() && std::chrono::steady_clock::now() > speedTextUntil)
+    {
+        speedText.clear();
+        if (!isPlaying && m_renderer)
+            m_renderer->UpdateDisplay();
     }
 }
 
@@ -698,8 +737,6 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
-    auto startTime = masterStartTime;
-    double startPts = masterStartPts;
     while (playbackThreadRunning)
     {
         if (!m_decoder->DecodeNextFrame(false, true))
@@ -713,8 +750,8 @@ void VideoPlayer::PlaybackThreadFunction()
             break;
         }
 
-        double target = currentPts - startPts;
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
+        double target = (currentPts - masterStartPts) / playbackSpeed;
+        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - masterStartTime).count();
         double delay = target - elapsed;
         if (delay > 0)
             std::this_thread::sleep_for(std::chrono::duration<double>(delay));

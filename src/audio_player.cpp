@@ -419,8 +419,6 @@ void AudioPlayer::AudioThreadFunction() {
     }
 
     HRESULT hr;
-    auto startTime = m_player->masterStartTime;
-    double startPts = m_player->masterStartPts;
 
     while (m_player->audioThreadRunning)
     {
@@ -435,8 +433,8 @@ void AudioPlayer::AudioThreadFunction() {
         if (FAILED(hr))
             continue;
 
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
-        double masterPts = startPts + elapsed;
+        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - m_player->masterStartTime).count();
+        double masterPts = m_player->masterStartPts + elapsed * m_player->playbackSpeed;
         UINT64 played = m_framesWritten > padding ? m_framesWritten - padding : 0;
         double playedPts = played / static_cast<double>(m_player->audioSampleRate);
 

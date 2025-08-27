@@ -1,6 +1,8 @@
 #pragma once
 
 #include "video_player.h"
+#include <dwrite.h>
+#pragma comment(lib, "dwrite.lib")
 
 class VideoPlayer;
 
@@ -20,4 +22,6 @@ public:
     bool CreateRenderTarget();
 
     VideoPlayer* m_player;
+    IDWriteFactory* m_dwriteFactory;
+    IDWriteTextFormat* m_textFormat;
 };

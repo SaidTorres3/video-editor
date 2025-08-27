@@ -155,6 +155,10 @@ public:
     std::chrono::high_resolution_clock::time_point masterStartTime;
     double masterStartPts;
 
+    double playbackSpeed;
+    std::wstring speedText;
+    std::chrono::steady_clock::time_point speedTextUntil;
+
     // Currently loaded file path
     std::wstring loadedFilename;
 
@@ -186,6 +190,11 @@ public:
     void Stop();
     void PlayClip(double startTime, double endTime);
     void CancelClipPreview();
+    void ChangePlaybackSpeed(double delta);
+    bool IsSpeedTextVisible() const;
+    const std::wstring& GetSpeedText() const;
+    void CheckSpeedDisplay();
+    double GetPlaybackSpeed() const { return playbackSpeed; }
     bool IsClipPreviewActive() const { return clipPreviewActive; }
     bool IsPlaying() const { return isPlaying; }
     bool IsLoaded() const { return isLoaded; }

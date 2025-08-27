@@ -2,15 +2,23 @@
 #include "video_player.h"
 #include "video_decoder.h"
 #include <algorithm>
+#include <string>
 
-VideoRenderer::VideoRenderer(VideoPlayer* player) : m_player(player) {}
+VideoRenderer::VideoRenderer(VideoPlayer* player) : m_player(player), m_dwriteFactory(nullptr), m_textFormat(nullptr) {}
 
 VideoRenderer::~VideoRenderer() {
     Cleanup();
 }
 
 bool VideoRenderer::Initialize() {
-    return SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &m_player->d2dFactory));
+    if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &m_player->d2dFactory)))
+        return false;
+    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&m_dwriteFactory)))
+        return false;
+    if (FAILED(m_dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 24.0f, L"", &m_textFormat)))
+        return false;
+    return true;
 }
 
 void VideoRenderer::Cleanup() {
@@ -28,6 +36,16 @@ void VideoRenderer::Cleanup() {
     {
         m_player->d2dFactory->Release();
         m_player->d2dFactory = nullptr;
+    }
+    if (m_textFormat)
+    {
+        m_textFormat->Release();
+        m_textFormat = nullptr;
+    }
+    if (m_dwriteFactory)
+    {
+        m_dwriteFactory->Release();
+        m_dwriteFactory = nullptr;
     }
 }
 
@@ -101,6 +119,15 @@ void VideoRenderer::UpdateDisplay() {
         ID2D1SolidColorBrush* brush = nullptr;
         m_player->d2dRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Yellow), &brush);
         m_player->d2dRenderTarget->DrawRectangle(sel, brush, 2.0f);
+        if (brush) brush->Release();
+    }
+    if (m_player->IsSpeedTextVisible() && m_textFormat)
+    {
+        ID2D1SolidColorBrush* brush = nullptr;
+        m_player->d2dRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &brush);
+        std::wstring text = m_player->GetSpeedText();
+        D2D1_RECT_F layout = D2D1::RectF(0, 0, size.width, 40);
+        m_player->d2dRenderTarget->DrawTextW(text.c_str(), (UINT32)text.length(), m_textFormat, layout, brush);
         if (brush) brush->Release();
     }
     m_player->d2dRenderTarget->EndDraw();

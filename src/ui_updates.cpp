@@ -9,7 +9,7 @@ std::wstring FormatTime(double totalSeconds, bool showMilliseconds);
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
-extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hStatusText, g_hLabelCutInfo, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize;
+extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hStatusText, g_hLabelCutInfo, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize, g_hButtonSpeedUp, g_hButtonSpeedDown;
 extern double g_cutStartTime, g_cutEndTime;
 
 void UpdateControls()
@@ -23,6 +23,8 @@ void UpdateControls()
     EnableWindow(g_hButtonPlay, isLoaded && !isPlaying);
     EnableWindow(g_hButtonPause, isLoaded && isPlaying);
     EnableWindow(g_hButtonStop, isLoaded);
+    EnableWindow(g_hButtonSpeedUp, isLoaded);
+    EnableWindow(g_hButtonSpeedDown, isLoaded);
     EnableWindow(g_hTimeline, isLoaded);
 
     // Ensure audio controls remain enabled if a video is loaded
