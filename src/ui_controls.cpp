@@ -309,7 +309,7 @@ void CreateControls(HWND hwnd)
     ApplyDarkTheme(g_hLabelBitrate);
 
     g_hEditBitrate = CreateWindow(
-        L"EDIT", L"8000",
+        L"EDIT", L"0",
         WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
         340, 585, 200, 20,
         hwnd, (HMENU)ID_EDIT_BITRATE,
