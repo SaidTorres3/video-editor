@@ -44,7 +44,7 @@ HWND g_hRadioUseBitrate, g_hRadioUseSize;
 HWND g_hLabelBitrate;
 HWND g_hEditTargetSize;
 HWND g_hLabelTargetSize;
-HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip;
+HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd;
 HWND g_hLabelCutInfo;
 HWND g_hButtonOptions;
 double g_cutStartTime = -1.0;
