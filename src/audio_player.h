@@ -18,7 +18,6 @@ public:
     void StopThread();
     void ProcessFrame(AVPacket* packet);
     void SetMasterVolume(float volume);
-    void ResetPlaybackPosition();
 
 private:
     void AudioThreadFunction();

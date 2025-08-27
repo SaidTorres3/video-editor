@@ -14,8 +14,6 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
-#include <sstream>
-#include <iomanip>
 
 void UpdateControls();
 
@@ -35,9 +33,9 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
     audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
+    masterStartTime(), masterStartPts(0.0), playbackSpeed(1.0),
     originalVideoWndProc(nullptr),
-      dropAudioDuringStepping(false), frameCacheLimit(50),
-      playbackSpeed(1.0), speedTextUntil(std::chrono::steady_clock::time_point::min())
+      dropAudioDuringStepping(false), frameCacheLimit(50)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -292,62 +290,6 @@ void VideoPlayer::CancelClipPreview()
     }
 }
 
-void VideoPlayer::ChangePlaybackSpeed(double delta)
-{
-    double pos = GetCurrentTime();
-    playbackSpeed += delta;
-    if (playbackSpeed < 0.1)
-        playbackSpeed = 0.1;
-    if (playbackSpeed > 10.0)
-        playbackSpeed = 10.0;
-    if (codecContext)
-    {
-        if (playbackSpeed >= 8.0)
-            codecContext->skip_frame = AVDISCARD_NONKEY;
-        else if (playbackSpeed >= 2.0)
-            codecContext->skip_frame = AVDISCARD_NONREF;
-        else
-            codecContext->skip_frame = AVDISCARD_DEFAULT;
-    }
-
-    bool mute = (playbackSpeed > 3.0) || (playbackSpeed < 0.5);
-    for (auto &track : audioTracks)
-        track->isMuted = mute;
-
-    auto now = std::chrono::high_resolution_clock::now();
-    masterStartPts = currentPts = pos;
-    masterStartTime = now;
-    if (m_audioPlayer)
-        m_audioPlayer->ResetPlaybackPosition();
-    std::wstringstream ss;
-    ss << std::fixed << std::setprecision(1) << playbackSpeed << L"x";
-    speedText = ss.str();
-    speedTextUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    if (m_renderer)
-        m_renderer->UpdateDisplay();
-    audioCondition.notify_all();
-}
-
-bool VideoPlayer::IsSpeedTextVisible() const
-{
-    return !speedText.empty() && std::chrono::steady_clock::now() < speedTextUntil;
-}
-
-const std::wstring& VideoPlayer::GetSpeedText() const
-{
-    return speedText;
-}
-
-void VideoPlayer::CheckSpeedDisplay()
-{
-    if (!speedText.empty() && std::chrono::steady_clock::now() > speedTextUntil)
-    {
-        speedText.clear();
-        if (!isPlaying && m_renderer)
-            m_renderer->UpdateDisplay();
-    }
-}
-
 void VideoPlayer::SeekToFrame(int64_t frameNumber)
 {
     if (!isLoaded || frameNumber < 0 || (totalFrames > 0 && frameNumber >= totalFrames))
@@ -564,22 +506,7 @@ double VideoPlayer::GetDuration() const
 
 double VideoPlayer::GetCurrentTime() const
 {
-    double t;
-    if (isPlaying)
-    {
-        auto now = std::chrono::high_resolution_clock::now();
-        double elapsed = std::chrono::duration<double>(now - masterStartTime).count();
-        t = masterStartPts + elapsed * playbackSpeed;
-    }
-    else
-    {
-        t = currentPts;
-    }
-    if (clipPreviewActive && t > clipPreviewEndTime)
-        t = clipPreviewEndTime;
-    if (duration > 0.0 && t > duration)
-        t = duration;
-    return t;
+    return currentPts;
 }
 
 void VideoPlayer::SetPosition(int x, int y, int width, int height)
@@ -653,6 +580,13 @@ void VideoPlayer::SetAudioTrackVolume(int trackIndex, float volume)
 void VideoPlayer::SetMasterVolume(float volume)
 {
     m_audioPlayer->SetMasterVolume(volume);
+}
+
+void VideoPlayer::SetPlaybackSpeed(double speed)
+{
+    playbackSpeed = std::clamp(speed, 0.1, 10.0);
+    masterStartPts = currentPts;
+    masterStartTime = std::chrono::high_resolution_clock::now();
 }
 
 bool VideoPlayer::IsVoiceIsolationEnabled(int trackIndex) const
@@ -772,6 +706,8 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
 
 void VideoPlayer::PlaybackThreadFunction()
 {
+    auto startTime = masterStartTime;
+    double startPts = masterStartPts;
     while (playbackThreadRunning)
     {
         if (!m_decoder->DecodeNextFrame(false, true))
@@ -785,26 +721,8 @@ void VideoPlayer::PlaybackThreadFunction()
             break;
         }
 
-        double frameDur = frameRate > 0.0 ? 1.0 / frameRate : 0.0;
-        int catchup = 0;
-        int maxCatchup = static_cast<int>(std::max(8.0, playbackSpeed * 8.0));
-        while (playbackThreadRunning)
-        {
-            double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - masterStartTime).count();
-            double expected = masterStartPts + elapsed * playbackSpeed;
-            if (currentPts + frameDur >= expected || catchup >= maxCatchup)
-                break;
-            if (!m_decoder->DecodeNextFrame(false, false))
-            {
-                playbackThreadRunning = false;
-                break;
-            }
-            UpdateTimeline();
-            ++catchup;
-        }
-
-        double target = (currentPts - masterStartPts) / playbackSpeed;
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - masterStartTime).count();
+        double target = currentPts - startPts;
+        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
         double delay = target - elapsed;
         if (delay > 0)
             std::this_thread::sleep_for(std::chrono::duration<double>(delay));

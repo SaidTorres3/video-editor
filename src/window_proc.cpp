@@ -32,10 +32,6 @@ double ParseTimeString(const std::wstring& str);
 void UpdateCutInfoLabel(HWND hwnd);
 void UpdateCutTimeEdits();
 
-// Speed control button IDs
-#define ID_BUTTON_SPEED_DOWN 1029
-#define ID_BUTTON_SPEED_UP 1030
-
 
 extern VideoPlayer *g_videoPlayer;
 extern HWND g_hEditStartTime, g_hEditEndTime, g_hListBoxAudioTracks, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize;
@@ -101,18 +97,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 g_videoPlayer->Stop();
                 UpdateControls();
                 UpdateTimeline();
-            }
-            break;
-        case ID_BUTTON_SPEED_UP:
-            if (g_videoPlayer)
-            {
-                g_videoPlayer->ChangePlaybackSpeed(0.1);
-            }
-            break;
-        case ID_BUTTON_SPEED_DOWN:
-            if (g_videoPlayer)
-            {
-                g_videoPlayer->ChangePlaybackSpeed(-0.1);
             }
             break;
         case 1020: // ID_BUTTON_OPTIONS
@@ -296,8 +280,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             UpdateTimeline();
             UpdateControls();
-            if (g_videoPlayer)
-                g_videoPlayer->CheckSpeedDisplay();
         }
         break;
 

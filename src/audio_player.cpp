@@ -2,7 +2,6 @@
 #include "video_player.h"
 #include <chrono>
 #include <limits>
-#include <algorithm>
 
 AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player), m_framesWritten(0) {}
 
@@ -259,8 +258,6 @@ void AudioPlayer::StopThread() {
     if (m_player->audioThreadRunning)
     {
         m_player->audioThreadRunning = false;
-        if (m_player->audioClient)
-            m_player->audioClient->Stop();
         m_player->audioCondition.notify_all();
         if (m_player->audioThread.joinable())
             m_player->audioThread.join();
@@ -411,14 +408,6 @@ void AudioPlayer::SetMasterVolume(float volume) {
     }
 }
 
-void AudioPlayer::ResetPlaybackPosition() {
-    m_framesWritten = 0;
-    for (auto &track : m_player->audioTracks)
-    {
-        track->playbackPos = 0.0;
-    }
-}
-
 void AudioPlayer::AudioThreadFunction() {
     // Each thread interacting with WASAPI must initialize COM separately
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)))
@@ -430,6 +419,8 @@ void AudioPlayer::AudioThreadFunction() {
     }
 
     HRESULT hr;
+    auto startTime = m_player->masterStartTime;
+    double startPts = m_player->masterStartPts;
 
     while (m_player->audioThreadRunning)
     {
@@ -444,8 +435,8 @@ void AudioPlayer::AudioThreadFunction() {
         if (FAILED(hr))
             continue;
 
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - m_player->masterStartTime).count();
-        double masterPts = m_player->masterStartPts + elapsed * m_player->playbackSpeed;
+        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
+        double masterPts = startPts + elapsed * m_player->playbackSpeed;
         UINT64 played = m_framesWritten > padding ? m_framesWritten - padding : 0;
         double playedPts = played / static_cast<double>(m_player->audioSampleRate);
 
@@ -482,7 +473,8 @@ void AudioPlayer::AudioThreadFunction() {
         if (FAILED(hr))
             continue;
 
-        double outputPts = m_player->masterStartPts + (double)m_framesWritten / m_player->audioSampleRate;
+        double outputPts = m_player->masterStartPts +
+                            (double)m_framesWritten / m_player->audioSampleRate * m_player->playbackSpeed;
         MixAudioTracks(pData, framesNeeded, outputPts);
 
         hr = m_player->renderClient->ReleaseBuffer(framesNeeded, 0);
@@ -499,62 +491,49 @@ void AudioPlayer::AudioThreadFunction() {
 
 void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double startPts) {
     memset(outputBuffer, 0, frameCount * m_player->audioChannels * sizeof(int16_t));
-    int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
-
-    // Align buffers to the desired starting PTS at the current speed
     double speed = m_player->playbackSpeed;
-    for (auto &track : m_player->audioTracks)
+    if (speed < 0.5 || speed > 3.0)
     {
-        if (track->isMuted)
-            continue;
-        double desiredPts = startPts * speed;
-        if (desiredPts > track->bufferPts)
+        for (auto& track : m_player->audioTracks)
         {
-            size_t drop = static_cast<size_t>((desiredPts - track->bufferPts) * m_player->audioSampleRate);
-            drop = std::min(drop, track->buffer.size() / m_player->audioChannels);
-            for (size_t i = 0; i < drop * m_player->audioChannels; ++i)
-                track->buffer.pop_front();
-            track->bufferPts += drop / static_cast<double>(m_player->audioSampleRate);
-            if (track->playbackPos > static_cast<double>(drop))
-                track->playbackPos -= drop;
-            else
-                track->playbackPos = 0.0;
+            track->buffer.clear();
+            track->bufferPts = 0.0;
         }
+        return;
     }
+
+    int16_t *out = reinterpret_cast<int16_t*>(outputBuffer);
 
     for (int frame = 0; frame < frameCount; ++frame)
     {
+        double samplePts = startPts +
+                            frame / static_cast<double>(m_player->audioSampleRate) * speed;
         std::vector<int32_t> mix(m_player->audioChannels, 0);
         for (auto& track : m_player->audioTracks)
         {
             if (track->isMuted)
                 continue;
 
-            if (track->buffer.size() < static_cast<size_t>(m_player->audioChannels))
-                continue;
-
-            size_t index = static_cast<size_t>(track->playbackPos);
-            if ((index + 1) * m_player->audioChannels > track->buffer.size())
-                continue;
-
-            for (int ch = 0; ch < m_player->audioChannels; ++ch)
+            // Drop samples that are earlier than the desired timestamp
+            while (!track->buffer.empty() &&
+                   track->bufferPts + 1.0 / m_player->audioSampleRate <= samplePts)
             {
-                int16_t val = track->buffer[index * m_player->audioChannels + ch];
-                mix[ch] += static_cast<int32_t>(val * track->volume);
+                for (int ch = 0; ch < m_player->audioChannels && !track->buffer.empty(); ++ch)
+                    track->buffer.pop_front();
+                track->bufferPts += 1.0 / m_player->audioSampleRate;
             }
 
-            track->playbackPos += speed;
-            size_t consumed = static_cast<size_t>(track->playbackPos);
-            if (consumed > 0)
+            if (track->buffer.size() >= static_cast<size_t>(m_player->audioChannels))
             {
-                size_t eraseCount = std::min(consumed, track->buffer.size() / m_player->audioChannels);
-                for (size_t i = 0; i < eraseCount * m_player->audioChannels; ++i)
+                for (int ch = 0; ch < m_player->audioChannels; ++ch)
+                {
+                    int16_t val = track->buffer.front();
                     track->buffer.pop_front();
-                track->bufferPts += eraseCount / static_cast<double>(m_player->audioSampleRate);
-                track->playbackPos -= eraseCount;
+                    mix[ch] += static_cast<int32_t>(val * track->volume);
+                }
+                track->bufferPts += 1.0 / m_player->audioSampleRate;
             }
         }
-
         for (int ch = 0; ch < m_player->audioChannels; ++ch)
         {
             int32_t v = mix[ch];
@@ -581,7 +560,7 @@ int AudioPlayer::GetAvailableFrameCount() const {
     {
         if (track->isMuted)
             continue;
-        int frames = static_cast<int>(track->buffer.size() / m_player->audioChannels / m_player->playbackSpeed);
+        int frames = static_cast<int>(track->buffer.size() / m_player->audioChannels);
         if (frames < minFrames)
             minFrames = frames;
         hasTrack = true;

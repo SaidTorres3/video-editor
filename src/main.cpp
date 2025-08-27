@@ -33,7 +33,6 @@
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
-HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
 HWND g_hTimeline;
 HWND g_hStatusText;
 HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
@@ -213,20 +212,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     break;
                 }
                 case 'K':
-                    // The virtual-key code for both upper and lower case "K" is the same,
-                    // so a single case handles toggling playback with the K key.
+                case 'k':
                     if (g_videoPlayer->IsPlaying())
                         g_videoPlayer->Pause();
                     else
                         g_videoPlayer->Play();
-                    break;
-                case VK_OEM_PLUS:
-                case VK_ADD:
-                    g_videoPlayer->ChangePlaybackSpeed(0.1);
-                    break;
-                case VK_OEM_MINUS:
-                case VK_SUBTRACT:
-                    g_videoPlayer->ChangePlaybackSpeed(-0.1);
                     break;
                 case VK_OEM_COMMA:
                 {

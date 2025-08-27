@@ -56,7 +56,6 @@ struct AudioTrack {
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
     double bufferPts;
-    double playbackPos;
     
     // Voice isolation support
     bool voiceIsolationEnabled;
@@ -70,7 +69,7 @@ struct AudioTrack {
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
                    frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0),
-                   playbackPos(0.0), voiceIsolationEnabled(false), denoiseState(nullptr),
+                   voiceIsolationEnabled(false), denoiseState(nullptr), 
                    voiceIsolationSwrContext(nullptr), voiceIsolationBackSwrContext(nullptr) {}
 };
 
@@ -155,10 +154,7 @@ public:
     // Shared master clock for A/V synchronization
     std::chrono::high_resolution_clock::time_point masterStartTime;
     double masterStartPts;
-
     double playbackSpeed;
-    std::wstring speedText;
-    std::chrono::steady_clock::time_point speedTextUntil;
 
     // Currently loaded file path
     std::wstring loadedFilename;
@@ -191,11 +187,6 @@ public:
     void Stop();
     void PlayClip(double startTime, double endTime);
     void CancelClipPreview();
-    void ChangePlaybackSpeed(double delta);
-    bool IsSpeedTextVisible() const;
-    const std::wstring& GetSpeedText() const;
-    void CheckSpeedDisplay();
-    double GetPlaybackSpeed() const { return playbackSpeed; }
     bool IsClipPreviewActive() const { return clipPreviewActive; }
     bool IsPlaying() const { return isPlaying; }
     bool IsLoaded() const { return isLoaded; }
@@ -207,6 +198,9 @@ public:
     double GetCurrentTime() const;
     int64_t GetCurrentFrame() const { return currentFrame; }
     int64_t GetTotalFrames() const { return totalFrames; }
+
+    double GetPlaybackSpeed() const { return playbackSpeed; }
+    void SetPlaybackSpeed(double speed);
 
     void SetPosition(int x, int y, int width, int height);
     void Render();
