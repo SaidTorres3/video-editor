@@ -3,6 +3,7 @@
 #include "audio_player.h"
 #include "video_renderer.h"
 #include "ui_updates.h"
+#include <algorithm> // For std::lower_bound
 
 VideoDecoder::VideoDecoder(VideoPlayer* player) : m_player(player) {}
 
@@ -83,6 +84,7 @@ bool VideoDecoder::Initialize() {
     }
 
     int numBytes = av_image_get_buffer_size(AV_PIX_FMT_BGRA, m_player->frameWidth, m_player->frameHeight, 32);
+    m_player->rgbBufferSize = numBytes;
     m_player->buffer = (uint8_t *)av_malloc(numBytes);
     av_image_fill_arrays(m_player->frameRGB->data, m_player->frameRGB->linesize, m_player->buffer,
                          AV_PIX_FMT_BGRA, m_player->frameWidth, m_player->frameHeight, 32);
@@ -107,6 +109,7 @@ void VideoDecoder::Cleanup() {
         sws_freeContext(m_player->swsContext), m_player->swsContext = nullptr;
     if (m_player->buffer)
         av_free(m_player->buffer), m_player->buffer = nullptr;
+    m_player->rgbBufferSize = 0;
     if (m_player->packet)
         av_packet_free(&m_player->packet), m_player->packet = nullptr;
     if (m_player->frameRGB)
@@ -122,7 +125,7 @@ void VideoDecoder::Cleanup() {
     m_player->useHwAccel = false;
 }
 
-bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
+bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
     if (!m_player->isLoaded)
         return false;
 
@@ -178,22 +181,58 @@ bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
                     0, m_player->frameHeight,
                     m_player->frameRGB->data, m_player->frameRGB->linesize);
 
+                // Cache frame for responsive backward stepping
+                if (m_player->frameCache.size() >= m_player->frameCacheLimit)
+                {
+                    // Smart cache management: remove frames with larger gaps between them
+                    // This helps keep more keyframes and evenly spaced frames in the cache
+                    if (m_player->frameCache.size() >= 2)
+                    {
+                        size_t largestGapIndex = 0;
+                        int64_t largestGap = 0;
+                        
+                        for (size_t i = 0; i < m_player->frameCache.size() - 1; i++)
+                        {
+                            int64_t gap = m_player->frameCache[i+1].number - m_player->frameCache[i].number;
+                            if (gap > largestGap)
+                            {
+                                largestGap = gap;
+                                largestGapIndex = i;
+                            }
+                        }
+                        
+                        // If we found a large gap and it's not the first frame, remove the second frame of the pair
+                        if (largestGap > 1 && largestGapIndex < m_player->frameCache.size() - 1)
+                            m_player->frameCache.erase(m_player->frameCache.begin() + largestGapIndex + 1);
+                        else
+                            m_player->frameCache.pop_front();  // Fall back to removing oldest
+                    }
+                    else
+                    {
+                        m_player->frameCache.pop_front();
+                    }
+                }
+                
+                // Create a more efficient cache by avoiding duplicate memory copy
+                m_player->frameCache.push_back({
+                    m_player->currentFrame,
+                    m_player->currentPts,
+                    std::vector<uint8_t>(m_player->buffer, m_player->buffer + m_player->rgbBufferSize)
+                });
+
                 av_frame_unref(m_player->hwFrame);
                 if (swFrame != m_player->hwFrame)
                     av_frame_unref(swFrame);
 
                 lock.unlock();
 
-                if (updateDisplay)
-                {
+                if (presentFrame)
                     m_player->m_renderer->UpdateDisplay();
-                }
-                else
-                {
+                else if (scheduleDisplay)
                     InvalidateRect(m_player->videoWindow, nullptr, FALSE);
-                }
 
-                UpdateTimeline();
+                if (presentFrame || scheduleDisplay)
+                    UpdateTimeline();
 
                 return true;
             }
@@ -205,7 +244,9 @@ bool VideoDecoder::DecodeNextFrame(bool updateDisplay) {
             {
                 if (m_player->packet->stream_index == track->streamIndex)
                 {
-                    m_player->m_audioPlayer->ProcessFrame(m_player->packet);
+                    // Drop audio while single-stepping to keep UI responsive and avoid A/V drift
+                    if (!m_player->dropAudioDuringStepping)
+                        m_player->m_audioPlayer->ProcessFrame(m_player->packet);
                     break;
                 }
             }

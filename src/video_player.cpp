@@ -4,6 +4,7 @@
 #include "video_renderer.h"
 #include "video_cutter.h"
 #include "options_window.h"
+#include "ui_updates.h"
 #include <iostream>
 #include <windows.h>
 #include <windowsx.h>
@@ -20,7 +21,7 @@ VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
       frame(nullptr), frameRGB(nullptr), hwFrame(nullptr), hwDeviceCtx(nullptr),
       hwPixelFormat(AV_PIX_FMT_NONE), useHwAccel(false), packet(nullptr), swsContext(nullptr),
-      buffer(nullptr), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
+      buffer(nullptr), rgbBufferSize(0), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
       cropRect{0,0,0,0}, hasCrop(false), selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
@@ -30,8 +31,9 @@ VideoPlayer::VideoPlayer(HWND parent)
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioThreadRunning(false),
       playbackThreadRunning(false),
-      audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
-      originalVideoWndProc(nullptr)
+    audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
+    originalVideoWndProc(nullptr),
+      dropAudioDuringStepping(false), frameCacheLimit(50)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -194,6 +196,7 @@ void VideoPlayer::UnloadVideo()
     cropRect = {0,0,0,0};
     cropStack.clear();
     hasCrop = false;
+    frameCache.clear();
 }
 
 bool VideoPlayer::Play()
@@ -259,20 +262,165 @@ void VideoPlayer::Stop()
 
 void VideoPlayer::SeekToFrame(int64_t frameNumber)
 {
-    if (!isLoaded || frameNumber < 0 || frameNumber >= totalFrames)
+    if (!isLoaded || frameNumber < 0 || (totalFrames > 0 && frameNumber >= totalFrames))
         return;
 
-    double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
-    SeekToTime(seconds);
+    if (frameNumber == currentFrame)
+        return;
+
+    // First try to find the frame in the cache for instant display
+    // Use binary search for more efficient lookup in large caches
+    if (!frameCache.empty())
+    {
+        // First check if the frame is in cache range
+        if (frameNumber >= frameCache.front().number && frameNumber <= frameCache.back().number)
+        {
+            // Use binary search for more efficient lookup
+            auto lower = std::lower_bound(
+                frameCache.begin(), 
+                frameCache.end(), 
+                frameNumber,
+                [](const CachedFrame& frame, int64_t num) { return frame.number < num; }
+            );
+            
+            if (lower != frameCache.end() && lower->number == frameNumber)
+            {
+                // Found exact frame in cache
+                std::copy(lower->pixels.begin(), lower->pixels.end(), buffer);
+                currentFrame = frameNumber;
+                currentPts = lower->pts;
+                m_renderer->UpdateDisplay();
+                UpdateTimeline();
+                return;
+            }
+        }
+    }
+
+    dropAudioDuringStepping = true;
+
+    // Optimize stepping forward one frame by decoding without seeking
+    if (frameNumber == currentFrame + 1)
+    {
+        m_decoder->DecodeNextFrame(true);
+        dropAudioDuringStepping = false;
+        return;
+    }
+
+    // For backwards navigation
+    if (frameNumber < currentFrame)
+    {
+        // If we're moving backwards a significant amount, use keyframe seeking
+        int64_t distance = currentFrame - frameNumber;
+        
+        // If we're moving backwards by more than 5 frames or cache is smaller than the distance
+        if (distance > 5 || distance > static_cast<int64_t>(frameCache.size()))
+        {
+            // Seek to keyframe a bit before the target frame
+            double targetTime = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
+            
+            // Add a safety margin to make sure we get a keyframe before our target
+            double seekTime = std::max(0.0, targetTime - 0.5);  // Half second buffer
+            
+            // Force a keyframe-based seek to minimize decoding
+            AVStream *vs = formatContext->streams[videoStreamIndex];
+            int64_t ts = static_cast<int64_t>((seekTime + startTimeOffset) / av_q2d(vs->time_base));
+            
+            {
+                std::lock_guard<std::mutex> lock(decodeMutex);
+                
+                // Clear the frame cache to avoid using stale frames
+                frameCache.clear();
+                
+                // Seek to the keyframe using BACKWARD flag but not ANY flag
+                av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
+                avcodec_flush_buffers(codecContext);
+                
+                // Reset audio state
+                for (auto &track : audioTracks)
+                {
+                    if (track->codecContext)
+                        avcodec_flush_buffers(track->codecContext);
+                }
+                {
+                    std::lock_guard<std::mutex> lock(audioMutex);
+                    for (auto& tr : audioTracks)
+                        tr->buffer.clear();
+                }
+                
+                // Update the current position estimation
+                currentPts = seekTime;
+                currentFrame = static_cast<int64_t>(currentPts * frameRate);
+            }
+            
+            // Decode frames until we reach our target frame
+            while (currentFrame < frameNumber)
+            {
+                bool last = (currentFrame + 1 >= frameNumber);
+                if (!m_decoder->DecodeNextFrame(last, false))
+                    break;
+            }
+        }
+        else 
+        {
+            // For small backwards movements, just step backwards through the cache
+            // This should be fast since we're using cached frames
+            for (int64_t f = currentFrame - 1; f >= frameNumber; f--)
+            {
+                bool found = false;
+                for (auto it = frameCache.rbegin(); it != frameCache.rend(); ++it)
+                {
+                    if (it->number == f)
+                    {
+                        std::copy(it->pixels.begin(), it->pixels.end(), buffer);
+                        currentFrame = f;
+                        currentPts = it->pts;
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found)
+                {
+                    // If we can't find a frame in the cache, fall back to seeking
+                    double seconds = frameRate > 0 ? (f / frameRate) : 0.0;
+                    SeekToTime(seconds, 0);
+                    break;
+                }
+                
+                // Only update display for the last frame
+                if (f == frameNumber)
+                {
+                    m_renderer->UpdateDisplay();
+                    UpdateTimeline();
+                }
+            }
+        }
+    }
+    else
+    {
+        // For forward seeking beyond next frame
+        double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
+        SeekToTime(seconds, 0);
+
+        while (currentFrame < frameNumber)
+        {
+            bool last = (currentFrame + 1 >= frameNumber);
+            if (!m_decoder->DecodeNextFrame(last, false))
+                break;
+        }
+    }
+
+    dropAudioDuringStepping = false;
 }
 
-void VideoPlayer::SeekToTime(double seconds)
+void VideoPlayer::SeekToTime(double seconds, int decodeCount)
 {
     if (!isLoaded)
         return;
 
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
+        frameCache.clear();
 
         AVStream *vs = formatContext->streams[videoStreamIndex];
         int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));
@@ -294,12 +442,25 @@ void VideoPlayer::SeekToTime(double seconds)
                 tr->buffer.clear();
         }
 
-        currentFrame = (int64_t)(seconds * frameRate);
-        currentPts = seconds;
+        // Estimate the frame and PTS we landed on using the stream index
+        const AVIndexEntry *entry =
+            avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
+    if (entry)
+        {
+            int64_t keyTs = entry->timestamp;
+            double keyTime = keyTs * av_q2d(vs->time_base) - startTimeOffset;
+            currentPts = keyTime;
+            currentFrame = (int64_t)(currentPts * frameRate);
+        }
+        else
+        {
+            currentPts = seconds;
+            currentFrame = (int64_t)(seconds * frameRate);
+        }
     }
 
-    // Decode a few frames after seeking so the display updates immediately
-    for (int i = 0; i < 3; ++i)
+    // Decode frames after seeking so the display updates immediately
+    for (int i = 0; i < decodeCount; ++i)
     {
         if (!m_decoder->DecodeNextFrame(true))
             break;
@@ -504,7 +665,7 @@ void VideoPlayer::PlaybackThreadFunction()
     double startPts = masterStartPts;
     while (playbackThreadRunning)
     {
-        if (!m_decoder->DecodeNextFrame(false))
+        if (!m_decoder->DecodeNextFrame(false, true))
             break;
 
         double target = currentPts - startPts;

@@ -233,8 +233,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                 case VK_OEM_PERIOD:
                 {
                     int64_t frame = g_videoPlayer->GetCurrentFrame() + 1;
-                    int64_t maxf = g_videoPlayer->GetTotalFrames() - 1;
-                    if (frame > maxf) frame = maxf;
+                    int64_t total = g_videoPlayer->GetTotalFrames();
+                    if (total > 0)
+                    {
+                        int64_t maxf = total - 1;
+                        if (frame > maxf)
+                            frame = maxf;
+                    }
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
                         g_videoPlayer->Pause();
