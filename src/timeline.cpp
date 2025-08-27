@@ -44,6 +44,20 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             else
             {
+                if (g_videoPlayer->IsClipPreviewActive())
+                {
+                    if (seekTime < g_cutStartTime || seekTime > g_cutEndTime)
+                    {
+                        g_videoPlayer->CancelClipPreview();
+                    }
+                    else
+                    {
+                        g_videoPlayer->SeekToTime(seekTime);
+                        InvalidateRect(hwnd, NULL, FALSE);
+                        UpdateControls();
+                        return 0;
+                    }
+                }
                 g_timelineDragMode = DragMode::Cursor;
                 g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
                 if (g_wasPlayingBeforeDrag)

@@ -103,6 +103,8 @@ public:
     double currentPts;
     double duration;
     double startTimeOffset;
+    bool clipPreviewActive;
+    double clipPreviewEndTime;
 
     // Crop selection
     RECT cropRect;
@@ -182,6 +184,9 @@ public:
     bool Play();
     void Pause();
     void Stop();
+    void PlayClip(double startTime, double endTime);
+    void CancelClipPreview();
+    bool IsClipPreviewActive() const { return clipPreviewActive; }
     bool IsPlaying() const { return isPlaying; }
     bool IsLoaded() const { return isLoaded; }
 

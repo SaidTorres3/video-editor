@@ -5,6 +5,7 @@
 
 void OnSetStartClicked(HWND hwnd);
 void OnSetEndClicked(HWND hwnd);
+void OnPlayClipClicked(HWND hwnd);
 void OnCutClicked(HWND hwnd);
 void OnExportClicked(HWND hwnd);
 

@@ -24,6 +24,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       buffer(nullptr), rgbBufferSize(0), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
+      clipPreviewActive(false), clipPreviewEndTime(0.0),
       cropRect{0,0,0,0}, hasCrop(false), selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
       videoWindow(nullptr),
       d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
@@ -219,7 +220,8 @@ void VideoPlayer::Pause()
     if (isPlaying)
     {
         isPlaying = false;
-        
+        clipPreviewActive = false;
+
         m_audioPlayer->StopThread();
         
         if (playbackThreadRunning)
@@ -238,6 +240,7 @@ void VideoPlayer::Pause()
 
 void VideoPlayer::Stop()
 {
+    clipPreviewActive = false;
     Pause();
     currentFrame = 0;
     currentPts = 0.0;
@@ -257,6 +260,29 @@ void VideoPlayer::Stop()
         std::lock_guard<std::mutex> lock(audioMutex);
         for (auto& tr : audioTracks)
             tr->buffer.clear();
+    }
+}
+
+void VideoPlayer::PlayClip(double startTime, double endTime)
+{
+    if (!isLoaded)
+        return;
+    clipPreviewEndTime = endTime;
+    clipPreviewActive = true;
+    SeekToTime(startTime);
+    Play();
+}
+
+void VideoPlayer::CancelClipPreview()
+{
+    if (clipPreviewActive)
+    {
+        clipPreviewActive = false;
+        if (isPlaying)
+        {
+            Pause();
+            UpdateControls();
+        }
     }
 }
 
@@ -499,7 +525,15 @@ void CALLBACK VideoPlayer::TimerProc(HWND hwnd, UINT, UINT_PTR, DWORD)
 void VideoPlayer::OnTimer()
 {
     if (isPlaying)
+    {
         m_decoder->DecodeNextFrame(true);
+        if (clipPreviewActive && currentPts >= clipPreviewEndTime)
+        {
+            clipPreviewActive = false;
+            Pause();
+            UpdateControls();
+        }
+    }
 }
 
 // Audio track management methods
@@ -667,6 +701,14 @@ void VideoPlayer::PlaybackThreadFunction()
     {
         if (!m_decoder->DecodeNextFrame(false, true))
             break;
+
+        if (clipPreviewActive && currentPts >= clipPreviewEndTime)
+        {
+            clipPreviewActive = false;
+            Pause();
+            UpdateControls();
+            break;
+        }
 
         double target = currentPts - startPts;
         double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
