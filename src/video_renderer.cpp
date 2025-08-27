@@ -2,15 +2,28 @@
 #include "video_player.h"
 #include "video_decoder.h"
 #include <algorithm>
+#include <chrono>
 
-VideoRenderer::VideoRenderer(VideoPlayer* player) : m_player(player) {}
+VideoRenderer::VideoRenderer(VideoPlayer* player)
+    : m_player(player), m_writeFactory(nullptr), m_textFormat(nullptr), m_textBrush(nullptr) {}
 
 VideoRenderer::~VideoRenderer() {
     Cleanup();
 }
 
 bool VideoRenderer::Initialize() {
-    return SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &m_player->d2dFactory));
+    if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &m_player->d2dFactory)))
+        return false;
+    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                  reinterpret_cast<IUnknown**>(&m_writeFactory))))
+        return false;
+    if (FAILED(m_writeFactory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_BOLD,
+                                               DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                                               32.0f, L"en-us", &m_textFormat)))
+        return false;
+    m_textFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    m_textFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    return true;
 }
 
 void VideoRenderer::Cleanup() {
@@ -19,6 +32,9 @@ void VideoRenderer::Cleanup() {
         m_player->d2dBitmap->Release();
         m_player->d2dBitmap = nullptr;
     }
+    if (m_textBrush) { m_textBrush->Release(); m_textBrush = nullptr; }
+    if (m_textFormat) { m_textFormat->Release(); m_textFormat = nullptr; }
+    if (m_writeFactory) { m_writeFactory->Release(); m_writeFactory = nullptr; }
     if (m_player->d2dRenderTarget)
     {
         m_player->d2dRenderTarget->Release();
@@ -91,6 +107,17 @@ void VideoRenderer::UpdateDisplay() {
         1.0f,
         D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
         m_player->hasCrop ? &srcRect : nullptr);
+    auto now = std::chrono::steady_clock::now();
+    if (now < m_player->speedOverlayExpire && !m_player->speedOverlayText.empty()) {
+        D2D1_SIZE_F sz = m_player->d2dRenderTarget->GetSize();
+        D2D1_RECT_F rect = D2D1::RectF(0, 0, sz.width, 40);
+        m_player->d2dRenderTarget->DrawTextW(
+            m_player->speedOverlayText.c_str(),
+            (UINT32)m_player->speedOverlayText.size(),
+            m_textFormat,
+            rect,
+            m_textBrush);
+    }
 
     if (m_player->selectingCrop) {
         D2D1_RECT_F sel = D2D1::RectF(
@@ -143,5 +170,7 @@ bool VideoRenderer::CreateRenderTarget() {
         D2D1::RenderTargetProperties(),
         D2D1::HwndRenderTargetProperties(m_player->videoWindow, size),
         &m_player->d2dRenderTarget);
+    if (SUCCEEDED(hr))
+        m_player->d2dRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_textBrush);
     return SUCCEEDED(hr);
 }

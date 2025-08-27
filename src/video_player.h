@@ -156,6 +156,10 @@ public:
     double masterStartPts;
     double playbackSpeed;
 
+    // Overlay text showing current speed
+    std::wstring speedOverlayText;
+    std::chrono::steady_clock::time_point speedOverlayExpire;
+
     // Currently loaded file path
     std::wstring loadedFilename;
 

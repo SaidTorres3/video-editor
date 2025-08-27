@@ -99,6 +99,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 UpdateTimeline();
             }
             break;
+        case 1029: // ID_BUTTON_SPEED_DOWN
+            if (g_videoPlayer)
+                g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() / 1.1);
+            break;
+        case 1030: // ID_BUTTON_SPEED_UP
+            if (g_videoPlayer)
+                g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() * 1.1);
+            break;
         case 1020: // ID_BUTTON_OPTIONS
             ShowOptionsWindow(hwnd);
             break;

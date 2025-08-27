@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+#include <sstream>
+#include <iomanip>
 
 void UpdateControls();
 
@@ -34,6 +36,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
     audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     masterStartTime(), masterStartPts(0.0), playbackSpeed(1.0),
+    speedOverlayText(L""), speedOverlayExpire(std::chrono::steady_clock::time_point::min()),
     originalVideoWndProc(nullptr),
       dropAudioDuringStepping(false), frameCacheLimit(50)
 {
@@ -587,6 +590,11 @@ void VideoPlayer::SetPlaybackSpeed(double speed)
     playbackSpeed = std::clamp(speed, 0.1, 10.0);
     masterStartPts = currentPts;
     masterStartTime = std::chrono::high_resolution_clock::now();
+
+    std::wostringstream oss;
+    oss << std::fixed << std::setprecision(2) << playbackSpeed << L"x";
+    speedOverlayText = oss.str();
+    speedOverlayExpire = std::chrono::steady_clock::now() + std::chrono::seconds(3);
 }
 
 bool VideoPlayer::IsVoiceIsolationEnabled(int trackIndex) const

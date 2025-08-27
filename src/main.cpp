@@ -33,6 +33,7 @@
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
+HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
 HWND g_hTimeline;
 HWND g_hStatusText;
 HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
@@ -248,6 +249,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         g_videoPlayer->Play();
                     break;
                 }
+                case VK_ADD:
+                case VK_OEM_PLUS:
+                    g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() * 1.1);
+                    break;
+                case VK_SUBTRACT:
+                case VK_OEM_MINUS:
+                    g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() / 1.1);
+                    break;
                 default:
                     handled = false;
                     break;
