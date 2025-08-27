@@ -56,6 +56,7 @@ struct AudioTrack {
     std::deque<int16_t> buffer;
     std::vector<int16_t> resampleBuffer;
     double bufferPts;
+    double playbackPos;
     
     // Voice isolation support
     bool voiceIsolationEnabled;
@@ -69,7 +70,7 @@ struct AudioTrack {
 
     AudioTrack() : streamIndex(-1), codecContext(nullptr), swrContext(nullptr),
                    frame(nullptr), isMuted(false), volume(1.0f), bufferPts(0.0),
-                   voiceIsolationEnabled(false), denoiseState(nullptr), 
+                   playbackPos(0.0), voiceIsolationEnabled(false), denoiseState(nullptr),
                    voiceIsolationSwrContext(nullptr), voiceIsolationBackSwrContext(nullptr) {}
 };
 
