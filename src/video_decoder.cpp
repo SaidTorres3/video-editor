@@ -229,7 +229,10 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
                 if (presentFrame)
                     m_player->m_renderer->UpdateDisplay();
                 else if (scheduleDisplay)
+                {
                     InvalidateRect(m_player->videoWindow, nullptr, FALSE);
+                    UpdateWindow(m_player->videoWindow);
+                }
 
                 if (presentFrame || scheduleDisplay)
                     UpdateTimeline();
