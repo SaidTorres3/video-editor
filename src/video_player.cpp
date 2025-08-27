@@ -314,7 +314,8 @@ void VideoPlayer::ChangePlaybackSpeed(double delta)
         track->isMuted = mute;
     auto now = std::chrono::high_resolution_clock::now();
     double elapsed = pos - masterStartPts;
-    masterStartTime = now - std::chrono::duration<double>(elapsed / playbackSpeed);
+    masterStartTime = now - std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
+                                std::chrono::duration<double>(elapsed / playbackSpeed));
     std::wstringstream ss;
     ss << std::fixed << std::setprecision(1) << playbackSpeed << L"x";
     speedText = ss.str();
