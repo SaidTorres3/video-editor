@@ -205,6 +205,7 @@ foreach ($p in $required) {
 }
 Write-Host "FFmpeg validated at: $FFmpegPath" -ForegroundColor Green
 
+taskkill /F /IM VideoEditor.exe 2>$null;
 # 5) vcpkg toolchain
 if ($Static.IsPresent) {
     if (-not (Test-Path "C:\tools\vcpkg")) {
