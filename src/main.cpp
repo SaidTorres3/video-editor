@@ -213,7 +213,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     break;
                 }
                 case 'K':
-                case 'k':
+                    // The virtual-key code for both upper and lower case "K" is the same,
+                    // so a single case handles toggling playback with the K key.
                     if (g_videoPlayer->IsPlaying())
                         g_videoPlayer->Pause();
                     else
