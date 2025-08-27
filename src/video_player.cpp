@@ -183,6 +183,17 @@ void VideoPlayer::UnloadVideo()
     Stop();
     m_audioPlayer->CleanupTracks();
     m_decoder->Cleanup();
+    if (d2dBitmap)
+    {
+        d2dBitmap->Release();
+        d2dBitmap = nullptr;
+    }
+    if (d2dRenderTarget)
+    {
+        d2dRenderTarget->BeginDraw();
+        d2dRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+        d2dRenderTarget->EndDraw();
+    }
     if (formatContext)
     {
         avformat_close_input(&formatContext);
@@ -194,6 +205,8 @@ void VideoPlayer::UnloadVideo()
     currentPts = 0.0;
     totalFrames = 0;
     duration = 0.0;
+    frameWidth = 0;
+    frameHeight = 0;
     cropRect = {0,0,0,0};
     cropStack.clear();
     hasCrop = false;
