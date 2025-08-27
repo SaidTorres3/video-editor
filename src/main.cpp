@@ -219,6 +219,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     else
                         g_videoPlayer->Play();
                     break;
+                case VK_OEM_PLUS:
+                case VK_ADD:
+                    g_videoPlayer->ChangePlaybackSpeed(0.1);
+                    break;
+                case VK_OEM_MINUS:
+                case VK_SUBTRACT:
+                    g_videoPlayer->ChangePlaybackSpeed(-0.1);
+                    break;
                 case VK_OEM_COMMA:
                 {
                     int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;

@@ -546,18 +546,12 @@ double VideoPlayer::GetDuration() const
 
 double VideoPlayer::GetCurrentTime() const
 {
-    if (isPlaying)
-    {
-        double elapsed = std::chrono::duration<double>(
-            std::chrono::high_resolution_clock::now() - masterStartTime).count();
-        double t = masterStartPts + elapsed * playbackSpeed;
-        if (clipPreviewActive && t > clipPreviewEndTime)
-            t = clipPreviewEndTime;
-        if (duration > 0.0 && t > duration)
-            t = duration;
-        return t;
-    }
-    return currentPts;
+    double t = currentPts;
+    if (clipPreviewActive && t > clipPreviewEndTime)
+        t = clipPreviewEndTime;
+    if (duration > 0.0 && t > duration)
+        t = duration;
+    return t;
 }
 
 void VideoPlayer::SetPosition(int x, int y, int width, int height)
@@ -761,6 +755,21 @@ void VideoPlayer::PlaybackThreadFunction()
             Pause();
             UpdateControls();
             break;
+        }
+
+        double frameDur = frameRate > 0.0 ? 1.0 / frameRate : 0.0;
+        while (playbackThreadRunning)
+        {
+            double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - masterStartTime).count();
+            double expected = masterStartPts + elapsed * playbackSpeed;
+            if (currentPts + frameDur >= expected)
+                break;
+            if (!m_decoder->DecodeNextFrame(false, false))
+            {
+                playbackThreadRunning = false;
+                break;
+            }
+            UpdateTimeline();
         }
 
         double target = (currentPts - masterStartPts) / playbackSpeed;
