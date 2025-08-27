@@ -299,6 +299,18 @@ void VideoPlayer::ChangePlaybackSpeed(double delta)
         playbackSpeed = 0.1;
     if (playbackSpeed > 10.0)
         playbackSpeed = 10.0;
+    if (codecContext)
+    {
+        if (playbackSpeed >= 4.0)
+            codecContext->skip_frame = AVDISCARD_NONKEY;
+        else if (playbackSpeed >= 2.0)
+            codecContext->skip_frame = AVDISCARD_BIDIR;
+        else
+            codecContext->skip_frame = AVDISCARD_NONREF;
+    }
+    bool mute = playbackSpeed > 4.0;
+    for (auto &track : audioTracks)
+        track->isMuted = mute;
     masterStartPts = currentPts;
     masterStartTime = std::chrono::high_resolution_clock::now();
     std::wstringstream ss;
