@@ -301,10 +301,10 @@ void VideoPlayer::ChangePlaybackSpeed(double delta)
         playbackSpeed = 10.0;
     if (codecContext)
     {
-        if (playbackSpeed >= 4.0)
-            codecContext->skip_frame = AVDISCARD_NONREF;
+        if (playbackSpeed >= 8.0)
+            codecContext->skip_frame = AVDISCARD_NONKEY;
         else if (playbackSpeed >= 2.0)
-            codecContext->skip_frame = AVDISCARD_BIDIR;
+            codecContext->skip_frame = AVDISCARD_NONREF;
         else
             codecContext->skip_frame = AVDISCARD_DEFAULT;
     }
@@ -780,11 +780,12 @@ void VideoPlayer::PlaybackThreadFunction()
         }
 
         double frameDur = frameRate > 0.0 ? 1.0 / frameRate : 0.0;
+        int catchup = 0;
         while (playbackThreadRunning)
         {
             double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - masterStartTime).count();
             double expected = masterStartPts + elapsed * playbackSpeed;
-            if (currentPts + frameDur >= expected)
+            if (currentPts + frameDur >= expected || catchup >= 8)
                 break;
             if (!m_decoder->DecodeNextFrame(false, false))
             {
@@ -792,6 +793,7 @@ void VideoPlayer::PlaybackThreadFunction()
                 break;
             }
             UpdateTimeline();
+            ++catchup;
         }
 
         double target = (currentPts - masterStartPts) / playbackSpeed;
