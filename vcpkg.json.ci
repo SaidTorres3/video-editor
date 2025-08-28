@@ -10,9 +10,9 @@
         "x264",
         "x265",
         "mp3lame",
-        "fdk-aac",
         "opus",
-        "zlib"
+        "zlib",
+        "nvcodec"
       ]
     },
     {
