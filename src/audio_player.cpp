@@ -313,77 +313,81 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
         return;
 
     // Apply voice isolation if enabled
-    if (track->voiceIsolationEnabled && track->denoiseState && 
-        track->voiceIsolationSwrContext && track->voiceIsolationBackSwrContext)
     {
-        // Convert stereo audio to 48kHz mono for RNNoise processing
-        int maxOutSamples = swr_get_out_samples(track->voiceIsolationSwrContext, convertedSamples);
-        if (track->voiceIsolationMonoBuffer.size() < static_cast<size_t>(maxOutSamples))
-            track->voiceIsolationMonoBuffer.resize(maxOutSamples);
-        
-        int16_t* monoPtr = track->voiceIsolationMonoBuffer.data();
-        int convertedMono = swr_convert(track->voiceIsolationSwrContext, 
-                                       (uint8_t**)&monoPtr, maxOutSamples,
-                                       (const uint8_t**)&outPtr, convertedSamples);
-        
-        if (convertedMono > 0)
+        // Lock during voice isolation processing to avoid races with toggling/freeing
+        std::lock_guard<std::mutex> isoLock(m_player->audioMutex);
+        if (track->voiceIsolationEnabled && track->denoiseState &&
+            track->voiceIsolationSwrContext && track->voiceIsolationBackSwrContext)
         {
-            // Add new samples to the queue
-            for (int i = 0; i < convertedMono; ++i)
+            // Convert stereo audio to 48kHz mono for RNNoise processing
+            int maxOutSamples = swr_get_out_samples(track->voiceIsolationSwrContext, convertedSamples);
+            if (track->voiceIsolationMonoBuffer.size() < static_cast<size_t>(maxOutSamples))
+                track->voiceIsolationMonoBuffer.resize(maxOutSamples);
+
+            int16_t* monoPtr = track->voiceIsolationMonoBuffer.data();
+            int convertedMono = swr_convert(track->voiceIsolationSwrContext,
+                                           (uint8_t**)&monoPtr, maxOutSamples,
+                                           (const uint8_t**)&outPtr, convertedSamples);
+
+            if (convertedMono > 0)
             {
-                track->voiceIsolationSampleQueue.push_back(static_cast<float>(monoPtr[i]));
-            }
-            
-            int frameSize = rnnoise_get_frame_size(); // 480 samples
-            int processedSamples = 0;
-            
-            // Ensure processed buffer is large enough
-            if (track->voiceIsolationProcessedBuffer.size() < static_cast<size_t>(convertedMono))
-                track->voiceIsolationProcessedBuffer.resize(convertedMono);
-            
-            // Process complete 480-sample frames
-            while (track->voiceIsolationSampleQueue.size() >= static_cast<size_t>(frameSize))
-            {
-                // Fill input buffer with exactly 480 samples
-                for (int i = 0; i < frameSize; ++i)
+                // Add new samples to the queue
+                for (int i = 0; i < convertedMono; ++i)
                 {
-                    track->voiceIsolationInputBuffer[i] = track->voiceIsolationSampleQueue.front();
-                    track->voiceIsolationSampleQueue.pop_front();
+                    track->voiceIsolationSampleQueue.push_back(static_cast<float>(monoPtr[i]));
                 }
-                
-                // Apply RNNoise processing - this modifies the input buffer in place
-                rnnoise_process_frame(track->denoiseState, 
-                                    track->voiceIsolationInputBuffer.data(), 
-                                    track->voiceIsolationInputBuffer.data());
-                
-                // Convert processed output back to int16 and store
-                for (int i = 0; i < frameSize; ++i)
+
+                int frameSize = rnnoise_get_frame_size(); // 480 samples
+                int processedSamples = 0;
+
+                // Ensure processed buffer is large enough
+                if (track->voiceIsolationProcessedBuffer.size() < static_cast<size_t>(convertedMono))
+                    track->voiceIsolationProcessedBuffer.resize(convertedMono);
+
+                // Process complete 480-sample frames
+                while (track->voiceIsolationSampleQueue.size() >= static_cast<size_t>(frameSize))
                 {
-                    float sample = track->voiceIsolationInputBuffer[i];
-                    sample = std::max(-32768.0f, std::min(32767.0f, sample));
-                    if (processedSamples + i < static_cast<int>(track->voiceIsolationProcessedBuffer.size()))
+                    // Fill input buffer with exactly 480 samples
+                    for (int i = 0; i < frameSize; ++i)
                     {
-                        track->voiceIsolationProcessedBuffer[processedSamples + i] = static_cast<int16_t>(sample);
+                        track->voiceIsolationInputBuffer[i] = track->voiceIsolationSampleQueue.front();
+                        track->voiceIsolationSampleQueue.pop_front();
                     }
+
+                    // Apply RNNoise processing - this modifies the input buffer in place
+                    rnnoise_process_frame(track->denoiseState,
+                                          track->voiceIsolationInputBuffer.data(),
+                                          track->voiceIsolationInputBuffer.data());
+
+                    // Convert processed output back to int16 and store
+                    for (int i = 0; i < frameSize; ++i)
+                    {
+                        float sample = track->voiceIsolationInputBuffer[i];
+                        sample = std::max(-32768.0f, std::min(32767.0f, sample));
+                        if (processedSamples + i < static_cast<int>(track->voiceIsolationProcessedBuffer.size()))
+                        {
+                            track->voiceIsolationProcessedBuffer[processedSamples + i] = static_cast<int16_t>(sample);
+                        }
+                    }
+                    processedSamples += frameSize;
                 }
-                processedSamples += frameSize;
-            }
-            
-            // Convert processed 48kHz mono back to original rate stereo
-            if (processedSamples > 0)
-            {
-                int16_t* processedPtr = track->voiceIsolationProcessedBuffer.data();
-                int backConverted = swr_convert(track->voiceIsolationBackSwrContext, 
-                                               (uint8_t**)&outPtr, convertedSamples,
-                                               (const uint8_t**)&processedPtr, processedSamples);
-                
-                if (backConverted > 0)
+
+                // Convert processed 48kHz mono back to original rate stereo
+                if (processedSamples > 0)
                 {
-                    // The processed audio is now in outPtr, with the correct number of samples.
-                    // We need to update convertedSamples to reflect the actual output size.
-                    convertedSamples = backConverted;
+                    int16_t* processedPtr = track->voiceIsolationProcessedBuffer.data();
+                    int backConverted = swr_convert(track->voiceIsolationBackSwrContext,
+                                                   (uint8_t**)&outPtr, convertedSamples,
+                                                   (const uint8_t**)&processedPtr, processedSamples);
+
+                    if (backConverted > 0)
+                    {
+                        // The processed audio is now in outPtr, with the correct number of samples.
+                        // We need to update convertedSamples to reflect the actual output size.
+                        convertedSamples = backConverted;
+                    }
+                    // If conversion fails, the original audio remains in outPtr.
                 }
-                // If conversion fails, the original audio remains in outPtr.
             }
         }
     }

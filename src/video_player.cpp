@@ -605,7 +605,9 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
 {
     if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
         return;
-        
+    // Synchronize with audio processing to avoid freeing resources in use
+    std::lock_guard<std::mutex> lock(audioMutex);
+
     auto& track = audioTracks[trackIndex];
     
     if (enabled && !track->voiceIsolationEnabled)
@@ -685,6 +687,8 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
     }
     else if (!enabled && track->voiceIsolationEnabled)
     {
+        // Disable first so processing threads skip the path, then free resources
+        track->voiceIsolationEnabled = false;
         // Cleanup voice isolation resources
         if (track->voiceIsolationBackSwrContext)
         {
@@ -701,7 +705,6 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
             rnnoise_destroy(track->denoiseState);
             track->denoiseState = nullptr;
         }
-        track->voiceIsolationEnabled = false;
         track->voiceIsolationInputBuffer.clear();
         track->voiceIsolationMonoBuffer.clear();
         track->voiceIsolationProcessedBuffer.clear();
