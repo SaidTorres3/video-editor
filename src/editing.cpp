@@ -74,7 +74,7 @@ void OnPlayEndClipClicked(HWND hwnd)
         return;
     }
 
-    double previewStart = g_cutEndTime - 3.0;
+    double previewStart = g_cutEndTime - 3.0; // Play 3 seconds before the end
     if (previewStart < g_cutStartTime)
         previewStart = g_cutStartTime;
     if (previewStart < 0)

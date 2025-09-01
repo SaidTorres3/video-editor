@@ -4,7 +4,7 @@ A Windows-based video player application built with C++ and FFmpeg that supports
 
 All source files now reside under the `src/` directory to keep the project organized.
 
-![Video Editor Showcase](https://raw.githubusercontent.com/SaidTorres3/video-editor/refs/heads/master/.readme-assets/showcase-v003.png)
+![Video Editor Showcase](https://raw.githubusercontent.com/SaidTorres3/video-editor/refs/heads/master/.readme-assets/showcase-v004.png)
 
 ## Features
 
@@ -123,6 +123,7 @@ The script will handle all dependencies automatically. You'll end up with a ligh
 ```
 
    The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
+   > **Important Note:** The static build does **not** support NVIDIA (NVENC) hardware encoding. Only software (CPU) encoding is available when using the `-Static` option.
 
 ---
 
