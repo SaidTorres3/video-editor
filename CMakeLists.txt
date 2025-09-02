@@ -17,6 +17,8 @@ endif()
 if(MSVC AND USE_STATIC_FFMPEG)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    # Define CURL_STATICLIB for static libcurl
+    add_compile_definitions(CURL_STATICLIB)
 endif()
 
 # Require C++17
@@ -69,7 +71,7 @@ if(NOT EXISTS "${CURL_ROOT}/lib/libcurl.lib")
 endif()
 message(STATUS ">> Using vendored libcurl: ${CURL_ROOT}/lib/libcurl.lib")
 
-# ==== IMPORTED TARGET: zlib (shared build only) ====
+# ==== IMPORTED TARGET: zlib ====
 if(NOT USE_STATIC_FFMPEG)
     add_library(VENDOR_ZLIB STATIC IMPORTED GLOBAL)
     message(STATUS ">> Using vendored zlib: ${CURL_ROOT}/lib/zlib.lib")
@@ -80,7 +82,7 @@ if(NOT USE_STATIC_FFMPEG)
     if(NOT EXISTS "${CURL_ROOT}/lib/zlib.lib")
         message(FATAL_ERROR "❌ zlib.lib does not exist in ${CURL_ROOT}/lib")
     endif()
-elseif(USE_STATIC_FFMPEG)
+else()
     # If static, use zlib from FFmpeg
     set(VENDOR_ZLIB_INCLUDE_DIR "${FFMPEG_ROOT}/include")
     set(VENDOR_ZLIB_LIBRARIES "${FFMPEG_ROOT}/lib/zlib.lib")
@@ -120,11 +122,18 @@ target_include_directories(VideoEditor PRIVATE
     ${RNNOISE_INCLUDE_DIR}
 )
 
+# ==== TARGET-SPECIFIC OPTIONS ====
+if(MSVC AND USE_STATIC_FFMPEG)
+    # Disable specific warnings for static build
+    target_compile_options(VideoEditor PRIVATE /wd4996)
+endif()
+
 # ==== WINDOWS PLATFORM LIBS ====
 set(PLATFORM_LIBS
     user32 gdi32 d2d1 comctl32 comdlg32 ole32 winmm
     dwmapi uxtheme shell32 ws2_32 bcrypt secur32 mfplat
-    mf mfuuid strmiids crypt32 advapi32
+    mf mfuuid strmiids crypt32 advapi32 iphlpapi wldap32
+    normaliz
 )
 
 # ==== FFMPEG LIBRARIES ====
@@ -148,7 +157,7 @@ target_link_libraries(VideoEditor PRIVATE
     ${FFMPEG_LIBS}
     ${RNNOISE_LIBRARY}
     VENDOR_LIBCURL
-    $<$<BOOL:NOT USE_STATIC_FFMPEG>:VENDOR_ZLIB>
+    VENDOR_ZLIB
 )
 
 # ==== COPY FFmpeg DLLS (dynamic build) ====
