@@ -5,6 +5,11 @@ if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
+# Policy for imported targets missing location property
+if(POLICY CMP0111)
+    cmake_policy(SET CMP0111 NEW)
+endif()
+
 project(VideoEditor CXX)
 
 if(USE_STATIC_FFMPEG)
@@ -19,6 +24,10 @@ if(MSVC AND USE_STATIC_FFMPEG)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
     # Define CURL_STATICLIB for static libcurl
     add_compile_definitions(CURL_STATICLIB)
+elseif(MSVC)
+    # For dynamic builds, use dynamic runtime library to avoid conflicts
+    # Let CMake use the default dynamic runtime library
+    # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")  # Commented out to use default
 endif()
 
 # Require C++17
@@ -62,8 +71,10 @@ message(STATUS ">> RNNoise lib:     ${RNNOISE_LIBRARY}")
 # ==== IMPORTED TARGET: libcurl ====
 add_library(VENDOR_LIBCURL STATIC IMPORTED GLOBAL)
 set_target_properties(VENDOR_LIBCURL PROPERTIES
-    IMPORTED_LOCATION_DEBUG   "${CURL_ROOT}/lib/libcurl.lib"
-    IMPORTED_LOCATION_RELEASE "${CURL_ROOT}/lib/libcurl.lib"
+    IMPORTED_LOCATION_DEBUG       "${CURL_ROOT}/lib/libcurl.lib"
+    IMPORTED_LOCATION_RELEASE     "${CURL_ROOT}/lib/libcurl.lib"
+    IMPORTED_LOCATION_MINSIZEREL  "${CURL_ROOT}/lib/libcurl.lib"
+    IMPORTED_LOCATION_RELWITHDEBINFO "${CURL_ROOT}/lib/libcurl.lib"
     INTERFACE_INCLUDE_DIRECTORIES "${CURL_ROOT}/include"
 )
 if(NOT EXISTS "${CURL_ROOT}/lib/libcurl.lib")
@@ -76,8 +87,10 @@ if(NOT USE_STATIC_FFMPEG)
     add_library(VENDOR_ZLIB STATIC IMPORTED GLOBAL)
     message(STATUS ">> Using vendored zlib: ${CURL_ROOT}/lib/zlib.lib")
     set_target_properties(VENDOR_ZLIB PROPERTIES
-        IMPORTED_LOCATION_DEBUG   "${CURL_ROOT}/lib/zlib.lib"
-        IMPORTED_LOCATION_RELEASE "${CURL_ROOT}/lib/zlib.lib"
+        IMPORTED_LOCATION_DEBUG       "${CURL_ROOT}/lib/zlib.lib"
+        IMPORTED_LOCATION_RELEASE     "${CURL_ROOT}/lib/zlib.lib"
+        IMPORTED_LOCATION_MINSIZEREL  "${CURL_ROOT}/lib/zlib.lib"
+        IMPORTED_LOCATION_RELWITHDEBINFO "${CURL_ROOT}/lib/zlib.lib"
     )
     if(NOT EXISTS "${CURL_ROOT}/lib/zlib.lib")
         message(FATAL_ERROR "❌ zlib.lib does not exist in ${CURL_ROOT}/lib")
@@ -138,6 +151,13 @@ if(MSVC AND USE_STATIC_FFMPEG)
     target_link_options(VideoEditor PRIVATE
         /IGNORE:4286  # Ignore duplicate symbol warnings for C runtime functions
         /IGNORE:4098  # Ignore default library conflicts
+    )
+elseif(MSVC)
+    # For dynamic builds, resolve runtime library conflicts
+    target_link_options(VideoEditor PRIVATE
+        /NODEFAULTLIB:LIBCMT     # Exclude static runtime library
+        /NODEFAULTLIB:LIBCMTD    # Exclude static debug runtime library
+        /NODEFAULTLIB:MSVCRTD    # Exclude dynamic debug runtime library (from vendor libs)
     )
 endif()
 
