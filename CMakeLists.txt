@@ -126,6 +126,19 @@ target_include_directories(VideoEditor PRIVATE
 if(MSVC AND USE_STATIC_FFMPEG)
     # Disable specific warnings for static build
     target_compile_options(VideoEditor PRIVATE /wd4996)
+    
+    # Fix runtime library conflicts with RNNoise and other static libraries
+    target_link_options(VideoEditor PRIVATE
+        /NODEFAULTLIB:MSVCRTD    # Exclude debug runtime library
+        /NODEFAULTLIB:MSVCRT     # Exclude release runtime library
+        /NODEFAULTLIB:libcmtd    # Exclude debug static runtime library (if not needed)
+    )
+    
+    # Suppress specific linker warnings for symbol conflicts
+    target_link_options(VideoEditor PRIVATE
+        /IGNORE:4286  # Ignore duplicate symbol warnings for C runtime functions
+        /IGNORE:4098  # Ignore default library conflicts
+    )
 endif()
 
 # ==== WINDOWS PLATFORM LIBS ====
@@ -159,6 +172,14 @@ target_link_libraries(VideoEditor PRIVATE
     VENDOR_LIBCURL
     VENDOR_ZLIB
 )
+
+# Force static runtime library linking for static builds
+if(MSVC AND USE_STATIC_FFMPEG)
+    target_link_libraries(VideoEditor PRIVATE
+        libcmt      # Static release runtime
+        libucrt     # Universal C runtime (static)
+    )
+endif()
 
 # ==== COPY FFmpeg DLLS (dynamic build) ====
 if(WIN32 AND NOT USE_STATIC_FFMPEG)
