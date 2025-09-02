@@ -452,8 +452,8 @@ void AudioPlayer::AudioThreadFunction() {
         }
 
         UINT64 targetWritten = static_cast<UINT64>((masterPts + 0.1) * m_player->audioSampleRate);
-        if (targetWritten < m_framesWritten)
-            targetWritten = m_framesWritten;
+        if (targetWritten < static_cast<UINT64>(m_framesWritten))
+            targetWritten = static_cast<UINT64>(m_framesWritten);
 
         UINT32 framesNeeded = static_cast<UINT32>(targetWritten - m_framesWritten);
 

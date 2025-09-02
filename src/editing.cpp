@@ -138,8 +138,8 @@ void OnCutClicked(HWND hwnd)
                 for (const auto& track : g_videoPlayer->audioTracks) {
                     if (track->isMuted) continue;
                     AVCodecParameters* par = g_videoPlayer->formatContext->streams[track->streamIndex]->codecpar;
-                    int br = par->bit_rate > 0 ? par->bit_rate : 128000;
-                    audioKbps += br / 1000;
+                    int64_t br = par->bit_rate > 0 ? par->bit_rate : 128000;
+                    audioKbps += static_cast<int>(br / 1000);
                 }
             }
             int totalKbps = static_cast<int>((targetSize * 8192) / duration);
@@ -242,8 +242,8 @@ void OnExportClicked(HWND hwnd)
                 for (const auto& track : g_videoPlayer->audioTracks) {
                     if (track->isMuted) continue;
                     AVCodecParameters* par = g_videoPlayer->formatContext->streams[track->streamIndex]->codecpar;
-                    int br = par->bit_rate > 0 ? par->bit_rate : 128000;
-                    audioKbps += br / 1000;
+                    int64_t br = par->bit_rate > 0 ? par->bit_rate : 128000;
+                    audioKbps += static_cast<int>(br / 1000);
                 }
             }
             int totalKbps = static_cast<int>((targetSize * 8192) / duration);

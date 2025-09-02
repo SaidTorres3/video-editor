@@ -330,7 +330,10 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                     it.encCtx = avcodec_alloc_context3(aEnc);
                     it.encCtx->sample_rate = 44100;
                     av_channel_layout_default(&it.encCtx->ch_layout, 2);
+#pragma warning(push)
+#pragma warning(disable: 4996) // Suppress deprecation warning for sample_fmts
                     it.encCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+#pragma warning(pop)
                     it.encCtx->time_base = {1, it.encCtx->sample_rate};
                     it.encCtx->bit_rate = 128000;
                     if (avcodec_open2(it.encCtx, aEnc, nullptr) < 0) {
@@ -450,7 +453,10 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         }
         aEncCtx->sample_rate = 44100;
         av_channel_layout_default(&aEncCtx->ch_layout, 2);
+#pragma warning(push)
+#pragma warning(disable: 4996) // Suppress deprecation warning for sample_fmts
         aEncCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+#pragma warning(pop)
         aEncCtx->time_base = {1, aEncCtx->sample_rate};
         aEncCtx->bit_rate = 128000; // match ffmpeg default
         if (avcodec_open2(aEncCtx, aEnc, nullptr) < 0) {
@@ -519,8 +525,11 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
     }
 
     AVPacket pkt, outPkt;
+#pragma warning(push)
+#pragma warning(disable: 4996) // Suppress deprecation warning for av_init_packet
     av_init_packet(&pkt);
     av_init_packet(&outPkt); // ensure fields are zeroed before use
+#pragma warning(pop)
     int64_t audioPts = 0;
     while (av_read_frame(inputCtx, &pkt) >= 0) {
         if (cancelFlag && *cancelFlag) { success = false; goto cleanup; }

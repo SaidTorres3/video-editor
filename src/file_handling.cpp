@@ -114,7 +114,7 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
                 for (const auto& track : g_videoPlayer->audioTracks)
                 {
                     AVStream* stream = g_videoPlayer->formatContext->streams[track->streamIndex];
-                    int br = stream->codecpar->bit_rate > 0 ? stream->codecpar->bit_rate : 128000;
+                    int64_t br = stream->codecpar->bit_rate > 0 ? stream->codecpar->bit_rate : 128000;
                     audioBitrate += br;
                 }
                 int64_t videoBitrate = containerBitRate - audioBitrate;

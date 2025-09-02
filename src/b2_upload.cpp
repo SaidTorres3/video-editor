@@ -86,8 +86,9 @@ bool UploadToB2(const std::wstring& filePath, std::string& outUrl, HWND progress
         return false;
     }
 
-    FILE* fp = _wfopen(filePath.c_str(), L"rb");
-    if (!fp) { curl_easy_cleanup(curl); return false; }
+    FILE* fp = nullptr;
+    errno_t err = _wfopen_s(&fp, filePath.c_str(), L"rb");
+    if (err != 0 || !fp) { curl_easy_cleanup(curl); return false; }
     fseek(fp, 0, SEEK_END);
     long fsz = ftell(fp);
     fseek(fp, 0, SEEK_SET);

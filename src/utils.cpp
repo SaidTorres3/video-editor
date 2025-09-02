@@ -33,9 +33,9 @@ double ParseTimeString(const std::wstring& str)
 {
     int h = 0, m = 0;
     double s = 0.0;
-    if (swscanf(str.c_str(), L"%d:%d:%lf", &h, &m, &s) == 3)
+    if (swscanf_s(str.c_str(), L"%d:%d:%lf", &h, &m, &s) == 3)
         return h * 3600 + m * 60 + s;
-    if (swscanf(str.c_str(), L"%d:%lf", &m, &s) == 2)
+    if (swscanf_s(str.c_str(), L"%d:%lf", &m, &s) == 2)
         return m * 60 + s;
     return -1.0;
 }
