@@ -138,6 +138,7 @@ public:
     WAVEFORMATEX *audioFormat;
     UINT32 bufferFrameCount;
     bool audioInitialized;
+    bool audioOutputIsFloat;
     
     // Audio threading
     std::thread audioThread;
