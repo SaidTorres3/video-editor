@@ -20,6 +20,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - Keyboard shortcuts for quick navigation (Left/Right arrows skip 5s, J/L skip 10s, K pauses, ',' and '.' step frames)
 - Frame-by-frame playback control
 - Hardware-accelerated rendering using Direct2D
+- DXVA2 hardware decoding for H.264, HEVC, VP9, and AV1 with automatic software fallback for stability
 
 ### Audio Playback
 

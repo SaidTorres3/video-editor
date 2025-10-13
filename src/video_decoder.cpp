@@ -17,11 +17,25 @@ bool VideoDecoder::Initialize() {
     const AVCodec *codec = nullptr;
     m_player->useHwAccel = false;
 
-    if (cp->codec_id == AV_CODEC_ID_H264)
+    // Try to use a hardware accelerated decoder when possible.
+    if (cp->codec_id == AV_CODEC_ID_H264 || cp->codec_id == AV_CODEC_ID_HEVC ||
+        cp->codec_id == AV_CODEC_ID_VP9  || cp->codec_id == AV_CODEC_ID_AV1)
     {
-        codec = avcodec_find_decoder_by_name("h264_dxva2");
-        if (codec)
-            m_player->useHwAccel = true;
+        const char* hwDecoder = nullptr;
+        switch (cp->codec_id)
+        {
+        case AV_CODEC_ID_H264: hwDecoder = "h264_dxva2"; break;
+        case AV_CODEC_ID_HEVC: hwDecoder = "hevc_dxva2"; break;
+        case AV_CODEC_ID_VP9:  hwDecoder = "vp9_dxva2";  break;
+        case AV_CODEC_ID_AV1:  hwDecoder = "av1_dxva2";  break;
+        default: break;
+        }
+        if (hwDecoder)
+        {
+            codec = avcodec_find_decoder_by_name(hwDecoder);
+            if (codec)
+                m_player->useHwAccel = true;
+        }
     }
     if (!codec)
         codec = avcodec_find_decoder(cp->codec_id);
@@ -50,7 +64,20 @@ bool VideoDecoder::Initialize() {
         return false;
     }
 
-    // Skip non-reference frames to decode faster at the cost of quality
+    // Configure threading and frame skipping conservatively to avoid stalls.
+    if (m_player->useHwAccel)
+    {
+        // Hardware decoders can freeze when frame-threaded; use a single slice thread.
+        m_player->codecContext->thread_count = 1;
+        m_player->codecContext->thread_type  = FF_THREAD_SLICE;
+    }
+    else
+    {
+        // Allow FFmpeg to choose an optimal thread count for software decoding.
+        m_player->codecContext->thread_count = 0; // auto
+        m_player->codecContext->thread_type  = FF_THREAD_SLICE;
+    }
+    // Skip non-reference frames to reduce workload and prevent freezes on heavy content.
     m_player->codecContext->skip_frame = AVDISCARD_NONREF;
 
     if (m_player->useHwAccel)
