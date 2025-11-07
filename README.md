@@ -123,8 +123,11 @@ The script will handle all dependencies automatically. You'll end up with a ligh
    pwsh .\run.ps1 -Static
 ```
 
-   The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
-   > **Important Note:** The static build does **not** support NVIDIA (NVENC) hardware encoding. Only software (CPU) encoding is available when using the `-Static` option.
+In case something like ```error LNK2001``` occurs during linking, delete the `build` folder and run the script again.
+
+The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
+
+> **Important Note:** The static build does **not** support NVIDIA (NVENC) hardware encoding. Only software (CPU) encoding is available when using the `-Static` option.
 
 ---
 
