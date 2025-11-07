@@ -507,8 +507,13 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
         UpdateCropForTime(currentPts);
     }
 
+    // For cursor-only seeks (decodeCount == 0), decode at least 1 frame to ensure
+    // we reach the proper position before playback starts. This prevents jumping to
+    // keyframes when play is pressed.
+    int framesToDecode = (decodeCount == 0) ? 1 : decodeCount;
+    
     // Decode frames after seeking so the display updates immediately
-    for (int i = 0; i < decodeCount; ++i)
+    for (int i = 0; i < framesToDecode; ++i)
     {
         if (!m_decoder->DecodeNextFrame(true))
             break;

@@ -17,6 +17,35 @@ extern bool g_wasPlayingBeforeDrag;
 enum class DragMode { None, Cursor, StartMarker, EndMarker };
 extern DragMode g_timelineDragMode;
 
+// Timeline zoom variables
+double g_timelineZoomLevel = 1.0;  // 1.0 = full video, 2.0 = 2x zoom, etc.
+double g_timelineScrollOffset = 0.0;  // Horizontal scroll offset in seconds
+
+// Helper function to convert pixel X coordinate to time, accounting for zoom and scroll
+inline double PixelToTime(int x, RECT &rc, double duration)
+{
+    if (rc.right <= 0 || duration <= 0)
+        return 0.0;
+    double ratio = x / (double)rc.right;
+    double timeRange = duration / g_timelineZoomLevel;
+    return g_timelineScrollOffset + (ratio * timeRange);
+}
+
+// Helper function to convert time to pixel X coordinate, accounting for zoom and scroll
+inline int TimeToPixel(double time, RECT &rc, double duration)
+{
+    if (duration <= 0 || g_timelineZoomLevel <= 0)
+        return 0;
+    if (time < g_timelineScrollOffset)
+        return -1000;
+    double relativeTime = time - g_timelineScrollOffset;
+    double timeRange = duration / g_timelineZoomLevel;
+    if (relativeTime > timeRange)
+        return rc.right + 1000;
+    double ratio = relativeTime / timeRange;
+    return (int)(ratio * rc.right);
+}
+
 LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -28,12 +57,11 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             RECT rc; GetClientRect(hwnd, &rc);
             int x = GET_X_LPARAM(lParam);
             if (x < 0) x = 0; if (x > rc.right) x = rc.right;
-            double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
             double dur = g_videoPlayer->GetDuration();
-            double seekTime = ratio * dur;
+            double seekTime = PixelToTime(x, rc, dur);
 
-            int startX = (g_cutStartTime >= 0 && dur > 0) ? (int)((g_cutStartTime / dur) * rc.right) : -1000;
-            int endX = (g_cutEndTime >= 0 && dur > 0) ? (int)((g_cutEndTime / dur) * rc.right) : -1000;
+            int startX = TimeToPixel(g_cutStartTime, rc, dur);
+            int endX = TimeToPixel(g_cutEndTime, rc, dur);
             int margin = 5;
             if (std::abs(x - startX) <= margin)
             {
@@ -53,7 +81,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     }
                     else
                     {
-                        g_videoPlayer->SeekToTime(seekTime);
+                        g_videoPlayer->SeekToTime(seekTime, 0);
                         InvalidateRect(hwnd, NULL, FALSE);
                         UpdateControls();
                         return 0;
@@ -63,7 +91,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
                 if (g_wasPlayingBeforeDrag)
                     g_videoPlayer->Pause();
-                g_videoPlayer->SeekToTime(seekTime);
+                g_videoPlayer->SeekToTime(seekTime, 0);
             }
 
             g_isTimelineDragging = true;
@@ -79,13 +107,12 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             RECT rc; GetClientRect(hwnd, &rc);
             int x = GET_X_LPARAM(lParam);
             if (x < 0) x = 0; if (x > rc.right) x = rc.right;
-            double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
             double dur = g_videoPlayer->GetDuration();
-            double seekTime = ratio * dur;
+            double seekTime = PixelToTime(x, rc, dur);
 
             if (g_timelineDragMode == DragMode::Cursor)
             {
-                g_videoPlayer->SeekToTime(seekTime);
+                g_videoPlayer->SeekToTime(seekTime, 0);
             }
             else if (g_timelineDragMode == DragMode::StartMarker)
             {
@@ -117,13 +144,12 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             RECT rc; GetClientRect(hwnd, &rc);
             int x = GET_X_LPARAM(lParam);
             if (x < 0) x = 0; if (x > rc.right) x = rc.right;
-            double ratio = rc.right > 0 ? (x / (double)rc.right) : 0.0;
             double dur = g_videoPlayer->GetDuration();
-            double seekTime = ratio * dur;
+            double seekTime = PixelToTime(x, rc, dur);
 
             if (g_timelineDragMode == DragMode::Cursor)
             {
-                g_videoPlayer->SeekToTime(seekTime);
+                g_videoPlayer->SeekToTime(seekTime, 0);
                 if (g_wasPlayingBeforeDrag)
                     g_videoPlayer->Play();
             }
@@ -165,7 +191,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     if (key.time < 0.0 || key.time > dur)
                         continue;
-                    int px = static_cast<int>((key.time / dur) * rc.right);
+                    int px = TimeToPixel(key.time, rc, dur);
                     if (std::abs(px - x) <= 6)
                     {
                         selectedTime = key.time;
@@ -195,6 +221,57 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
         }
         break;
+    case WM_MOUSEWHEEL:
+    {
+        if (g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+            RECT rc; GetClientRect(hwnd, &rc);
+            double dur = g_videoPlayer->GetDuration();
+            
+            // Get mouse position to zoom around that point
+            int x = GET_X_LPARAM(lParam);
+            POINT pt = { x, GET_Y_LPARAM(lParam) };
+            ScreenToClient(hwnd, &pt);
+            
+            // Calculate the time at the current mouse position before zoom
+            double timeAtMouse = PixelToTime(pt.x, rc, dur);
+            
+            // Adjust zoom level (1.0 = min, 10.0 = max)
+            double oldZoom = g_timelineZoomLevel;
+            if (wheelDelta > 0)
+            {
+                g_timelineZoomLevel *= 1.2;  // Zoom in
+                if (g_timelineZoomLevel > 10.0) g_timelineZoomLevel = 10.0;
+            }
+            else
+            {
+                g_timelineZoomLevel /= 1.2;  // Zoom out
+                if (g_timelineZoomLevel < 1.0) g_timelineZoomLevel = 1.0;
+            }
+            
+            // Adjust scroll offset to keep the same time under the mouse cursor
+            if (g_timelineZoomLevel > 1.0)
+            {
+                double timeRange = dur / g_timelineZoomLevel;
+                g_timelineScrollOffset = timeAtMouse - (pt.x / (double)rc.right) * timeRange;
+                
+                // Clamp scroll offset to valid range
+                double maxOffset = dur - timeRange;
+                if (g_timelineScrollOffset < 0) g_timelineScrollOffset = 0;
+                if (g_timelineScrollOffset > maxOffset) g_timelineScrollOffset = maxOffset;
+            }
+            else
+            {
+                g_timelineScrollOffset = 0.0;
+            }
+            
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateControls();
+            return 0;
+        }
+        break;
+    }
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
@@ -208,8 +285,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             double dur = g_videoPlayer->GetDuration();
             double cur = g_videoPlayer->GetCurrentTime();
-            int width = rc.right;
-            int x = (dur > 0) ? (int)((cur / dur) * width) : 0;
+            int x = TimeToPixel(cur, rc, dur);
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(200,0,0));
             HGDIOBJ old = SelectObject(hdc, pen);
             MoveToEx(hdc, x, 0, NULL);
@@ -219,7 +295,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             if (g_cutStartTime >= 0)
             {
-                int sx = (int)((g_cutStartTime / dur) * width);
+                int sx = TimeToPixel(g_cutStartTime, rc, dur);
                 pen = CreatePen(PS_SOLID, 1, RGB(0,200,0));
                 old = SelectObject(hdc, pen);
                 MoveToEx(hdc, sx, 0, NULL);
@@ -229,7 +305,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             if (g_cutEndTime >= 0)
             {
-                int ex = (int)((g_cutEndTime / dur) * width);
+                int ex = TimeToPixel(g_cutEndTime, rc, dur);
                 pen = CreatePen(PS_SOLID, 1, RGB(0,0,200));
                 old = SelectObject(hdc, pen);
                 MoveToEx(hdc, ex, 0, NULL);
@@ -251,28 +327,31 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     if (key.time < 0.0 || key.time > dur)
                         continue;
-                    int px = (int)((key.time / dur) * width);
-                    POINT pts[3] = {
-                        { px, 0 },
-                        { px - 4, 8 },
-                        { px + 4, 8 }
-                    };
-                    if (key.enabled)
+                    int px = TimeToPixel(key.time, rc, dur);
+                    if (px >= 0 && px < rc.right)  // Only draw if visible in zoomed view
                     {
-                        SelectObject(hdc, activePen);
-                        SelectObject(hdc, activeBrush);
-                        Polygon(hdc, pts, 3);
-                    }
-                    else
-                    {
-                        SelectObject(hdc, disabledPen);
-                        POINT outline[4] = {
+                        POINT pts[3] = {
                             { px, 0 },
                             { px - 4, 8 },
-                            { px + 4, 8 },
-                            { px, 0 }
+                            { px + 4, 8 }
                         };
-                        Polyline(hdc, outline, 4);
+                        if (key.enabled)
+                        {
+                            SelectObject(hdc, activePen);
+                            SelectObject(hdc, activeBrush);
+                            Polygon(hdc, pts, 3);
+                        }
+                        else
+                        {
+                            SelectObject(hdc, disabledPen);
+                            POINT outline[4] = {
+                                { px, 0 },
+                                { px - 4, 8 },
+                                { px + 4, 8 },
+                                { px, 0 }
+                            };
+                            Polyline(hdc, outline, 4);
+                        }
                     }
                 }
 
