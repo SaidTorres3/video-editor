@@ -60,39 +60,29 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             double dur = g_videoPlayer->GetDuration();
             double seekTime = PixelToTime(x, rc, dur);
 
-            int startX = TimeToPixel(g_cutStartTime, rc, dur);
-            int endX = TimeToPixel(g_cutEndTime, rc, dur);
-            int margin = 5;
-            if (std::abs(x - startX) <= margin)
+            // Disable moving start/end markers via mouse click/drag to prevent
+            // accidental adjustments. Treat clicks near markers the same as a
+            // regular cursor click so users must use the numeric inputs to
+            // adjust `g_cutStartTime` and `g_cutEndTime`.
+            if (g_videoPlayer->IsClipPreviewActive())
             {
-                g_timelineDragMode = DragMode::StartMarker;
-            }
-            else if (std::abs(x - endX) <= margin)
-            {
-                g_timelineDragMode = DragMode::EndMarker;
-            }
-            else
-            {
-                if (g_videoPlayer->IsClipPreviewActive())
+                if (seekTime < g_cutStartTime || seekTime > g_cutEndTime)
                 {
-                    if (seekTime < g_cutStartTime || seekTime > g_cutEndTime)
-                    {
-                        g_videoPlayer->CancelClipPreview();
-                    }
-                    else
-                    {
-                        g_videoPlayer->SeekToTime(seekTime, 0);
-                        InvalidateRect(hwnd, NULL, FALSE);
-                        UpdateControls();
-                        return 0;
-                    }
+                    g_videoPlayer->CancelClipPreview();
                 }
-                g_timelineDragMode = DragMode::Cursor;
-                g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
-                if (g_wasPlayingBeforeDrag)
-                    g_videoPlayer->Pause();
-                g_videoPlayer->SeekToTime(seekTime, 0);
+                else
+                {
+                    g_videoPlayer->SeekToTime(seekTime, 0);
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    UpdateControls();
+                    return 0;
+                }
             }
+            g_timelineDragMode = DragMode::Cursor;
+            g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
+            if (g_wasPlayingBeforeDrag)
+                g_videoPlayer->Pause();
+            g_videoPlayer->SeekToTime(seekTime, 0);
 
             g_isTimelineDragging = true;
             SetCapture(hwnd);
