@@ -107,9 +107,17 @@ public:
     double clipPreviewEndTime;
 
     // Crop selection
+    struct CropKeyframe {
+        double time;
+        RECT rect;
+        bool enabled;
+    };
     RECT cropRect;
-    std::vector<RECT> cropStack;
+    std::vector<CropKeyframe> cropTimeline;
     bool hasCrop;
+    int cropOutputWidth;
+    int cropOutputHeight;
+    mutable std::mutex cropMutex;
     bool selectingCrop;
     POINT cropStart;
     POINT cropCurrent;
@@ -199,6 +207,19 @@ public:
     int64_t GetCurrentFrame() const { return currentFrame; }
     int64_t GetTotalFrames() const { return totalFrames; }
 
+    // Crop timeline helpers
+    bool AddCropKeyframe(double time, RECT rect, double* actualTime = nullptr);
+    bool AddCropDisabledKeyframe(double time, double* actualTime = nullptr);
+    bool RemoveCropKeyframe(double time);
+    void ClearCropKeyframes();
+    bool UpdateCropForTime(double time);
+    bool HasAnyCrop() const;
+    bool GetCropRectForTime(double time, RECT &outRect) const;
+    std::vector<double> GetCropKeyframeTimes() const;
+    std::vector<CropKeyframe> GetCropKeyframes() const;
+    int GetCropOutputWidth() const { return cropOutputWidth; }
+    int GetCropOutputHeight() const { return cropOutputHeight; }
+
     void SetPosition(int x, int y, int width, int height);
     void Render();
 
@@ -224,4 +245,5 @@ private:
     void CreateVideoWindow();
     void PlaybackThreadFunction();
     static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    void RecomputeCropOutputDimensionsLocked();
 };

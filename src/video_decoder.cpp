@@ -100,6 +100,11 @@ bool VideoDecoder::Initialize() {
 
     m_player->frameWidth = m_player->codecContext->width;
     m_player->frameHeight = m_player->codecContext->height;
+    {
+        std::lock_guard<std::mutex> lock(m_player->cropMutex);
+        m_player->cropOutputWidth = m_player->frameWidth;
+        m_player->cropOutputHeight = m_player->frameHeight;
+    }
     m_player->frame = av_frame_alloc();
     m_player->frameRGB = av_frame_alloc();
     m_player->hwFrame = av_frame_alloc();
@@ -202,6 +207,7 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
                 if (m_player->currentPts < 0.0)
                     m_player->currentPts = 0.0;
                 m_player->currentFrame++;
+                bool cropChanged = m_player->UpdateCropForTime(m_player->currentPts);
                 sws_scale(
                     m_player->swsContext,
                     (uint8_t const *const *)swFrame->data, swFrame->linesize,
@@ -260,6 +266,9 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
 
                 if (presentFrame || scheduleDisplay)
                     UpdateTimeline();
+
+                if (cropChanged && !presentFrame && !scheduleDisplay)
+                    InvalidateRect(m_player->videoWindow, nullptr, FALSE);
 
                 return true;
             }

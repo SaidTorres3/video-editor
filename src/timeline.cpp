@@ -2,6 +2,7 @@
 #include "video_player.h"
 #include "ui_updates.h"
 #include <windowsx.h>
+#include <cmath>
 
 // Forward declarations
 void UpdateControls();
@@ -34,11 +35,11 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             int startX = (g_cutStartTime >= 0 && dur > 0) ? (int)((g_cutStartTime / dur) * rc.right) : -1000;
             int endX = (g_cutEndTime >= 0 && dur > 0) ? (int)((g_cutEndTime / dur) * rc.right) : -1000;
             int margin = 5;
-            if (abs(x - startX) <= margin)
+            if (std::abs(x - startX) <= margin)
             {
                 g_timelineDragMode = DragMode::StartMarker;
             }
-            else if (abs(x - endX) <= margin)
+            else if (std::abs(x - endX) <= margin)
             {
                 g_timelineDragMode = DragMode::EndMarker;
             }
@@ -149,6 +150,51 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         }
         break;
+    case WM_RBUTTONUP:
+        if (g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            RECT rc; GetClientRect(hwnd, &rc);
+            int x = GET_X_LPARAM(lParam);
+            if (x < 0) x = 0; if (x > rc.right) x = rc.right;
+            double dur = g_videoPlayer->GetDuration();
+            if (dur > 0.0 && rc.right > 0)
+            {
+                auto keys = g_videoPlayer->GetCropKeyframes();
+                double selectedTime = -1.0;
+                for (const auto& key : keys)
+                {
+                    if (key.time < 0.0 || key.time > dur)
+                        continue;
+                    int px = static_cast<int>((key.time / dur) * rc.right);
+                    if (std::abs(px - x) <= 6)
+                    {
+                        selectedTime = key.time;
+                        break;
+                    }
+                }
+
+                if (selectedTime >= 0.0)
+                {
+                    POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    ClientToScreen(hwnd, &pt);
+                    HMENU menu = CreatePopupMenu();
+                    AppendMenu(menu, MF_STRING, 1, L"Delete Keyframe");
+                    int cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, nullptr);
+                    DestroyMenu(menu);
+                    if (cmd == 1)
+                    {
+                        if (g_videoPlayer->RemoveCropKeyframe(selectedTime))
+                        {
+                            g_videoPlayer->UpdateCropForTime(g_videoPlayer->GetCurrentTime());
+                            UpdateControls();
+                            UpdateTimeline();
+                        }
+                    }
+                    return 0;
+                }
+            }
+        }
+        break;
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
@@ -190,6 +236,51 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 LineTo(hdc, ex, rc.bottom);
                 SelectObject(hdc, old);
                 DeleteObject(pen);
+            }
+
+            auto cropKeys = g_videoPlayer->GetCropKeyframes();
+            if (!cropKeys.empty())
+            {
+                HPEN activePen = CreatePen(PS_SOLID, 1, RGB(255,215,0));
+                HBRUSH activeBrush = CreateSolidBrush(RGB(255,215,0));
+                HPEN disabledPen = CreatePen(PS_SOLID, 1, RGB(180,180,180));
+                HGDIOBJ oldPen = SelectObject(hdc, activePen);
+                HGDIOBJ oldBrush = SelectObject(hdc, activeBrush);
+
+                for (const auto& key : cropKeys)
+                {
+                    if (key.time < 0.0 || key.time > dur)
+                        continue;
+                    int px = (int)((key.time / dur) * width);
+                    POINT pts[3] = {
+                        { px, 0 },
+                        { px - 4, 8 },
+                        { px + 4, 8 }
+                    };
+                    if (key.enabled)
+                    {
+                        SelectObject(hdc, activePen);
+                        SelectObject(hdc, activeBrush);
+                        Polygon(hdc, pts, 3);
+                    }
+                    else
+                    {
+                        SelectObject(hdc, disabledPen);
+                        POINT outline[4] = {
+                            { px, 0 },
+                            { px - 4, 8 },
+                            { px + 4, 8 },
+                            { px, 0 }
+                        };
+                        Polyline(hdc, outline, 4);
+                    }
+                }
+
+                SelectObject(hdc, oldPen);
+                SelectObject(hdc, oldBrush);
+                DeleteObject(activePen);
+                DeleteObject(activeBrush);
+                DeleteObject(disabledPen);
             }
         }
         EndPaint(hwnd, &ps);

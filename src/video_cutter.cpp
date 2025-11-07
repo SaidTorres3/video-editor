@@ -7,9 +7,43 @@
 #include <sstream>
 #include <commctrl.h>
 #include <libavutil/frame.h>
+#include <libavutil/mathematics.h>
+#include <libavutil/pixfmt.h>
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 
 #define RNNOISE_FRAME_SIZE 480
+
+namespace {
+
+void FillBlackYuv420(AVFrame* frame)
+{
+    if (!frame)
+        return;
+
+    if (frame->format != AV_PIX_FMT_YUV420P) {
+        for (int plane = 0; plane < AV_NUM_DATA_POINTERS && frame->data[plane]; ++plane) {
+            int height = plane == 0 ? frame->height : (frame->height + 1) / 2;
+            for (int y = 0; y < height; ++y) {
+                std::memset(frame->data[plane] + y * frame->linesize[plane], 0, frame->linesize[plane]);
+            }
+        }
+        return;
+    }
+
+    for (int y = 0; y < frame->height; ++y) {
+        std::memset(frame->data[0] + y * frame->linesize[0], 0, frame->linesize[0]);
+    }
+
+    int chromaHeight = (frame->height + 1) / 2;
+    for (int y = 0; y < chromaHeight; ++y) {
+        std::memset(frame->data[1] + y * frame->linesize[1], 128, frame->linesize[1]);
+        std::memset(frame->data[2] + y * frame->linesize[2], 128, frame->linesize[2]);
+    }
+}
+
+}
 
 VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player) {}
 
@@ -71,12 +105,17 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
     // When re-encoding or merging audio we need to set up decoder/encoder
     // contexts. The previous implementation only supported stream copying.
     // Build encoder state on demand.
-    if (m_player->hasCrop)
+    bool timelineHasCrop = m_player->HasAnyCrop();
+    if (timelineHasCrop)
         convertH264 = true;
     bool success = true;
     AVCodecContext* vEncCtx = nullptr;
     AVCodecContext* vDecCtx = nullptr;
     SwsContext*     swsCtx  = nullptr;
+    int             swsInWidth = 0;
+    int             swsInHeight = 0;
+    int             swsOutWidth = 0;
+    int             swsOutHeight = 0;
     AVFrame*        encFrame = nullptr;
     AVFrame*        decFrame = nullptr;
 
@@ -178,10 +217,10 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             outStream = avformat_new_stream(outputCtx, vEnc);
             vEncCtx = avcodec_alloc_context3(vEnc);
             vEncCtx->codec_id = AV_CODEC_ID_H264;
-            int outW = m_player->hasCrop ? (m_player->cropRect.right - m_player->cropRect.left)
-                                         : inStream->codecpar->width;
-            int outH = m_player->hasCrop ? (m_player->cropRect.bottom - m_player->cropRect.top)
-                                         : inStream->codecpar->height;
+            int outW = timelineHasCrop ? m_player->GetCropOutputWidth()
+                                       : inStream->codecpar->width;
+            int outH = timelineHasCrop ? m_player->GetCropOutputHeight()
+                                       : inStream->codecpar->height;
             vEncCtx->width = outW;
             vEncCtx->height = outH;
             vEncCtx->time_base = inStream->time_base;
@@ -542,17 +581,48 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         if (convertH264 && pkt.stream_index == m_player->videoStreamIndex) {
             avcodec_send_packet(vDecCtx, &pkt);
             while (avcodec_receive_frame(vDecCtx, decFrame) == 0) {
-                if (m_player->hasCrop) {
-                    decFrame->crop_left = m_player->cropRect.left;
-                    decFrame->crop_top = m_player->cropRect.top;
-                    decFrame->crop_right = vDecCtx->width - m_player->cropRect.right;
-                    decFrame->crop_bottom = vDecCtx->height - m_player->cropRect.bottom;
-                    av_frame_apply_cropping(decFrame, 0);
+                if (timelineHasCrop)
+                {
+                    double rawTime = 0.0;
+                    if (decFrame->best_effort_timestamp != AV_NOPTS_VALUE)
+                        rawTime = decFrame->best_effort_timestamp * av_q2d(inStream->time_base);
+                    else if (decFrame->pts != AV_NOPTS_VALUE)
+                        rawTime = decFrame->pts * av_q2d(inStream->time_base);
+                    else
+                        rawTime = pktPtsUs / (double)AV_TIME_BASE;
+
+                    double frameTime = rawTime - m_player->startTimeOffset;
+                    if (frameTime < 0.0)
+                        frameTime = 0.0;
+
+                    RECT frameCrop;
+                    bool haveCrop = m_player->GetCropRectForTime(frameTime, frameCrop);
+                    if (haveCrop)
+                    {
+                        decFrame->crop_left = frameCrop.left;
+                        decFrame->crop_top = frameCrop.top;
+                        decFrame->crop_right = vDecCtx->width - frameCrop.right;
+                        decFrame->crop_bottom = vDecCtx->height - frameCrop.bottom;
+                        av_frame_apply_cropping(decFrame, 0);
+                    }
                 }
-                if (!swsCtx) {
+                double widthScale = static_cast<double>(vEncCtx->width) / std::max(1, decFrame->width);
+                double heightScale = static_cast<double>(vEncCtx->height) / std::max(1, decFrame->height);
+                double scale = std::min(widthScale, heightScale);
+                int scaledWidth = std::max(1, static_cast<int>(std::lround(decFrame->width * scale)));
+                int scaledHeight = std::max(1, static_cast<int>(std::lround(decFrame->height * scale)));
+                if (scaledWidth > vEncCtx->width)
+                    scaledWidth = vEncCtx->width;
+                if (scaledHeight > vEncCtx->height)
+                    scaledHeight = vEncCtx->height;
+
+                if (!swsCtx || decFrame->width != swsInWidth || decFrame->height != swsInHeight ||
+                    scaledWidth != swsOutWidth || scaledHeight != swsOutHeight) {
+                    if (swsCtx)
+                        sws_freeContext(swsCtx);
                     swsCtx = sws_getContext(decFrame->width, decFrame->height,
                                             (AVPixelFormat)decFrame->format,
-                                            vEncCtx->width, vEncCtx->height,
+                                            scaledWidth, scaledHeight,
                                             vEncCtx->pix_fmt, SWS_BILINEAR,
                                             nullptr, nullptr, nullptr);
                     if (!swsCtx) {
@@ -561,8 +631,34 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                         success = false;
                         goto cleanup;
                     }
+                    swsInWidth = decFrame->width;
+                    swsInHeight = decFrame->height;
+                    swsOutWidth = scaledWidth;
+                    swsOutHeight = scaledHeight;
                 }
-                sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, decFrame->height, encFrame->data, encFrame->linesize);
+
+                if (av_frame_make_writable(encFrame) < 0) {
+                    DebugLog("Failed to make encoder frame writable", true);
+                    av_packet_unref(&pkt);
+                    success = false;
+                    goto cleanup;
+                }
+
+                FillBlackYuv420(encFrame);
+
+                int offsetX = (vEncCtx->width - scaledWidth) / 2;
+                int offsetY = (vEncCtx->height - scaledHeight) / 2;
+                uint8_t* dstData[4] = { encFrame->data[0], encFrame->data[1], encFrame->data[2], encFrame->data[3] };
+                int dstLinesize[4] = { encFrame->linesize[0], encFrame->linesize[1], encFrame->linesize[2], encFrame->linesize[3] };
+                dstData[0] += offsetY * dstLinesize[0] + offsetX;
+                int chromaOffsetX = offsetX / 2;
+                int chromaOffsetY = offsetY / 2;
+                if (dstData[1])
+                    dstData[1] += chromaOffsetY * dstLinesize[1] + chromaOffsetX;
+                if (dstData[2])
+                    dstData[2] += chromaOffsetY * dstLinesize[2] + chromaOffsetX;
+
+                sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, decFrame->height, dstData, dstLinesize);
                 encFrame->pts = av_rescale_q(decFrame->pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, vEncCtx->time_base);
                 avcodec_send_frame(vEncCtx, encFrame);
                 while (avcodec_receive_packet(vEncCtx, &outPkt) == 0) {

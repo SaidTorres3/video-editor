@@ -12,10 +12,13 @@
 #pragma comment(lib, "d2d1.lib")
 #include <uxtheme.h>
 #include <algorithm>
+#include <cmath>
+#include <iterator>
 #include <cstring>
 #include <chrono>
 
 void UpdateControls();
+void UpdateTimeline();
 
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
@@ -25,7 +28,8 @@ VideoPlayer::VideoPlayer(HWND parent)
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
       clipPreviewActive(false), clipPreviewEndTime(0.0),
-      cropRect{0,0,0,0}, hasCrop(false), selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
+      cropRect{0,0,0,0}, cropTimeline(), hasCrop(false), cropOutputWidth(0), cropOutputHeight(0),
+      selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
       videoWindow(nullptr),
       d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
@@ -207,9 +211,7 @@ void VideoPlayer::UnloadVideo()
     duration = 0.0;
     frameWidth = 0;
     frameHeight = 0;
-    cropRect = {0,0,0,0};
-    cropStack.clear();
-    hasCrop = false;
+    ClearCropKeyframes();
     frameCache.clear();
 }
 
@@ -331,6 +333,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
                 std::copy(lower->pixels.begin(), lower->pixels.end(), buffer);
                 currentFrame = frameNumber;
                 currentPts = lower->pts;
+                UpdateCropForTime(currentPts);
                 m_renderer->UpdateDisplay();
                 UpdateTimeline();
                 return;
@@ -392,6 +395,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
                 // Update the current position estimation
                 currentPts = seekTime;
                 currentFrame = static_cast<int64_t>(currentPts * frameRate);
+                UpdateCropForTime(currentPts);
             }
             
             // Decode frames until we reach our target frame
@@ -411,14 +415,15 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
                 bool found = false;
                 for (auto it = frameCache.rbegin(); it != frameCache.rend(); ++it)
                 {
-                    if (it->number == f)
-                    {
-                        std::copy(it->pixels.begin(), it->pixels.end(), buffer);
-                        currentFrame = f;
-                        currentPts = it->pts;
-                        found = true;
-                        break;
-                    }
+                        if (it->number == f)
+                        {
+                            std::copy(it->pixels.begin(), it->pixels.end(), buffer);
+                            currentFrame = f;
+                            currentPts = it->pts;
+                            UpdateCropForTime(currentPts);
+                            found = true;
+                            break;
+                        }
                 }
                 
                 if (!found)
@@ -487,7 +492,7 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
         // Estimate the frame and PTS we landed on using the stream index
         const AVIndexEntry *entry =
             avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
-    if (entry)
+        if (entry)
         {
             int64_t keyTs = entry->timestamp;
             double keyTime = keyTs * av_q2d(vs->time_base) - startTimeOffset;
@@ -499,6 +504,7 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
             currentPts = seconds;
             currentFrame = (int64_t)(seconds * frameRate);
         }
+        UpdateCropForTime(currentPts);
     }
 
     // Decode frames after seeking so the display updates immediately
@@ -529,6 +535,307 @@ void VideoPlayer::SetPosition(int x, int y, int width, int height)
 void VideoPlayer::Render()
 {
     m_renderer->Render();
+}
+
+namespace
+{
+    constexpr double kCropTimeEpsilon = 0.02;
+    constexpr LONG kFullFrameTolerance = 2;
+
+    inline bool RectEquals(const RECT& a, const RECT& b)
+    {
+        return a.left == b.left && a.top == b.top &&
+               a.right == b.right && a.bottom == b.bottom;
+    }
+
+    inline bool KeyframeHasCrop(const VideoPlayer::CropKeyframe& key,
+                                int frameWidth, int frameHeight)
+    {
+        if (!key.enabled)
+            return false;
+
+        LONG width = key.rect.right - key.rect.left;
+        LONG height = key.rect.bottom - key.rect.top;
+
+        if (width >= static_cast<LONG>(frameWidth) - kFullFrameTolerance &&
+            height >= static_cast<LONG>(frameHeight) - kFullFrameTolerance)
+            return false;
+
+        return width > 0 && height > 0 &&
+               (width < frameWidth || height < frameHeight);
+    }
+
+    inline LONG MakeEvenFloor(LONG value)
+    {
+        return value & ~1L;
+    }
+
+    inline LONG MakeEvenCeil(LONG value)
+    {
+        return (value + 1L) & ~1L;
+    }
+}
+
+void VideoPlayer::ClearCropKeyframes()
+{
+    std::lock_guard<std::mutex> lock(cropMutex);
+    cropTimeline.clear();
+    RecomputeCropOutputDimensionsLocked();
+    cropRect = {0, 0, 0, 0};
+    hasCrop = false;
+}
+
+bool VideoPlayer::HasAnyCrop() const
+{
+    std::lock_guard<std::mutex> lock(cropMutex);
+    if (frameWidth <= 0 || frameHeight <= 0)
+        return false;
+    for (const auto& key : cropTimeline)
+    {
+        if (KeyframeHasCrop(key, frameWidth, frameHeight))
+            return true;
+    }
+    return false;
+}
+
+std::vector<double> VideoPlayer::GetCropKeyframeTimes() const
+{
+    std::lock_guard<std::mutex> lock(cropMutex);
+    std::vector<double> times;
+    times.reserve(cropTimeline.size());
+    for (const auto& key : cropTimeline)
+    {
+        if (!key.enabled)
+            continue;
+        LONG width = key.rect.right - key.rect.left;
+        LONG height = key.rect.bottom - key.rect.top;
+        if (width > 0 && height > 0)
+            times.push_back(key.time);
+    }
+    return times;
+}
+
+std::vector<VideoPlayer::CropKeyframe> VideoPlayer::GetCropKeyframes() const
+{
+    std::lock_guard<std::mutex> lock(cropMutex);
+    return cropTimeline;
+}
+
+void VideoPlayer::RecomputeCropOutputDimensionsLocked()
+{
+    if (frameWidth <= 0 || frameHeight <= 0)
+    {
+        cropOutputWidth = 0;
+        cropOutputHeight = 0;
+        return;
+    }
+
+    // Always preserve the original canvas size for export. Zooming should
+    // enlarge the selected region rather than shrinking the output video.
+    cropOutputWidth = frameWidth;
+    cropOutputHeight = frameHeight;
+}
+
+bool VideoPlayer::GetCropRectForTime(double time, RECT &outRect) const
+{
+    std::lock_guard<std::mutex> lock(cropMutex);
+
+    double clampedTime = time;
+    if (duration > 0.0)
+        clampedTime = std::clamp(clampedTime, 0.0, duration);
+
+    const CropKeyframe* result = nullptr;
+    for (const auto& key : cropTimeline)
+    {
+        if (key.time <= clampedTime + kCropTimeEpsilon)
+            result = &key;
+        else
+            break;
+    }
+
+    if (!result || !result->enabled)
+        return false;
+
+    outRect = result->rect;
+    LONG width = outRect.right - outRect.left;
+    LONG height = outRect.bottom - outRect.top;
+    return width > 0 && height > 0 &&
+           (width < frameWidth || height < frameHeight);
+}
+
+bool VideoPlayer::UpdateCropForTime(double time)
+{
+    RECT rect;
+    bool active = GetCropRectForTime(time, rect);
+
+    if (!active)
+    {
+        RECT empty{0, 0, 0, 0};
+        bool changed = hasCrop || !RectEquals(cropRect, empty);
+        cropRect = empty;
+        hasCrop = false;
+        return changed;
+    }
+
+    if (!hasCrop || !RectEquals(cropRect, rect))
+    {
+        cropRect = rect;
+        hasCrop = true;
+        return true;
+    }
+    return false;
+}
+
+bool VideoPlayer::AddCropKeyframe(double time, RECT rect, double* actualTime)
+{
+    if (!isLoaded || frameWidth <= 0 || frameHeight <= 0)
+        return false;
+
+    RECT normalized = rect;
+    if (normalized.left > normalized.right)
+        std::swap(normalized.left, normalized.right);
+    if (normalized.top > normalized.bottom)
+        std::swap(normalized.top, normalized.bottom);
+
+    normalized.left = std::clamp<LONG>(normalized.left, 0, static_cast<LONG>(frameWidth));
+    normalized.top = std::clamp<LONG>(normalized.top, 0, static_cast<LONG>(frameHeight));
+    normalized.right = std::clamp<LONG>(normalized.right, 0, static_cast<LONG>(frameWidth));
+    normalized.bottom = std::clamp<LONG>(normalized.bottom, 0, static_cast<LONG>(frameHeight));
+
+    double clampedTime = time;
+    if (duration > 0.0)
+        clampedTime = std::clamp(clampedTime, 0.0, duration);
+
+    std::lock_guard<std::mutex> lock(cropMutex);
+
+    normalized.left = MakeEvenFloor(normalized.left);
+    normalized.top = MakeEvenFloor(normalized.top);
+    normalized.right = MakeEvenCeil(normalized.right);
+    normalized.bottom = MakeEvenCeil(normalized.bottom);
+
+    if (normalized.left < 0)
+        normalized.left = 0;
+    if (normalized.top < 0)
+        normalized.top = 0;
+    LONG maxRight = MakeEvenFloor(static_cast<LONG>(frameWidth));
+    LONG maxBottom = MakeEvenFloor(static_cast<LONG>(frameHeight));
+
+    if (normalized.right > frameWidth)
+        normalized.right = maxRight;
+    if (normalized.bottom > frameHeight)
+        normalized.bottom = maxBottom;
+
+    if (normalized.right <= normalized.left + 1 ||
+        normalized.bottom <= normalized.top + 1)
+        return false;
+
+    LONG width = normalized.right - normalized.left;
+    LONG height = normalized.bottom - normalized.top;
+
+    if (width % 2 != 0)
+    {
+        --width;
+        normalized.right = normalized.left + width;
+    }
+    if (height % 2 != 0)
+    {
+        --height;
+        normalized.bottom = normalized.top + height;
+    }
+
+    bool isFullFrame = (normalized.left <= kFullFrameTolerance && normalized.top <= kFullFrameTolerance &&
+                        normalized.right >= maxRight - kFullFrameTolerance &&
+                        normalized.bottom >= maxBottom - kFullFrameTolerance);
+
+    auto it = std::lower_bound(
+        cropTimeline.begin(), cropTimeline.end(), clampedTime,
+        [](const CropKeyframe& entry, double value)
+        {
+            return entry.time < value;
+        });
+
+    if (isFullFrame)
+    {
+        CropKeyframe disabled{ clampedTime, RECT{0, 0, 0, 0}, false };
+        if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < kCropTimeEpsilon)
+            *it = disabled;
+        else
+            cropTimeline.insert(it, disabled);
+
+        RecomputeCropOutputDimensionsLocked();
+        if (actualTime)
+            *actualTime = clampedTime;
+        return true;
+    }
+
+    CropKeyframe key{ clampedTime, normalized, true };
+
+    if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < kCropTimeEpsilon)
+        *it = key;
+    else
+        cropTimeline.insert(it, key);
+
+    RecomputeCropOutputDimensionsLocked();
+    if (actualTime)
+        *actualTime = clampedTime;
+    return true;
+}
+
+bool VideoPlayer::AddCropDisabledKeyframe(double time, double* actualTime)
+{
+    if (!isLoaded)
+        return false;
+
+    double clampedTime = time;
+    if (duration > 0.0)
+        clampedTime = std::clamp(clampedTime, 0.0, duration);
+
+    std::lock_guard<std::mutex> lock(cropMutex);
+
+    CropKeyframe key{ clampedTime, RECT{0, 0, 0, 0}, false };
+    auto it = std::lower_bound(
+        cropTimeline.begin(), cropTimeline.end(), clampedTime,
+        [](const CropKeyframe& entry, double value)
+        {
+            return entry.time < value;
+        });
+
+    if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < kCropTimeEpsilon)
+        *it = key;
+    else
+        cropTimeline.insert(it, key);
+
+    RecomputeCropOutputDimensionsLocked();
+    if (actualTime)
+        *actualTime = clampedTime;
+    return true;
+}
+
+bool VideoPlayer::RemoveCropKeyframe(double time)
+{
+    std::lock_guard<std::mutex> lock(cropMutex);
+    if (cropTimeline.empty())
+        return false;
+
+    double clampedTime = time;
+    if (duration > 0.0)
+        clampedTime = std::clamp(clampedTime, 0.0, duration);
+
+    auto best = cropTimeline.end();
+    for (auto it = cropTimeline.begin(); it != cropTimeline.end(); ++it)
+    {
+        if (it->time <= clampedTime + kCropTimeEpsilon)
+            best = it;
+        else
+            break;
+    }
+
+    if (best == cropTimeline.end())
+        best = std::prev(cropTimeline.end());
+
+    cropTimeline.erase(best);
+    RecomputeCropOutputDimensionsLocked();
+    return true;
 }
 
 void CALLBACK VideoPlayer::TimerProc(HWND hwnd, UINT, UINT_PTR, DWORD)
@@ -791,9 +1098,27 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
             float wndW = (float)(client.right - client.left);
             float wndH = (float)(client.bottom - client.top);
 
-            RECT base = player->hasCrop ? player->cropRect : RECT{0,0,player->frameWidth, player->frameHeight};
+            RECT base;
+            if (player->hasCrop)
+                base = player->cropRect;
+            else
+            {
+                base.left = 0;
+                base.top = 0;
+                base.right = player->frameWidth;
+                base.bottom = player->frameHeight;
+            }
             float baseW = (float)(base.right - base.left);
             float baseH = (float)(base.bottom - base.top);
+
+            if (baseW <= 0.0f || baseH <= 0.0f)
+            {
+                InvalidateRect(hwnd, nullptr, FALSE);
+                UpdateControls();
+                player->UpdateCropForTime(player->GetCurrentTime());
+                UpdateTimeline();
+                return 0;
+            }
 
             float videoAspect = baseW / baseH;
             float targetAspect = wndW / wndH;
@@ -820,44 +1145,56 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
                 newRect.right = base.left + (LONG)(x2 / drawW * baseW);
                 newRect.bottom = base.top + (LONG)(y2 / drawH * baseH);
 
-                // Ensure cropping dimensions are even so the H.264 encoder can open
-                auto make_even_floor = [](LONG v) { return v & ~1; };
-                auto make_even_ceil  = [](LONG v) { return (v + 1) & ~1; };
-                newRect.left = std::max<LONG>(base.left, make_even_floor(newRect.left));
-                newRect.top = std::max<LONG>(base.top, make_even_floor(newRect.top));
-                newRect.right = std::min<LONG>(base.right, make_even_ceil(newRect.right));
-                newRect.bottom = std::min<LONG>(base.bottom, make_even_ceil(newRect.bottom));
-
                 if (newRect.right > newRect.left &&
                     newRect.bottom > newRect.top) {
-                    player->cropStack.push_back(newRect);
-                    player->cropRect = newRect;
-                    player->hasCrop = true;
+                    double selectionTime = player->GetCurrentTime();
+                    if (player->duration > 0.0)
+                        selectionTime = std::clamp(selectionTime, 0.0, player->duration);
+                    double appliedTime = selectionTime;
+                    bool inserted = player->AddCropKeyframe(selectionTime, newRect, &appliedTime);
+                    player->UpdateCropForTime(inserted ? appliedTime : selectionTime);
                 }
             }
             InvalidateRect(hwnd, nullptr, FALSE);
             UpdateControls();
+            UpdateTimeline();
             return 0;
         }
         else if (msg == WM_RBUTTONUP)
         {
-            if (!player->cropStack.empty())
+            if (!player->isLoaded)
+                return 0;
+
+            double currentTime = player->GetCurrentTime();
+            double clampedTime = currentTime;
+            if (player->duration > 0.0)
+                clampedTime = std::clamp(clampedTime, 0.0, player->duration);
+
+            auto keyframes = player->GetCropKeyframes();
+            bool hasCurrent = false;
+
+            for (const auto& key : keyframes)
             {
-                player->cropStack.pop_back();
-                if (!player->cropStack.empty()) {
-                    player->cropRect = player->cropStack.back();
-                    player->hasCrop = true;
-                } else {
-                    player->cropRect = {0,0,0,0};
-                    player->hasCrop = false;
+                if (key.time <= clampedTime + kCropTimeEpsilon)
+                    hasCurrent = true;
+                else
+                {
+                    break;
                 }
-                InvalidateRect(hwnd, nullptr, FALSE);
-                UpdateControls();
             }
-            else
+
+            if (!hasCurrent)
             {
                 MessageBox(hwnd, L"Drag with the left mouse button to select a crop region. Right-click steps back one crop.", L"Crop", MB_OK);
+                return 0;
             }
+
+            double appliedTime = clampedTime;
+            bool inserted = player->AddCropDisabledKeyframe(clampedTime, &appliedTime);
+            player->UpdateCropForTime(inserted ? appliedTime : clampedTime);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            UpdateControls();
+            UpdateTimeline();
             return 0;
         }
         return CallWindowProc(player->originalVideoWndProc, hwnd, msg, wParam, lParam);
