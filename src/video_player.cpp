@@ -522,6 +522,25 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
     }
 }
 
+void VideoPlayer::SeekToTimeExact(double seconds)
+{
+    if (!isLoaded)
+        return;
+
+    // Seek to the target time
+    SeekToTime(seconds, 0);
+    
+    // After seeking and decoding a frame, the actual PTS might differ from the target.
+    // For keyframe editing, we want to be exactly at the keyframe time.
+    // Lock and directly set currentPts to the requested time to ensure exact positioning.
+    {
+        std::lock_guard<std::mutex> lock(decodeMutex);
+        currentPts = seconds;
+        currentFrame = frameRate > 0 ? static_cast<int64_t>(seconds * frameRate) : 0;
+        UpdateCropForTime(currentPts);
+    }
+}
+
 double VideoPlayer::GetDuration() const
 {
     return isLoaded ? duration : 0.0;

@@ -201,6 +201,7 @@ public:
 
     void SeekToFrame(int64_t frameNumber);
     void SeekToTime(double seconds, int decodeCount = 3);
+    void SeekToTimeExact(double seconds);  // Seek to exact timestamp for keyframe editing
 
     double GetDuration() const;
     double GetCurrentTime() const;

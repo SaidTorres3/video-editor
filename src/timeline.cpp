@@ -194,11 +194,21 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                     ClientToScreen(hwnd, &pt);
                     HMENU menu = CreatePopupMenu();
-                    AppendMenu(menu, MF_STRING, 1, L"Delete Keyframe");
+                    AppendMenu(menu, MF_STRING, 1, L"Edit Keyframe");
+                    AppendMenu(menu, MF_STRING, 2, L"Delete Keyframe");
                     int cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, nullptr);
                     DestroyMenu(menu);
                     if (cmd == 1)
                     {
+                        // Edit Keyframe: seek to the exact keyframe timestamp
+                        g_videoPlayer->SeekToTimeExact(selectedTime);
+                        InvalidateRect(hwnd, NULL, FALSE);
+                        UpdateControls();
+                        UpdateTimeline();
+                    }
+                    else if (cmd == 2)
+                    {
+                        // Delete Keyframe
                         if (g_videoPlayer->RemoveCropKeyframe(selectedTime))
                         {
                             g_videoPlayer->UpdateCropForTime(g_videoPlayer->GetCurrentTime());
