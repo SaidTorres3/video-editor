@@ -234,15 +234,27 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             POINT pt = { x, GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd, &pt);
             
-            // Calculate the time at the current mouse position before zoom
-            double timeAtMouse = PixelToTime(pt.x, rc, dur);
+            // Determine zoom anchor: if cursor is very near start/end, anchor to that boundary
+            double zoomAnchorPixel = pt.x;
+            const double EDGE_THRESHOLD = 0.1;  // 10% of timeline width
+            if (pt.x < rc.right * EDGE_THRESHOLD)
+            {
+                zoomAnchorPixel = 0.0;  // Anchor to start
+            }
+            else if (pt.x > rc.right * (1.0 - EDGE_THRESHOLD))
+            {
+                zoomAnchorPixel = rc.right;  // Anchor to end
+            }
             
-            // Adjust zoom level (1.0 = min, 10.0 = max)
+            // Calculate the time at the anchor point before zoom
+            double timeAtAnchor = PixelToTime((int)zoomAnchorPixel, rc, dur);
+            
+            // Adjust zoom level (1.0 = min, 500.0 = max for deep zooming)
             double oldZoom = g_timelineZoomLevel;
             if (wheelDelta > 0)
             {
                 g_timelineZoomLevel *= 1.2;  // Zoom in
-                if (g_timelineZoomLevel > 10.0) g_timelineZoomLevel = 10.0;
+                if (g_timelineZoomLevel > 500.0) g_timelineZoomLevel = 500.0;
             }
             else
             {
@@ -250,11 +262,11 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 if (g_timelineZoomLevel < 1.0) g_timelineZoomLevel = 1.0;
             }
             
-            // Adjust scroll offset to keep the same time under the mouse cursor
+            // Adjust scroll offset to keep the same time at the anchor point
             if (g_timelineZoomLevel > 1.0)
             {
                 double timeRange = dur / g_timelineZoomLevel;
-                g_timelineScrollOffset = timeAtMouse - (pt.x / (double)rc.right) * timeRange;
+                g_timelineScrollOffset = timeAtAnchor - (zoomAnchorPixel / (double)rc.right) * timeRange;
                 
                 // Clamp scroll offset to valid range
                 double maxOffset = dur - timeRange;
