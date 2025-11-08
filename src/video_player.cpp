@@ -1196,11 +1196,15 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
 
             auto keyframes = player->GetCropKeyframes();
             bool hasCurrent = false;
+            int currentKeyframeIndex = -1;
 
-            for (const auto& key : keyframes)
+            for (size_t i = 0; i < keyframes.size(); ++i)
             {
-                if (key.time <= clampedTime + kCropTimeEpsilon)
+                if (keyframes[i].time <= clampedTime + kCropTimeEpsilon)
+                {
                     hasCurrent = true;
+                    currentKeyframeIndex = i;
+                }
                 else
                 {
                     break;
@@ -1213,9 +1217,31 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
                 return 0;
             }
 
-            double appliedTime = clampedTime;
-            bool inserted = player->AddCropDisabledKeyframe(clampedTime, &appliedTime);
-            player->UpdateCropForTime(inserted ? appliedTime : clampedTime);
+            // Hierarchical undo: first try to restore to previous keyframe state
+            bool foundPreviousEnabled = false;
+            if (currentKeyframeIndex > 0)
+            {
+                // Check if there's a previous enabled keyframe
+                for (int i = currentKeyframeIndex - 1; i >= 0; --i)
+                {
+                    if (keyframes[i].enabled)
+                    {
+                        // Found a previous enabled keyframe, remove the current one to restore to that state
+                        player->RemoveCropKeyframe(clampedTime);
+                        foundPreviousEnabled = true;
+                        break;
+                    }
+                }
+            }
+
+            // If no previous enabled keyframe, add a disabled keyframe to remove all crop
+            if (!foundPreviousEnabled)
+            {
+                double appliedTime = clampedTime;
+                player->AddCropDisabledKeyframe(clampedTime, &appliedTime);
+            }
+
+            player->UpdateCropForTime(clampedTime);
             InvalidateRect(hwnd, nullptr, FALSE);
             UpdateControls();
             UpdateTimeline();
