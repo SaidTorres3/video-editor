@@ -21,6 +21,12 @@ extern DragMode g_timelineDragMode;
 double g_timelineZoomLevel = 1.0;  // 1.0 = full video, 2.0 = 2x zoom, etc.
 double g_timelineScrollOffset = 0.0;  // Horizontal scroll offset in seconds
 
+// Timeline scroll arrow state
+enum class ScrollArrowState { None, LeftArrow, RightArrow };
+ScrollArrowState g_scrollArrowPressed = ScrollArrowState::None;
+const int SCROLL_ARROW_TIMER_ID = 1001;
+const int SCROLL_ARROW_TIMER_INTERVAL = 50;  // milliseconds
+
 // Helper function to convert pixel X coordinate to time, accounting for zoom and scroll
 inline double PixelToTime(int x, RECT &rc, double duration)
 {
@@ -56,6 +62,42 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SetFocus(hwnd);
             RECT rc; GetClientRect(hwnd, &rc);
             int x = GET_X_LPARAM(lParam);
+            
+            // Check if clicking on scroll arrows (only show when zoomed in)
+            const int ARROW_WIDTH = 20;
+            if (g_timelineZoomLevel > 1.0)
+            {
+                // Left arrow click
+                if (x < ARROW_WIDTH && g_timelineScrollOffset > 0)
+                {
+                    g_scrollArrowPressed = ScrollArrowState::LeftArrow;
+                    SetCapture(hwnd);
+                    SetTimer(hwnd, SCROLL_ARROW_TIMER_ID, SCROLL_ARROW_TIMER_INTERVAL, NULL);
+                    double dur = g_videoPlayer->GetDuration();
+                    double timeRange = dur / g_timelineZoomLevel;
+                    g_timelineScrollOffset -= timeRange * 0.1;  // Scroll left by 10%
+                    if (g_timelineScrollOffset < 0) g_timelineScrollOffset = 0;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    UpdateControls();
+                    return 0;
+                }
+                // Right arrow click
+                if (x > rc.right - ARROW_WIDTH)
+                {
+                    g_scrollArrowPressed = ScrollArrowState::RightArrow;
+                    SetCapture(hwnd);
+                    SetTimer(hwnd, SCROLL_ARROW_TIMER_ID, SCROLL_ARROW_TIMER_INTERVAL, NULL);
+                    double dur = g_videoPlayer->GetDuration();
+                    double timeRange = dur / g_timelineZoomLevel;
+                    double maxOffset = dur - timeRange;
+                    g_timelineScrollOffset += timeRange * 0.1;  // Scroll right by 10%
+                    if (g_timelineScrollOffset > maxOffset) g_timelineScrollOffset = maxOffset;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    UpdateControls();
+                    return 0;
+                }
+            }
+            
             if (x < 0) x = 0; if (x > rc.right) x = rc.right;
             double dur = g_videoPlayer->GetDuration();
             double seekTime = PixelToTime(x, rc, dur);
@@ -127,6 +169,16 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_LBUTTONUP:
+        // Stop arrow scrolling if it was active
+        if (g_scrollArrowPressed != ScrollArrowState::None)
+        {
+            KillTimer(hwnd, SCROLL_ARROW_TIMER_ID);
+            ReleaseCapture();
+            g_scrollArrowPressed = ScrollArrowState::None;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        
         if (g_isTimelineDragging && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             ReleaseCapture();
@@ -284,6 +336,34 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     }
+    case WM_TIMER:
+    {
+        if (wParam == SCROLL_ARROW_TIMER_ID && g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            if (g_scrollArrowPressed == ScrollArrowState::LeftArrow)
+            {
+                double dur = g_videoPlayer->GetDuration();
+                double timeRange = dur / g_timelineZoomLevel;
+                g_timelineScrollOffset -= timeRange * 0.1;  // Scroll left by 10%
+                if (g_timelineScrollOffset < 0) g_timelineScrollOffset = 0;
+                InvalidateRect(hwnd, NULL, FALSE);
+                UpdateControls();
+                return 0;
+            }
+            else if (g_scrollArrowPressed == ScrollArrowState::RightArrow)
+            {
+                double dur = g_videoPlayer->GetDuration();
+                double timeRange = dur / g_timelineZoomLevel;
+                double maxOffset = dur - timeRange;
+                g_timelineScrollOffset += timeRange * 0.1;  // Scroll right by 10%
+                if (g_timelineScrollOffset > maxOffset) g_timelineScrollOffset = maxOffset;
+                InvalidateRect(hwnd, NULL, FALSE);
+                UpdateControls();
+                return 0;
+            }
+        }
+        break;
+    }
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
@@ -293,6 +373,54 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HBRUSH bg = CreateSolidBrush(RGB(70,70,70));
         FillRect(hdc, &rc, bg);
         DeleteObject(bg);
+        
+        // Draw scroll arrows if zoomed in
+        const int ARROW_WIDTH = 20;
+        if (g_timelineZoomLevel > 1.0)
+        {
+            // Draw left arrow if not at start
+            if (g_timelineScrollOffset > 0)
+            {
+                RECT leftArrowRect = { 0, 0, ARROW_WIDTH, rc.bottom };
+                HBRUSH arrowBrush = CreateSolidBrush(RGB(150, 150, 150));
+                FillRect(hdc, &leftArrowRect, arrowBrush);
+                DeleteObject(arrowBrush);
+                
+                // Draw "<" character
+                SetTextColor(hdc, RGB(0, 0, 0));
+                SetBkMode(hdc, TRANSPARENT);
+                HFONT font = CreateFont(14, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
+                HGDIOBJ oldFont = SelectObject(hdc, font);
+                TextOutW(hdc, 5, rc.bottom / 2 - 7, L"<", 1);
+                SelectObject(hdc, oldFont);
+                DeleteObject(font);
+            }
+            
+            // Draw right arrow if not at end
+            double dur = g_videoPlayer && g_videoPlayer->IsLoaded() ? g_videoPlayer->GetDuration() : 0;
+            if (dur > 0)
+            {
+                double timeRange = dur / g_timelineZoomLevel;
+                double maxOffset = dur - timeRange;
+                if (g_timelineScrollOffset < maxOffset)
+                {
+                    RECT rightArrowRect = { rc.right - ARROW_WIDTH, 0, rc.right, rc.bottom };
+                    HBRUSH arrowBrush = CreateSolidBrush(RGB(150, 150, 150));
+                    FillRect(hdc, &rightArrowRect, arrowBrush);
+                    DeleteObject(arrowBrush);
+                    
+                    // Draw ">" character
+                    SetTextColor(hdc, RGB(0, 0, 0));
+                    SetBkMode(hdc, TRANSPARENT);
+                    HFONT font = CreateFont(14, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
+                    HGDIOBJ oldFont = SelectObject(hdc, font);
+                    TextOutW(hdc, rc.right - ARROW_WIDTH + 5, rc.bottom / 2 - 7, L">", 1);
+                    SelectObject(hdc, oldFont);
+                    DeleteObject(font);
+                }
+            }
+        }
+        
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             double dur = g_videoPlayer->GetDuration();
