@@ -212,6 +212,7 @@ public:
     bool AddCropKeyframe(double time, RECT rect, double* actualTime = nullptr);
     bool AddCropDisabledKeyframe(double time, double* actualTime = nullptr);
     bool RemoveCropKeyframe(double time);
+    bool MoveCropKeyframe(double oldTime, double newTime);  // Move a keyframe to a new time
     void ClearCropKeyframes();
     bool UpdateCropForTime(double time);
     bool HasAnyCrop() const;

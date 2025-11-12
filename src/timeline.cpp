@@ -14,8 +14,9 @@ extern VideoPlayer *g_videoPlayer;
 extern double g_cutStartTime, g_cutEndTime;
 extern bool g_isTimelineDragging;
 extern bool g_wasPlayingBeforeDrag;
-enum class DragMode { None, Cursor, StartMarker, EndMarker };
+enum class DragMode { None, Cursor, StartMarker, EndMarker, Keyframe };
 extern DragMode g_timelineDragMode;
+extern double g_draggedKeyframeTime;
 
 // Timeline zoom variables
 double g_timelineZoomLevel = 1.0;  // 1.0 = full video, 2.0 = 2x zoom, etc.
@@ -102,6 +103,29 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             double dur = g_videoPlayer->GetDuration();
             double seekTime = PixelToTime(x, rc, dur);
 
+            // Check if clicking on a keyframe to drag it
+            if (dur > 0.0 && rc.right > 0)
+            {
+                auto keys = g_videoPlayer->GetCropKeyframes();
+                for (const auto& key : keys)
+                {
+                    if (key.time < 0.0 || key.time > dur)
+                        continue;
+                    int px = TimeToPixel(key.time, rc, dur);
+                    // If clicking within 8 pixels of a keyframe marker, start dragging it
+                    if (std::abs(px - x) <= 8)
+                    {
+                        g_timelineDragMode = DragMode::Keyframe;
+                        g_draggedKeyframeTime = key.time;
+                        g_isTimelineDragging = true;
+                        SetCapture(hwnd);
+                        InvalidateRect(hwnd, NULL, FALSE);
+                        UpdateControls();
+                        return 0;
+                    }
+                }
+            }
+
             // Disable moving start/end markers via mouse click/drag to prevent
             // accidental adjustments. Treat clicks near markers the same as a
             // regular cursor click so users must use the numeric inputs to
@@ -145,6 +169,15 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (g_timelineDragMode == DragMode::Cursor)
             {
                 g_videoPlayer->SeekToTime(seekTime, 0);
+            }
+            else if (g_timelineDragMode == DragMode::Keyframe)
+            {
+                // Move the dragged keyframe to the new time
+                if (g_draggedKeyframeTime >= 0.0 && dur > 0.0)
+                {
+                    g_videoPlayer->MoveCropKeyframe(g_draggedKeyframeTime, seekTime);
+                    g_draggedKeyframeTime = seekTime;  // Update the tracked time
+                }
             }
             else if (g_timelineDragMode == DragMode::StartMarker)
             {
@@ -194,6 +227,12 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 g_videoPlayer->SeekToTime(seekTime, 0);
                 if (g_wasPlayingBeforeDrag)
                     g_videoPlayer->Play();
+            }
+            else if (g_timelineDragMode == DragMode::Keyframe)
+            {
+                // Keyframe drag is complete, seek to the final keyframe position
+                g_videoPlayer->SeekToTime(seekTime, 0);
+                g_draggedKeyframeTime = -1.0;
             }
             else if (g_timelineDragMode == DragMode::StartMarker)
             {

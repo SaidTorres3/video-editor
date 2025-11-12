@@ -875,6 +875,58 @@ bool VideoPlayer::RemoveCropKeyframe(double time)
     return true;
 }
 
+bool VideoPlayer::MoveCropKeyframe(double oldTime, double newTime)
+{
+    if (!isLoaded || duration <= 0.0)
+        return false;
+
+    // Clamp times to valid range
+    double clampedOldTime = std::clamp(oldTime, 0.0, duration);
+    double clampedNewTime = std::clamp(newTime, 0.0, duration);
+
+    // Don't move to the same time
+    if (std::fabs(clampedOldTime - clampedNewTime) < 0.001)
+        return false;
+
+    std::lock_guard<std::mutex> lock(cropMutex);
+
+    // Find the keyframe at the old time
+    auto keyframeIt = cropTimeline.end();
+    double closestDistance = 1.0;
+    
+    for (auto it = cropTimeline.begin(); it != cropTimeline.end(); ++it)
+    {
+        double distance = std::fabs(it->time - clampedOldTime);
+        if (distance < closestDistance)
+        {
+            closestDistance = distance;
+            keyframeIt = it;
+        }
+    }
+
+    if (keyframeIt == cropTimeline.end())
+        return false;
+
+    // Store the keyframe data
+    CropKeyframe keyframe = *keyframeIt;
+    keyframe.time = clampedNewTime;
+
+    // Remove the old keyframe
+    cropTimeline.erase(keyframeIt);
+
+    // Insert at the new time (maintaining sorted order)
+    auto insertIt = std::lower_bound(
+        cropTimeline.begin(), cropTimeline.end(), clampedNewTime,
+        [](const CropKeyframe& entry, double value)
+        {
+            return entry.time < value;
+        });
+
+    cropTimeline.insert(insertIt, keyframe);
+    RecomputeCropOutputDimensionsLocked();
+    return true;
+}
+
 void CALLBACK VideoPlayer::TimerProc(HWND hwnd, UINT, UINT_PTR, DWORD)
 {
     VideoPlayer *player = (VideoPlayer *)GetWindowLongPtr(hwnd, GWLP_USERDATA);

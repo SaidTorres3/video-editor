@@ -51,8 +51,9 @@ double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
 bool g_isTimelineDragging = false;
 bool g_wasPlayingBeforeDrag = false;
-enum class DragMode { None, Cursor, StartMarker, EndMarker };
+enum class DragMode { None, Cursor, StartMarker, EndMarker, Keyframe };
 DragMode g_timelineDragMode = DragMode::None;
+double g_draggedKeyframeTime = -1.0;  // Time of the keyframe being dragged
 
 // Dark mode UI resources
 HFONT g_hFont = nullptr;
