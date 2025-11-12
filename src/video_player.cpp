@@ -668,10 +668,11 @@ bool VideoPlayer::GetCropRectForTime(double time, RECT &outRect) const
     if (duration > 0.0)
         clampedTime = std::clamp(clampedTime, 0.0, duration);
 
+    // Find the keyframe that applies at this time (the one at or before this time)
     const CropKeyframe* result = nullptr;
     for (const auto& key : cropTimeline)
     {
-        if (key.time <= clampedTime + kCropTimeEpsilon)
+        if (key.time <= clampedTime)
             result = &key;
         else
             break;
@@ -781,7 +782,9 @@ bool VideoPlayer::AddCropKeyframe(double time, RECT rect, double* actualTime)
     if (isFullFrame)
     {
         CropKeyframe disabled{ clampedTime, RECT{0, 0, 0, 0}, false };
-        if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < kCropTimeEpsilon)
+        // Only replace keyframe if it's at essentially the exact same time (within 1ms)
+        // This prevents nearby keyframes from being overwritten
+        if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < 0.001)
             *it = disabled;
         else
             cropTimeline.insert(it, disabled);
@@ -794,7 +797,9 @@ bool VideoPlayer::AddCropKeyframe(double time, RECT rect, double* actualTime)
 
     CropKeyframe key{ clampedTime, normalized, true };
 
-    if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < kCropTimeEpsilon)
+    // Only replace keyframe if it's at essentially the exact same time (within 1ms)
+    // This prevents nearby keyframes from being overwritten
+    if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < 0.001)
         *it = key;
     else
         cropTimeline.insert(it, key);
@@ -824,7 +829,9 @@ bool VideoPlayer::AddCropDisabledKeyframe(double time, double* actualTime)
             return entry.time < value;
         });
 
-    if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < kCropTimeEpsilon)
+    // Only replace keyframe if it's at essentially the exact same time (within 1ms)
+    // This prevents nearby keyframes from being overwritten
+    if (it != cropTimeline.end() && std::fabs(it->time - clampedTime) < 0.001)
         *it = key;
     else
         cropTimeline.insert(it, key);
@@ -845,17 +852,23 @@ bool VideoPlayer::RemoveCropKeyframe(double time)
     if (duration > 0.0)
         clampedTime = std::clamp(clampedTime, 0.0, duration);
 
+    // Find the keyframe that's closest to the requested time (within 1ms tolerance for exact match)
+    // This prevents removing the wrong keyframe when multiple keyframes exist nearby
     auto best = cropTimeline.end();
+    double closestDistance = 1.0;  // Initialize to large value
+    
     for (auto it = cropTimeline.begin(); it != cropTimeline.end(); ++it)
     {
-        if (it->time <= clampedTime + kCropTimeEpsilon)
+        double distance = std::fabs(it->time - clampedTime);
+        if (distance < closestDistance)
+        {
+            closestDistance = distance;
             best = it;
-        else
-            break;
+        }
     }
 
     if (best == cropTimeline.end())
-        best = std::prev(cropTimeline.end());
+        return false;
 
     cropTimeline.erase(best);
     RecomputeCropOutputDimensionsLocked();
@@ -1198,15 +1211,14 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
             bool hasCurrent = false;
             int currentKeyframeIndex = -1;
 
-            for (size_t i = 0; i < keyframes.size(); ++i)
+            // Find the keyframe that's currently applying at this playback time
+            // (the one at or before the current time)
+            for (int i = static_cast<int>(keyframes.size()) - 1; i >= 0; --i)
             {
-                if (keyframes[i].time <= clampedTime + kCropTimeEpsilon)
+                if (keyframes[i].time <= clampedTime)
                 {
                     hasCurrent = true;
                     currentKeyframeIndex = i;
-                }
-                else
-                {
                     break;
                 }
             }
@@ -1217,24 +1229,36 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
                 return 0;
             }
 
-            // Hierarchical undo: first try to restore to previous keyframe state
+            // If there's a keyframe at the current time, we can do hierarchical undo
+            // Otherwise, just add a disabled keyframe at the current location
             bool foundPreviousEnabled = false;
-            if (currentKeyframeIndex > 0)
+            if (currentKeyframeIndex >= 0 && std::fabs(keyframes[currentKeyframeIndex].time - clampedTime) < 0.001)
             {
-                // Check if there's a previous enabled keyframe
-                for (int i = currentKeyframeIndex - 1; i >= 0; --i)
+                // Only do hierarchical undo if the current keyframe is AT this location
+                if (currentKeyframeIndex > 0)
                 {
-                    if (keyframes[i].enabled)
+                    // Check if there's a previous enabled keyframe
+                    for (int i = currentKeyframeIndex - 1; i >= 0; --i)
                     {
-                        // Found a previous enabled keyframe, remove the current one to restore to that state
-                        player->RemoveCropKeyframe(clampedTime);
-                        foundPreviousEnabled = true;
-                        break;
+                        if (keyframes[i].enabled)
+                        {
+                            // Found a previous enabled keyframe, remove the current one to restore to that state
+                            player->RemoveCropKeyframe(keyframes[currentKeyframeIndex].time);
+                            foundPreviousEnabled = true;
+                            break;
+                        }
                     }
+                }
+                
+                // If no previous enabled keyframe but we're on a keyframe, remove it to go to full frame
+                if (!foundPreviousEnabled)
+                {
+                    player->RemoveCropKeyframe(keyframes[currentKeyframeIndex].time);
+                    foundPreviousEnabled = true;
                 }
             }
 
-            // If no previous enabled keyframe, add a disabled keyframe to remove all crop
+            // If we didn't find a keyframe at current location, or undo didn't happen, add disabled keyframe
             if (!foundPreviousEnabled)
             {
                 double appliedTime = clampedTime;
