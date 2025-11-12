@@ -147,6 +147,7 @@ void OnCutClicked(HWND hwnd)
         }
 
         ShowProgressWindow(hwnd);
+        UpdateProgressStatus(L"Preparing to cut video...");
         std::wstring outFile = szFile;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
             g_uploadSuccess = false;
@@ -158,6 +159,7 @@ void OnCutClicked(HWND hwnd)
                                              mergeAudio, convertH264, g_useNvenc,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
+                UpdateProgressStatus(L"Uploading video...");
                 std::wstring title = L"Uploading to ";
                 if (g_useCatbox && g_useB2)
                     title += L"catbox.moe and Backblaze B2";
@@ -251,6 +253,7 @@ void OnExportClicked(HWND hwnd)
         }
 
         ShowProgressWindow(hwnd);
+        UpdateProgressStatus(L"Preparing to export video...");
         std::wstring outFile = szFile;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
             g_uploadSuccess = false;

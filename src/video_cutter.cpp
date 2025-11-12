@@ -2,6 +2,7 @@
 #include "video_player.h"
 #include "options_window.h"
 #include "debug_log.h"
+#include "progress_window.h"
 #include "rnnoise.h"
 #include <iostream>
 #include <sstream>
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <chrono>
 
 #define RNNOISE_FRAME_SIZE 480
 
@@ -45,15 +47,22 @@ void FillBlackYuv420(AVFrame* frame)
 
 }
 
-VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player) {}
+VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player), m_lastDisplayedPercent(-1) {}
 
 VideoCutter::~VideoCutter() {}
+
+void VideoCutter::ResetProgressTracking() {
+    m_lastDisplayedPercent = -1;
+    m_lastUpdateTime = std::chrono::high_resolution_clock::now();
+}
 
 bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
                            bool useNvenc, int maxBitrate, HWND progressBar,
                            std::atomic<bool>* cancelFlag)
 {
+    ResetProgressTracking();
+    
     if (!m_player->isLoaded) {
         DebugLog("CutVideo called but no video loaded", true);
         return false;
@@ -888,8 +897,36 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         }
 
         double progress = (pktPtsUs - startPts) / double(endPts - startPts);
-        if (progressBar && IsWindow(progressBar))
-            SendMessage(progressBar, PBM_SETPOS, (int)(progress * 100.0), 0);
+        progress = std::max(0.0, std::min(1.0, progress));
+        int progressPercent = (int)(progress * 100.0);
+        
+        if (progressBar && IsWindow(progressBar)) {
+            // Only update if progress changed and throttle updates
+            auto now = std::chrono::high_resolution_clock::now();
+            auto timeSinceLastUpdate = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastUpdateTime).count();
+            
+            // Update if: progress increased significantly OR 100ms has passed
+            if (progressPercent > m_lastDisplayedPercent || timeSinceLastUpdate > 100) {
+                // Apply smoothing: only allow incremental increases
+                if (progressPercent > m_lastDisplayedPercent) {
+                    m_lastDisplayedPercent = progressPercent;
+                    m_lastUpdateTime = now;
+                    
+                    SendMessage(progressBar, PBM_SETPOS, progressPercent, 0);
+                    
+                    // Update percentage text
+                    if (g_hProgressPercentage && IsWindow(g_hProgressPercentage)) {
+                        wchar_t percentText[32];
+                        swprintf_s(percentText, L"%d%%", progressPercent);
+                        SetWindowTextW(g_hProgressPercentage, percentText);
+                    }
+                } else if (timeSinceLastUpdate > 100) {
+                    // Force update after timeout to keep UI responsive
+                    m_lastUpdateTime = now;
+                    SendMessage(progressBar, PBM_SETPOS, progressPercent, 0);
+                }
+            }
+        }
     }
 
     // Flush encoders

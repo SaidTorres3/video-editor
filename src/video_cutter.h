@@ -1,6 +1,7 @@
 #pragma once
 
 #include "video_player.h"
+#include <chrono>
 
 class VideoPlayer;
 
@@ -15,4 +16,8 @@ public:
 
 private:
     VideoPlayer* m_player;
+    int m_lastDisplayedPercent = -1;
+    std::chrono::high_resolution_clock::time_point m_lastUpdateTime;
+    
+    void ResetProgressTracking();
 };
