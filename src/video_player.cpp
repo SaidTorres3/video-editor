@@ -354,93 +354,66 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     // For backwards navigation
     if (frameNumber < currentFrame)
     {
-        // If we're moving backwards a significant amount, use keyframe seeking
-        int64_t distance = currentFrame - frameNumber;
+        // Seek to keyframe a bit before the target frame
+        double targetTime = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
         
-        // If we're moving backwards by more than 5 frames or cache is smaller than the distance
-        if (distance > 5 || distance > static_cast<int64_t>(frameCache.size()))
+        // Add a safety margin to make sure we get a keyframe before our target
+        double seekTime = std::max(0.0, targetTime - 0.5);  // Half second buffer
+        
+        // Force a keyframe-based seek to minimize decoding
+        AVStream *vs = formatContext->streams[videoStreamIndex];
+        int64_t ts = static_cast<int64_t>((seekTime + startTimeOffset) / av_q2d(vs->time_base));
+        
         {
-            // Seek to keyframe a bit before the target frame
-            double targetTime = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
+            std::lock_guard<std::mutex> lock(decodeMutex);
             
-            // Add a safety margin to make sure we get a keyframe before our target
-            double seekTime = std::max(0.0, targetTime - 0.5);  // Half second buffer
+            // Clear the frame cache to avoid using stale frames
+            frameCache.clear();
             
-            // Force a keyframe-based seek to minimize decoding
-            AVStream *vs = formatContext->streams[videoStreamIndex];
-            int64_t ts = static_cast<int64_t>((seekTime + startTimeOffset) / av_q2d(vs->time_base));
+            // Seek to the keyframe using BACKWARD flag but not ANY flag
+            av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
+            avcodec_flush_buffers(codecContext);
             
+            // Reset audio state
+            for (auto &track : audioTracks)
             {
-                std::lock_guard<std::mutex> lock(decodeMutex);
-                
-                // Clear the frame cache to avoid using stale frames
-                frameCache.clear();
-                
-                // Seek to the keyframe using BACKWARD flag but not ANY flag
-                av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
-                avcodec_flush_buffers(codecContext);
-                
-                // Reset audio state
-                for (auto &track : audioTracks)
-                {
-                    if (track->codecContext)
-                        avcodec_flush_buffers(track->codecContext);
-                }
-                {
-                    std::lock_guard<std::mutex> lock(audioMutex);
-                    for (auto& tr : audioTracks)
-                        tr->buffer.clear();
-                }
-                
-                // Update the current position estimation
+                if (track->codecContext)
+                    avcodec_flush_buffers(track->codecContext);
+            }
+            {
+                std::lock_guard<std::mutex> lock(audioMutex);
+                for (auto& tr : audioTracks)
+                    tr->buffer.clear();
+            }
+            
+            // Update the current position estimation using index to be more accurate
+            const AVIndexEntry *entry = avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
+            if (entry)
+            {
+                int64_t keyTs = entry->timestamp;
+                double keyTime = keyTs * av_q2d(vs->time_base) - startTimeOffset;
+                currentPts = keyTime;
+                currentFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
+            }
+            else
+            {
                 currentPts = seekTime;
-                currentFrame = static_cast<int64_t>(currentPts * frameRate);
-                UpdateCropForTime(currentPts);
+                currentFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
             }
-            
-            // Decode frames until we reach our target frame
-            while (currentFrame < frameNumber)
-            {
-                bool last = (currentFrame + 1 >= frameNumber);
-                if (!m_decoder->DecodeNextFrame(last, false))
-                    break;
-            }
+            UpdateCropForTime(currentPts);
         }
-        else 
+        
+        // Decode frames until we reach our target frame
+        while (currentFrame <= frameNumber)
         {
-            // For small backwards movements, just step backwards through the cache
-            // This should be fast since we're using cached frames
-            for (int64_t f = currentFrame - 1; f >= frameNumber; f--)
-            {
-                bool found = false;
-                for (auto it = frameCache.rbegin(); it != frameCache.rend(); ++it)
-                {
-                        if (it->number == f)
-                        {
-                            std::copy(it->pixels.begin(), it->pixels.end(), buffer);
-                            currentFrame = f;
-                            currentPts = it->pts;
-                            UpdateCropForTime(currentPts);
-                            found = true;
-                            break;
-                        }
-                }
+            bool last = (currentFrame == frameNumber);
+            if (!m_decoder->DecodeNextFrame(last, false))
+                break;
                 
-                if (!found)
-                {
-                    // If we can't find a frame in the cache, fall back to seeking
-                    double seconds = frameRate > 0 ? (f / frameRate) : 0.0;
-                    SeekToTime(seconds, 0);
-                    break;
-                }
-                
-                // Only update display for the last frame
-                if (f == frameNumber)
-                {
-                    m_renderer->UpdateDisplay();
-                    UpdateTimeline();
-                }
-            }
+            // Sync currentFrame to the actual decoded PTS to prevent drift
+            // currentFrame tracks the next frame index (or count of decoded frames), so it should be FrameIndex + 1
+            int64_t ptsFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
+            currentFrame = ptsFrame + 1;
         }
     }
     else
