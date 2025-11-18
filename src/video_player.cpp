@@ -438,6 +438,24 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
     if (!isLoaded)
         return;
 
+    double frameDuration = (frameRate > 0) ? (1.0 / frameRate) : 0.033;
+    bool smartSeek = false;
+
+    // Check if we can just decode forward without seeking
+    // This optimization is crucial for smooth timeline dragging
+    {
+        std::lock_guard<std::mutex> lock(decodeMutex);
+        
+        // If target is ahead of current position but within a reasonable range (e.g. 100 frames)
+        // we can just decode forward instead of seeking back to the previous keyframe.
+        double threshold = frameDuration * 100.0; 
+        if (seconds >= currentPts && seconds <= currentPts + threshold)
+        {
+            smartSeek = true;
+        }
+    }
+
+    if (!smartSeek)
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
         frameCache.clear();
@@ -445,12 +463,10 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
         AVStream *vs = formatContext->streams[videoStreamIndex];
         int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));
 
-        // Seek directly to the requested timestamp. AVSEEK_FLAG_ANY allows seeking
-        // to non-keyframes so the timeline jumps exactly where the user clicked
-        // without having to decode many frames.
-        av_seek_frame(formatContext, videoStreamIndex, ts,
-                        AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+        // Seek to previous keyframe (BACKWARD only, no ANY) to ensure we land on a valid reference frame
+        av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
         avcodec_flush_buffers(codecContext);
+        
         for (auto &track : audioTracks)
         {
             if (track->codecContext)
@@ -462,37 +478,43 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
                 tr->buffer.clear();
         }
 
-        // Estimate the frame and PTS we landed on using the stream index
-        const AVIndexEntry *entry =
-            avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
+        // Update currentPts to the keyframe time
+        const AVIndexEntry *entry = avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
         if (entry)
         {
             int64_t keyTs = entry->timestamp;
-            double keyTime = keyTs * av_q2d(vs->time_base) - startTimeOffset;
-            currentPts = keyTime;
-            currentFrame = (int64_t)(currentPts * frameRate);
+            currentPts = keyTs * av_q2d(vs->time_base) - startTimeOffset;
+            currentFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
         }
         else
         {
-            currentPts = seconds;
-            currentFrame = (int64_t)(seconds * frameRate);
+            // Fallback: assume we are before the target so decoding can proceed
+            currentPts = -1.0;
+            currentFrame = 0;
         }
         UpdateCropForTime(currentPts);
     }
 
-    // For cursor-only seeks (decodeCount == 0), decode at least 1 frame to ensure
-    // we reach the proper position before playback starts. This prevents jumping to
-    // keyframes when play is pressed.
-    int framesToDecode = (decodeCount == 0) ? 1 : decodeCount;
+    // Decode frames until we reach the target time
+    int maxDecodeFrames = 1000; // Safety limit
+    int decoded = 0;
     
-    // Decode frames after seeking so the display updates immediately
-    for (int i = 0; i < framesToDecode; ++i)
+    while (decoded < maxDecodeFrames)
     {
-        if (!m_decoder->DecodeNextFrame(true))
+        // Check if we reached target (within half a frame tolerance)
+        if (currentPts >= seconds - (frameDuration * 0.5))
             break;
-        if (currentPts >= seconds)
+            
+        // Decode next frame without presenting it yet
+        if (!m_decoder->DecodeNextFrame(false, false))
             break;
+            
+        decoded++;
     }
+    
+    // Ensure the final frame is displayed
+    m_renderer->UpdateDisplay();
+    UpdateTimeline();
 }
 
 void VideoPlayer::SeekToTimeExact(double seconds)
