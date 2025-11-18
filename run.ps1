@@ -220,10 +220,7 @@ if ($Static.IsPresent) {
         Remove-Item Env:\CMAKE_TOOLCHAIN_FILE -ErrorAction SilentlyContinue
         Write-Host "Dynamic mode: no toolchain." -ForegroundColor Cyan
     }
-    if (Test-Path ".\build") {
-        Write-Host "Cleaning old build…" -ForegroundColor Yellow
-        Remove-Item ".\build" -Recurse -Force
-    }
+    # Removed forced cleaning to allow incremental builds
 }
 
 # 6) Configure CMake
@@ -264,5 +261,6 @@ if (-not (Test-Path "$exe")) {
     Write-Host "ERROR: No executable found." -ForegroundColor Red
     exit 1
 }
-Write-Host "`n✅ Build complete. Launching..." -ForegroundColor Green
+Write-Host ""
+Write-Host "✅ Build complete. Launching..." -ForegroundColor Green
 Start-Process -FilePath "$exe" -WorkingDirectory (Split-Path "$exe" -Parent)
