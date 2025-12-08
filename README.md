@@ -128,7 +128,7 @@ In case something like ```error LNK2001``` occurs during linking, delete the `bu
 
 The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
 
-> **Important Note:** The static build does **not** support NVIDIA (NVENC) hardware encoding. Only software (CPU) encoding is available when using the `-Static` option.
+> **Important Note:** The static build does **not** support NVIDIA (NVENC) & AMD (AMF) hardware encoding. Only software (CPU) encoding is available when using the `-Static` option.
 
 ---
 
