@@ -7,6 +7,7 @@
 // Option identifiers used in the options window
 #define ID_RADIO_ENCODER_LIBX264 1021
 #define ID_RADIO_ENCODER_NVENC  1022
+#define ID_RADIO_ENCODER_AMD    1026
 #define ID_CHECKBOX_ENABLE_LOG  1023
 #define ID_BUTTON_UPLOAD_CONFIG 1024
 #define ID_BUTTON_CATBOX_CONFIG 1031
@@ -24,7 +25,13 @@
 #define ID_CHECKBOX_USE_CATBOX  2008
 #define ID_CHECKBOX_USE_B2      2009
 
-extern bool g_useNvenc;
+enum class EncoderSelection : int {
+    Libx264 = 0,
+    Nvenc   = 1,
+    Amf     = 2,
+};
+
+extern EncoderSelection g_encoderSelection;
 extern bool g_logToFile;
 extern bool g_autoPlay;
 

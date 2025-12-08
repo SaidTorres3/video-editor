@@ -4,6 +4,7 @@
 #include <chrono>
 
 class VideoPlayer;
+enum class EncoderSelection : int;
 
 class VideoCutter {
 public:
@@ -11,7 +12,7 @@ public:
     ~VideoCutter();
 
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
-                  bool mergeAudio, bool convertH264, bool useNvenc,
+                  bool mergeAudio, bool convertH264, EncoderSelection encoder,
                   int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
 
 private:

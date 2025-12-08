@@ -50,6 +50,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Bitrate or Target Size**: When converting to H.264 you can either set a bitrate or specify a desired final size; only the chosen option is shown
 - **Progress Window**: A small window shows export progress in real time
 - **Optional Cloud Upload**: Exported files can be uploaded automatically to Backblaze B2 or catbox.moe and the download URL is shown
+- **Different H.264 providers**: Select between exporting with CPU (libx264), NVIDIA (nvenc) or AMD (amf).
 
 ## Technical Implementation
 

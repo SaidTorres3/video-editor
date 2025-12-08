@@ -1131,10 +1131,10 @@ void VideoPlayer::PlaybackThreadFunction()
 
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
-                           bool useNvenc, int maxBitrate, HWND progressBar,
+                           EncoderSelection encoder, int maxBitrate, HWND progressBar,
                            std::atomic<bool>* cancelFlag)
 {
-    return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, useNvenc, maxBitrate, progressBar, cancelFlag);
+    return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, encoder, maxBitrate, progressBar, cancelFlag);
 }
 
 LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)

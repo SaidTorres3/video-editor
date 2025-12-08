@@ -2,6 +2,7 @@
 #include "video_player.h"
 #include "ui_updates.h"
 #include "progress_window.h"
+#include "options_window.h"
 #include <commdlg.h>
 #include <thread>
 #include <string>
@@ -18,7 +19,7 @@ void UpdateCutTimeEdits();
 extern VideoPlayer *g_videoPlayer;
 extern double g_cutStartTime, g_cutEndTime;
 extern HWND g_hStatusText, g_hProgressBar;
-extern bool g_useNvenc;
+extern EncoderSelection g_encoderSelection;
 extern bool g_autoUpload;
 extern bool g_useCatbox;
 extern bool g_useB2;
@@ -156,7 +157,7 @@ void OnCutClicked(HWND hwnd)
             g_catboxUploadedUrl.clear();
             g_b2UploadedUrl.clear();
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
-                                             mergeAudio, convertH264, g_useNvenc,
+                                             mergeAudio, convertH264, g_encoderSelection,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
                 UpdateProgressStatus(L"Uploading video...");
@@ -262,7 +263,7 @@ void OnExportClicked(HWND hwnd)
             g_catboxUploadedUrl.clear();
             g_b2UploadedUrl.clear();
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
-                                             mergeAudio, convertH264, g_useNvenc,
+                                             mergeAudio, convertH264, g_encoderSelection,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
                 std::wstring title = L"Uploading to ";

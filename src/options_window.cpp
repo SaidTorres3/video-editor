@@ -6,7 +6,7 @@ static HWND g_hUploadWnd = nullptr;
 static HWND g_hCatboxWnd = nullptr;
 
 // Global option variables
-bool g_useNvenc = false;
+EncoderSelection g_encoderSelection = EncoderSelection::Libx264;
 bool g_logToFile = true;
 bool g_autoPlay = true;
 std::wstring g_b2KeyId;
@@ -25,8 +25,12 @@ void LoadSettings()
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\VideoEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
         DWORD val; DWORD size = sizeof(val);
-        if (RegQueryValueExW(hKey, L"UseNvenc", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
-            g_useNvenc = (val != 0);
+        if (RegQueryValueExW(hKey, L"EncoderType", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS) {
+            if (val <= static_cast<DWORD>(EncoderSelection::Amf))
+                g_encoderSelection = static_cast<EncoderSelection>(val);
+        } else if (RegQueryValueExW(hKey, L"UseNvenc", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS) {
+            g_encoderSelection = (val != 0) ? EncoderSelection::Nvenc : EncoderSelection::Libx264;
+        }
         size = sizeof(val);
         if (RegQueryValueExW(hKey, L"EnableLogFile", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
             g_logToFile = (val != 0);
@@ -71,7 +75,9 @@ void SaveSettings()
 {
     HKEY hKey;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\VideoEditor", 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
-        DWORD val = g_useNvenc ? 1 : 0;
+        DWORD val = static_cast<DWORD>(g_encoderSelection);
+        RegSetValueExW(hKey, L"EncoderType", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = g_encoderSelection == EncoderSelection::Nvenc ? 1 : 0;
         RegSetValueExW(hKey, L"UseNvenc", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         val = g_logToFile ? 1 : 0;
         RegSetValueExW(hKey, L"EnableLogFile", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
@@ -102,7 +108,7 @@ void ShowOptionsWindow(HWND parent)
 
     g_hOptionsWnd = CreateWindowEx(0, L"OptionsClass", L"Options",
                                    WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 280, 240,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 280, 260,
                                    parent, nullptr,
                                    (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hOptionsWnd);
@@ -121,41 +127,48 @@ void ShowOptionsWindow(HWND parent)
                             10, 65, 120, 20, g_hOptionsWnd,
                             (HMENU)ID_RADIO_ENCODER_NVENC,
                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
+    HWND hAmd = CreateWindow(L"BUTTON", L"AMD AMF h264",
+                             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                             10, 90, 140, 20, g_hOptionsWnd,
+                             (HMENU)ID_RADIO_ENCODER_AMD,
+                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     HWND hLog = CreateWindow(L"BUTTON", L"Enable log file",
                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                             10, 90, 150, 20, g_hOptionsWnd,
+                             10, 125, 150, 20, g_hOptionsWnd,
                              (HMENU)ID_CHECKBOX_ENABLE_LOG,
                              (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     HWND hAuto = CreateWindow(L"BUTTON", L"Enable auto-play",
                               WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                              10, 110, 150, 20, g_hOptionsWnd,
+                              10, 145, 150, 20, g_hOptionsWnd,
                               (HMENU)ID_CHECKBOX_AUTO_PLAY,
                               (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(hLib);
     ApplyDarkTheme(hNv);
+    ApplyDarkTheme(hAmd);
     ApplyDarkTheme(hLog);
     ApplyDarkTheme(hAuto);
     HWND hUpload = CreateWindow(L"BUTTON", L"Upload Settings",
                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                               10, 150, 100, 25, g_hOptionsWnd,
+                               10, 185, 100, 25, g_hOptionsWnd,
                                (HMENU)ID_BUTTON_UPLOAD_CONFIG,
                                (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     HWND hOk = CreateWindow(L"BUTTON", L"OK",
                             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            120, 150, 60, 25, g_hOptionsWnd,
+                            120, 185, 60, 25, g_hOptionsWnd,
                             (HMENU)IDOK,
                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                190, 150, 60, 25, g_hOptionsWnd,
+                                190, 185, 60, 25, g_hOptionsWnd,
                                 (HMENU)IDCANCEL,
                                 (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(hOk);
     ApplyDarkTheme(hCancel);
     ApplyDarkTheme(hUpload);
 
-    SendMessage(hLib, BM_SETCHECK, g_useNvenc ? BST_UNCHECKED : BST_CHECKED, 0);
-    SendMessage(hNv, BM_SETCHECK, g_useNvenc ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hLib, BM_SETCHECK, g_encoderSelection == EncoderSelection::Libx264 ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hNv, BM_SETCHECK, g_encoderSelection == EncoderSelection::Nvenc ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hAmd, BM_SETCHECK, g_encoderSelection == EncoderSelection::Amf ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hLog, BM_SETCHECK, g_logToFile ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hAuto, BM_SETCHECK, g_autoPlay ? BST_CHECKED : BST_UNCHECKED, 0);
 }
@@ -168,9 +181,15 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             ShowUploadWindow(hwnd);
         } else if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
             HWND hNv = GetDlgItem(hwnd, ID_RADIO_ENCODER_NVENC);
+            HWND hAmd = GetDlgItem(hwnd, ID_RADIO_ENCODER_AMD);
             HWND hLog = GetDlgItem(hwnd, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_PLAY);
-            g_useNvenc = SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                g_encoderSelection = EncoderSelection::Nvenc;
+            else if (SendMessage(hAmd, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                g_encoderSelection = EncoderSelection::Amf;
+            else
+                g_encoderSelection = EncoderSelection::Libx264;
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();
@@ -180,9 +199,15 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CLOSE:
         {
             HWND hNv = GetDlgItem(hwnd, ID_RADIO_ENCODER_NVENC);
+            HWND hAmd = GetDlgItem(hwnd, ID_RADIO_ENCODER_AMD);
             HWND hLog = GetDlgItem(hwnd, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_PLAY);
-            g_useNvenc = SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                g_encoderSelection = EncoderSelection::Nvenc;
+            else if (SendMessage(hAmd, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                g_encoderSelection = EncoderSelection::Amf;
+            else
+                g_encoderSelection = EncoderSelection::Libx264;
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();

@@ -58,7 +58,7 @@ void VideoCutter::ResetProgressTracking() {
 
 bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
-                           bool useNvenc, int maxBitrate, HWND progressBar,
+                           EncoderSelection encoder, int maxBitrate, HWND progressBar,
                            std::atomic<bool>* cancelFlag)
 {
     ResetProgressTracking();
@@ -73,7 +73,7 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         oss << "CutVideo start start=" << startTime << " end=" << endTime
             << " mergeAudio=" << mergeAudio
             << " convertH264=" << convertH264
-            << " useNvenc=" << useNvenc
+            << " encoder=" << static_cast<int>(encoder)
             << " maxBitrate=" << maxBitrate;
         DebugLog(oss.str());
     }
@@ -214,9 +214,15 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
 
         AVStream* outStream = nullptr;
         if (needReencode && inStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && i == (unsigned)m_player->videoStreamIndex && convertH264) {
-            const AVCodec* vEnc = useNvenc ?
-                avcodec_find_encoder_by_name("h264_nvenc") :
-                avcodec_find_encoder(AV_CODEC_ID_H264);
+            const AVCodec* vEnc = nullptr;
+            const bool useNvenc = encoder == EncoderSelection::Nvenc;
+            const bool useAmf = encoder == EncoderSelection::Amf;
+            if (useNvenc)
+                vEnc = avcodec_find_encoder_by_name("h264_nvenc");
+            else if (useAmf)
+                vEnc = avcodec_find_encoder_by_name("h264_amf");
+            else
+                vEnc = avcodec_find_encoder(AV_CODEC_ID_H264);
             if (!vEnc) {
                 DebugLog("H.264 encoder not found", true);
                 avformat_free_context(outputCtx);
@@ -250,7 +256,7 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             AVDictionary* encOpts = nullptr;
             if (useNvenc) {
                 // Use fastest preset for NVENC as requested
-                av_dict_set(&encOpts, "preset", "p1", 0); 
+                av_dict_set(&encOpts, "preset", "p1", 0);
                 av_dict_set(&encOpts, "rc", "cbr", 0);
                 av_dict_set(&encOpts, "rc-lookahead", "0", 0);
                 av_dict_set(&encOpts, "no-scenecut", "1", 0);
@@ -258,6 +264,9 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 av_dict_set(&encOpts, "forced-idr", "1", 0);
                 av_dict_set(&encOpts, "spatial-aq", "0", 0);
                 av_dict_set(&encOpts, "temporal-aq", "0", 0);
+            } else if (useAmf) {
+                av_dict_set(&encOpts, "usage", "transcoding", 0);
+                av_dict_set(&encOpts, "quality", "speed", 0);
             } else {
                 av_dict_set(&encOpts, "preset", "fast", 0);
             }
