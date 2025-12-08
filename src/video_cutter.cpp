@@ -236,12 +236,31 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             vEncCtx->pix_fmt = AV_PIX_FMT_YUV420P;
             vEncCtx->max_b_frames = 2;
             vEncCtx->gop_size = 12;
-            if (maxBitrate > 0)
+            if (maxBitrate > 0) {
                 vEncCtx->bit_rate = maxBitrate * 1000;
+                if (useNvenc) {
+                    // Enforce bitrate for NVENC
+                    vEncCtx->rc_max_rate = maxBitrate * 1000;
+                    vEncCtx->rc_min_rate = maxBitrate * 1000;
+                    vEncCtx->rc_buffer_size = maxBitrate * 1000;
+                }
+            }
             if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)
                 vEncCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             AVDictionary* encOpts = nullptr;
-            av_dict_set(&encOpts, "preset", "fast", 0);
+            if (useNvenc) {
+                // Use fastest preset for NVENC as requested
+                av_dict_set(&encOpts, "preset", "p1", 0); 
+                av_dict_set(&encOpts, "rc", "cbr", 0);
+                av_dict_set(&encOpts, "rc-lookahead", "0", 0);
+                av_dict_set(&encOpts, "no-scenecut", "1", 0);
+                av_dict_set(&encOpts, "b_adapt", "0", 0);
+                av_dict_set(&encOpts, "forced-idr", "1", 0);
+                av_dict_set(&encOpts, "spatial-aq", "0", 0);
+                av_dict_set(&encOpts, "temporal-aq", "0", 0);
+            } else {
+                av_dict_set(&encOpts, "preset", "fast", 0);
+            }
             if (avcodec_open2(vEncCtx, vEnc, &encOpts) < 0) {
                 DebugLog("Failed to open H.264 encoder", true);
                 avcodec_free_context(&vEncCtx);
