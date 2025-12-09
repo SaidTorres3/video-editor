@@ -29,6 +29,7 @@ bool g_catboxUploadSuccess = false;
 bool g_b2UploadSuccess = false;
 bool g_uploadSuccess = false;
 bool g_lastOperationWasExport = false;
+std::wstring g_lastOutputFile;
 
 void OnSetStartClicked(HWND hwnd)
 {
@@ -159,6 +160,7 @@ void OnCutClicked(HWND hwnd)
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_encoderSelection,
                                              bitrate, g_hProgressBar, &g_cancelExport);
+            g_lastOutputFile = ok ? outFile : L"";
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
                 UpdateProgressStatus(L"Uploading video...");
                 std::wstring title = L"Uploading to ";
@@ -265,6 +267,7 @@ void OnExportClicked(HWND hwnd)
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
                                              mergeAudio, convertH264, g_encoderSelection,
                                              bitrate, g_hProgressBar, &g_cancelExport);
+            g_lastOutputFile = ok ? outFile : L"";
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
                 std::wstring title = L"Uploading to ";
                 if (g_useCatbox && g_useB2)

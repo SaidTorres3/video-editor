@@ -44,6 +44,7 @@ extern std::wstring g_b2UploadedUrl;
 extern bool g_catboxUploadSuccess;
 extern bool g_b2UploadSuccess;
 extern bool g_autoUpload;
+extern std::wstring g_lastOutputFile;
 extern HBRUSH g_hbrBackground;
 extern HFONT g_hFont;
 extern COLORREF g_textColor;
@@ -335,6 +336,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 else if (g_useB2)
                     m += L"\nUploaded to Backblaze B2:";
                 ShowUrlCopyDialog(hwnd, m, g_catboxUploadedUrl, g_b2UploadedUrl);
+            } else if (success && !g_autoUpload && (g_useCatbox || g_useB2) && !g_lastOutputFile.empty()) {
+                ShowManualUploadDialog(hwnd, g_lastOutputFile, g_useCatbox, g_useB2);
             } else {
                 const wchar_t* msg;
                 const wchar_t* title;

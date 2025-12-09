@@ -131,6 +131,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     ucw.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClass(&ucw);
 
+    WNDCLASS muc = {};
+    muc.lpfnWndProc = ManualUploadProc;
+    muc.hInstance = hInstance;
+    muc.lpszClassName = L"ManualUploadClass";
+    muc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    muc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&muc);
+
     HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"Video Editor - Preview",
         WS_OVERLAPPEDWINDOW,

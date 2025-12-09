@@ -53,6 +53,8 @@ bool UploadToB2(const std::wstring& filePath, std::string& outUrl, HWND progress
     curl_easy_setopt(curl, CURLOPT_USERPWD, creds.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCB);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK) { curl_easy_cleanup(curl); return false; }
 
@@ -75,6 +77,8 @@ bool UploadToB2(const std::wstring& filePath, std::string& outUrl, HWND progress
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, postData.size());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCB);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
     res = curl_easy_perform(curl);
     curl_slist_free_all(hdrs);
     if (res != CURLE_OK) { curl_easy_cleanup(curl); return false; }
@@ -109,6 +113,8 @@ bool UploadToB2(const std::wstring& filePath, std::string& outUrl, HWND progress
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
     curl_easy_setopt(curl, CURLOPT_READDATA, fp);
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)fsz);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
     if (progressBar) {
         SendMessage(progressBar, PBM_SETPOS, 0, 0);
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCB);

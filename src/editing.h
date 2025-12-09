@@ -16,3 +16,4 @@ extern std::wstring g_catboxUploadedUrl;
 extern std::wstring g_b2UploadedUrl;
 extern bool g_catboxUploadSuccess;
 extern bool g_b2UploadSuccess;
+extern std::wstring g_lastOutputFile;

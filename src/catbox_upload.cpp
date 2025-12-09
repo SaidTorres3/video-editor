@@ -89,6 +89,8 @@ bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND prog
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCB);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
     if (progressBar) {
         SendMessage(progressBar, PBM_SETPOS, 0, 0);
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCB);
