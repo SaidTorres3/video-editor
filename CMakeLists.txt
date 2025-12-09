@@ -152,6 +152,10 @@ if(MSVC AND USE_STATIC_FFMPEG)
         /IGNORE:4286  # Ignore duplicate symbol warnings for C runtime functions
         /IGNORE:4098  # Ignore default library conflicts
     )
+
+    # Force load avcodec to ensure hardware encoders (NVENC, AMF) are registered
+    # This prevents the linker from stripping "unused" encoder symbols in static builds
+    target_link_options(VideoEditor PRIVATE "/WHOLEARCHIVE:${AVCODEC_LIBRARY}")
 elseif(MSVC)
     # For dynamic builds, resolve runtime library conflicts
     target_link_options(VideoEditor PRIVATE

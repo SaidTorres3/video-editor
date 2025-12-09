@@ -115,7 +115,7 @@ The script will handle all dependencies automatically. You'll end up with a ligh
 2. Install FFmpeg and curl via vcpkg using the static triplet.  You may enable
    additional codec features if desired:
    ```
-   vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,opus,zlib,nvcodec,ffmpeg]:x64-windows-static
+   vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,opus,zlib,nvcodec,amf,ffmpeg]:x64-windows-static
    vcpkg install curl[core,sspi,ssl,non-http]:x64-windows-static
    ```
 3. Run with powershell 7 or later:
@@ -128,7 +128,7 @@ In case something like ```error LNK2001``` occurs during linking, delete the `bu
 
 The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
 
-> **Important Note:** The static build does **not** support NVIDIA (NVENC) & AMD (AMF) hardware encoding. Only software (CPU) encoding is available when using the `-Static` option.
+> **Note:** The static build supports NVIDIA (NVENC) & AMD (AMF) hardware encoding if the linked FFmpeg library was built with the corresponding features (e.g. `nvcodec` for NVIDIA). The build system now automatically forces the inclusion of these encoders. Ensure your static FFmpeg installation includes these features (e.g. `vcpkg install ffmpeg[nvcodec]:x64-windows-static`).
 
 ---
 
