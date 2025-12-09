@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <chrono>
+#include <string>
 
 #define RNNOISE_FRAME_SIZE 480
 
@@ -238,17 +239,26 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                                        : inStream->codecpar->height;
             vEncCtx->width = outW;
             vEncCtx->height = outH;
-            vEncCtx->time_base = inStream->time_base;
+            AVRational guessedFps = av_guess_frame_rate(inputCtx, inStream, nullptr);
+            if (guessedFps.num > 0 && guessedFps.den > 0) {
+                vEncCtx->framerate = guessedFps;
+                vEncCtx->time_base = av_inv_q(guessedFps);
+            } else {
+                vEncCtx->time_base = inStream->time_base;
+            }
             vEncCtx->pix_fmt = AV_PIX_FMT_YUV420P;
             vEncCtx->max_b_frames = 2;
             vEncCtx->gop_size = 12;
             if (maxBitrate > 0) {
-                vEncCtx->bit_rate = maxBitrate * 1000;
+                const int64_t targetBitrate = static_cast<int64_t>(maxBitrate) * 1000;
+                vEncCtx->bit_rate = targetBitrate;
                 if (useNvenc) {
-                    // Enforce bitrate for NVENC
-                    vEncCtx->rc_max_rate = maxBitrate * 1000;
-                    vEncCtx->rc_min_rate = maxBitrate * 1000;
-                    vEncCtx->rc_buffer_size = maxBitrate * 1000;
+                    // Enforce bitrate for NVENC with a 2s VBV to prevent under-shooting
+                    vEncCtx->rc_max_rate = targetBitrate;
+                    vEncCtx->rc_min_rate = targetBitrate;
+                    vEncCtx->rc_buffer_size = targetBitrate * 2;
+                    vEncCtx->rc_initial_buffer_occupancy = vEncCtx->rc_buffer_size * 3 / 4;
+                    vEncCtx->bit_rate_tolerance = targetBitrate / 2;
                 }
             }
             if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)
@@ -256,6 +266,14 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
             AVDictionary* encOpts = nullptr;
             if (useNvenc) {
                 // Use fastest preset for NVENC as requested
+                if (maxBitrate > 0) {
+                    std::string br = std::to_string(maxBitrate) + "k";
+                    av_dict_set(&encOpts, "b", br.c_str(), 0);
+                    av_dict_set(&encOpts, "minrate", br.c_str(), 0);
+                    av_dict_set(&encOpts, "maxrate", br.c_str(), 0);
+                    std::string buf = std::to_string(maxBitrate * 2) + "k";
+                    av_dict_set(&encOpts, "bufsize", buf.c_str(), 0);
+                }
                 av_dict_set(&encOpts, "preset", "p1", 0);
                 av_dict_set(&encOpts, "rc", "cbr", 0);
                 av_dict_set(&encOpts, "rc-lookahead", "0", 0);
