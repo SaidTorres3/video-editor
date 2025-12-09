@@ -116,7 +116,7 @@ The script will handle all dependencies automatically. You'll end up with a ligh
    additional codec features if desired:
    ```
    vcpkg install ffmpeg[dav1d,openh264,x264,x265,mp3lame,opus,zlib,nvcodec,amf,ffmpeg]:x64-windows-static
-   vcpkg install curl[core,sspi,ssl,schannel,non-http]:x64-windows-static
+   vcpkg install curl[core,sspi,ssl,non-http]:x64-windows-static
    ```
 3. Run with powershell 7 or later:
 
