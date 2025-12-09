@@ -21,7 +21,6 @@
       "features": [
         "sspi",
         "ssl",
-        "schannel",
         "non-http"
       ]
     }
