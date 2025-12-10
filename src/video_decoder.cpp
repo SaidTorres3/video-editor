@@ -157,7 +157,7 @@ void VideoDecoder::Cleanup() {
     m_player->useHwAccel = false;
 }
 
-bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
+bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool generateImage) {
     if (!m_player->isLoaded)
         return false;
 
@@ -188,11 +188,14 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
                     return false;
 
                 AVFrame* swFrame = m_player->hwFrame;
-                if (m_player->useHwAccel && m_player->hwFrame->format == m_player->hwPixelFormat)
+                if (generateImage)
                 {
-                    if (av_hwframe_transfer_data(m_player->frame, m_player->hwFrame, 0) < 0)
-                        return false;
-                    swFrame = m_player->frame;
+                    if (m_player->useHwAccel && m_player->hwFrame->format == m_player->hwPixelFormat)
+                    {
+                        if (av_hwframe_transfer_data(m_player->frame, m_player->hwFrame, 0) < 0)
+                            return false;
+                        swFrame = m_player->frame;
+                    }
                 }
 
                 AVStream *vs = m_player->formatContext->streams[m_player->videoStreamIndex];
@@ -208,50 +211,54 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
                     m_player->currentPts = 0.0;
                 m_player->currentFrame++;
                 bool cropChanged = m_player->UpdateCropForTime(m_player->currentPts);
-                sws_scale(
-                    m_player->swsContext,
-                    (uint8_t const *const *)swFrame->data, swFrame->linesize,
-                    0, m_player->frameHeight,
-                    m_player->frameRGB->data, m_player->frameRGB->linesize);
-
-                // Cache frame for responsive backward stepping
-                if (m_player->frameCache.size() >= m_player->frameCacheLimit)
-                {
-                    // Smart cache management: remove frames with larger gaps between them
-                    // This helps keep more keyframes and evenly spaced frames in the cache
-                    if (m_player->frameCache.size() >= 2)
-                    {
-                        size_t largestGapIndex = 0;
-                        int64_t largestGap = 0;
-                        
-                        for (size_t i = 0; i < m_player->frameCache.size() - 1; i++)
-                        {
-                            int64_t gap = m_player->frameCache[i+1].number - m_player->frameCache[i].number;
-                            if (gap > largestGap)
-                            {
-                                largestGap = gap;
-                                largestGapIndex = i;
-                            }
-                        }
-                        
-                        // If we found a large gap and it's not the first frame, remove the second frame of the pair
-                        if (largestGap > 1 && largestGapIndex < m_player->frameCache.size() - 1)
-                            m_player->frameCache.erase(m_player->frameCache.begin() + largestGapIndex + 1);
-                        else
-                            m_player->frameCache.pop_front();  // Fall back to removing oldest
-                    }
-                    else
-                    {
-                        m_player->frameCache.pop_front();
-                    }
-                }
                 
-                // Create a more efficient cache by avoiding duplicate memory copy
-                m_player->frameCache.push_back({
-                    m_player->currentFrame,
-                    m_player->currentPts,
-                    std::vector<uint8_t>(m_player->buffer, m_player->buffer + m_player->rgbBufferSize)
-                });
+                if (generateImage)
+                {
+                    sws_scale(
+                        m_player->swsContext,
+                        (uint8_t const *const *)swFrame->data, swFrame->linesize,
+                        0, m_player->frameHeight,
+                        m_player->frameRGB->data, m_player->frameRGB->linesize);
+
+                    // Cache frame for responsive backward stepping
+                    if (m_player->frameCache.size() >= m_player->frameCacheLimit)
+                    {
+                        // Smart cache management: remove frames with larger gaps between them
+                        // This helps keep more keyframes and evenly spaced frames in the cache
+                        if (m_player->frameCache.size() >= 2)
+                        {
+                            size_t largestGapIndex = 0;
+                            int64_t largestGap = 0;
+                            
+                            for (size_t i = 0; i < m_player->frameCache.size() - 1; i++)
+                            {
+                                int64_t gap = m_player->frameCache[i+1].number - m_player->frameCache[i].number;
+                                if (gap > largestGap)
+                                {
+                                    largestGap = gap;
+                                    largestGapIndex = i;
+                                }
+                            }
+                            
+                            // If we found a large gap and it's not the first frame, remove the second frame of the pair
+                            if (largestGap > 1 && largestGapIndex < m_player->frameCache.size() - 1)
+                                m_player->frameCache.erase(m_player->frameCache.begin() + largestGapIndex + 1);
+                            else
+                                m_player->frameCache.pop_front();  // Fall back to removing oldest
+                        }
+                        else
+                        {
+                            m_player->frameCache.pop_front();
+                        }
+                    }
+                    
+                    // Create a more efficient cache by avoiding duplicate memory copy
+                    m_player->frameCache.push_back({
+                        m_player->currentFrame,
+                        m_player->currentPts,
+                        std::vector<uint8_t>(m_player->buffer, m_player->buffer + m_player->rgbBufferSize)
+                    });
+                }
 
                 av_frame_unref(m_player->hwFrame);
                 if (swFrame != m_player->hwFrame)

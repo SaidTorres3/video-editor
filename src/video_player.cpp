@@ -407,7 +407,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         while (currentFrame <= frameNumber)
         {
             bool last = (currentFrame == frameNumber);
-            if (!m_decoder->DecodeNextFrame(last, false))
+            if (!m_decoder->DecodeNextFrame(last, false, last))
                 break;
                 
             // Sync currentFrame to the actual decoded PTS to prevent drift
@@ -425,7 +425,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         while (currentFrame < frameNumber)
         {
             bool last = (currentFrame + 1 >= frameNumber);
-            if (!m_decoder->DecodeNextFrame(last, false))
+            if (!m_decoder->DecodeNextFrame(last, false, last))
                 break;
         }
     }
@@ -505,8 +505,11 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
         if (currentPts >= seconds - (frameDuration * 0.5))
             break;
             
+        // Optimization: only generate image if we are close to the target
+        bool closeToTarget = (seconds - currentPts) < 0.2 || (seconds - currentPts) < (frameDuration * 5.0);
+
         // Decode next frame without presenting it yet
-        if (!m_decoder->DecodeNextFrame(false, false))
+        if (!m_decoder->DecodeNextFrame(false, false, closeToTarget))
             break;
             
         decoded++;

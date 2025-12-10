@@ -11,7 +11,7 @@ public:
 
     bool Initialize();
     void Cleanup();
-    bool DecodeNextFrame(bool presentFrame, bool scheduleDisplay = true);
+    bool DecodeNextFrame(bool presentFrame, bool scheduleDisplay = true, bool generateImage = true);
 
 private:
     VideoPlayer* m_player;
