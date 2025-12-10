@@ -57,6 +57,10 @@ DragMode g_timelineDragMode = DragMode::None;
 double g_draggedKeyframeTime = -1.0;  // Time of the keyframe being dragged
 extern double g_previewSeekTime;
 
+// Key hold state for acceleration
+ULONGLONG g_keyHoldStart = 0;
+WPARAM g_keyHoldCode = 0;
+
 // Dark mode UI resources
 HFONT g_hFont = nullptr;
 HBRUSH g_hbrBackground = nullptr;
@@ -169,7 +173,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     MSG msg = {};
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
-        if (msg.message == WM_KEYDOWN && g_videoPlayer && g_videoPlayer->IsLoaded())
+        if (msg.message == WM_KEYUP)
+        {
+            if (msg.wParam == g_keyHoldCode)
+            {
+                g_keyHoldCode = 0;
+                g_keyHoldStart = 0;
+            }
+        }
+        else if (msg.message == WM_KEYDOWN && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             HWND focused = GetFocus();
             bool isEdit = false;
@@ -182,6 +194,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
             }
             if (!isEdit)
             {
+                // Track key hold time for acceleration
+                if (g_keyHoldCode != msg.wParam)
+                {
+                    g_keyHoldCode = msg.wParam;
+                    g_keyHoldStart = GetTickCount64();
+                }
+
+                double speedMultiplier = 1.0;
+                if (g_keyHoldStart > 0)
+                {
+                    ULONGLONG elapsed = GetTickCount64() - g_keyHoldStart;
+                    if (elapsed > 5000) // 5 seconds threshold
+                        speedMultiplier = 10.0;
+                }
+
                 bool handled = true;
                 switch (msg.wParam)
                 {
@@ -195,8 +222,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                 case 'J':
                 case 'j':
                 {
-                    double offset = (msg.wParam == VK_LEFT) ? 5.0 : 10.0;
-                    double t = g_videoPlayer->GetCurrentTime() - offset;
+                    // Use preview time as base if we are currently dragging/throttling
+                    double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
+                    double offset = ((msg.wParam == VK_LEFT) ? 5.0 : 10.0) * speedMultiplier;
+                    double t = currentBase - offset;
                     if (t < 0.0) t = 0.0;
 
                     g_previewSeekTime = t;
@@ -205,6 +234,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         UpdateWindow(g_hTimeline);
                     }
                     UpdateControls(); // Force immediate update of time label
+
+                    // Throttle: If another keydown for the same key is pending, skip the seek
+                    MSG nextMsg;
+                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
+                        if (nextMsg.wParam == msg.wParam) {
+                            continue; // Skip the heavy operation
+                        }
+                    }
 
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
@@ -220,8 +257,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                 case 'L':
                 case 'l':
                 {
-                    double offset = (msg.wParam == VK_RIGHT) ? 5.0 : 10.0;
-                    double t = g_videoPlayer->GetCurrentTime() + offset;
+                    double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
+                    double offset = ((msg.wParam == VK_RIGHT) ? 5.0 : 10.0) * speedMultiplier;
+                    double t = currentBase + offset;
                     double dur = g_videoPlayer->GetDuration();
                     if (t > dur) t = dur;
 
@@ -231,6 +269,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         UpdateWindow(g_hTimeline);
                     }
                     UpdateControls(); // Force immediate update of time label
+
+                    MSG nextMsg;
+                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
+                        if (nextMsg.wParam == msg.wParam) {
+                            continue;
+                        }
+                    }
 
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
@@ -260,7 +305,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             InvalidateRect(g_hTimeline, NULL, FALSE);
                             UpdateWindow(g_hTimeline);
                         }
-                        UpdateControls(); // Force immediate update of time label
+                        UpdateControls();
+                    }
+
+                    MSG nextMsg;
+                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
+                        if (nextMsg.wParam == msg.wParam) {
+                            continue;
+                        }
                     }
 
                     bool wasPlaying = g_videoPlayer->IsPlaying();
@@ -290,7 +342,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             InvalidateRect(g_hTimeline, NULL, FALSE);
                             UpdateWindow(g_hTimeline);
                         }
-                        UpdateControls(); // Force immediate update of time label
+                        UpdateControls();
+                    }
+
+                    MSG nextMsg;
+                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
+                        if (nextMsg.wParam == msg.wParam) {
+                            continue;
+                        }
                     }
 
                     bool wasPlaying = g_videoPlayer->IsPlaying();
