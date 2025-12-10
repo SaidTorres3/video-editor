@@ -21,6 +21,7 @@
 #include "timeline.h"
 #include "utils.h"
 #include "file_handling.h"
+#include "ui_updates.h"
 
 #include <string>
 #include <cstdlib>
@@ -203,6 +204,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         InvalidateRect(g_hTimeline, NULL, FALSE);
                         UpdateWindow(g_hTimeline);
                     }
+                    UpdateControls(); // Force immediate update of time label
 
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
@@ -228,6 +230,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         InvalidateRect(g_hTimeline, NULL, FALSE);
                         UpdateWindow(g_hTimeline);
                     }
+                    UpdateControls(); // Force immediate update of time label
 
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
@@ -257,6 +260,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             InvalidateRect(g_hTimeline, NULL, FALSE);
                             UpdateWindow(g_hTimeline);
                         }
+                        UpdateControls(); // Force immediate update of time label
                     }
 
                     bool wasPlaying = g_videoPlayer->IsPlaying();
@@ -286,6 +290,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             InvalidateRect(g_hTimeline, NULL, FALSE);
                             UpdateWindow(g_hTimeline);
                         }
+                        UpdateControls(); // Force immediate update of time label
                     }
 
                     bool wasPlaying = g_videoPlayer->IsPlaying();

@@ -11,6 +11,7 @@ std::wstring FormatTime(double totalSeconds, bool showMilliseconds);
 extern VideoPlayer *g_videoPlayer;
 extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hStatusText, g_hLabelCutInfo, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize;
 extern double g_cutStartTime, g_cutEndTime;
+extern double g_previewSeekTime;
 
 void UpdateControls()
 {
@@ -82,7 +83,21 @@ void UpdateControls()
 
     if (isLoaded)
     {
-        double currentTime = g_videoPlayer->GetCurrentTime();
+        double currentTime;
+        int64_t currentFrame;
+        
+        if (g_previewSeekTime >= 0.0) {
+            currentTime = g_previewSeekTime;
+            // Approximate frame number from time
+            if (g_videoPlayer->frameRate > 0)
+                currentFrame = (int64_t)(currentTime * g_videoPlayer->frameRate);
+            else
+                currentFrame = g_videoPlayer->GetCurrentFrame();
+        } else {
+            currentTime = g_videoPlayer->GetCurrentTime();
+            currentFrame = g_videoPlayer->GetCurrentFrame();
+        }
+
         double duration = g_videoPlayer->GetDuration();
         std::wstring currentTimeStr = FormatTime(currentTime);
         std::wstring durationStr = FormatTime(duration);
@@ -90,7 +105,7 @@ void UpdateControls()
         swprintf_s(statusText, _countof(statusText),
                    L"Time: %s / %s | Frame: %lld / %lld | %s",
                    currentTimeStr.c_str(), durationStr.c_str(),
-                   g_videoPlayer->GetCurrentFrame(), g_videoPlayer->GetTotalFrames(),
+                   currentFrame, g_videoPlayer->GetTotalFrames(),
                    isPlaying ? L"Playing" : L"Paused");
         SetWindowTextW(g_hStatusText, statusText);
     }
