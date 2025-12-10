@@ -54,6 +54,7 @@ bool g_wasPlayingBeforeDrag = false;
 enum class DragMode { None, Cursor, StartMarker, EndMarker, Keyframe };
 DragMode g_timelineDragMode = DragMode::None;
 double g_draggedKeyframeTime = -1.0;  // Time of the keyframe being dragged
+extern double g_previewSeekTime;
 
 // Dark mode UI resources
 HFONT g_hFont = nullptr;
@@ -196,12 +197,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     double offset = (msg.wParam == VK_LEFT) ? 5.0 : 10.0;
                     double t = g_videoPlayer->GetCurrentTime() - offset;
                     if (t < 0.0) t = 0.0;
+
+                    g_previewSeekTime = t;
+                    if (g_hTimeline) {
+                        InvalidateRect(g_hTimeline, NULL, FALSE);
+                        UpdateWindow(g_hTimeline);
+                    }
+
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
                         g_videoPlayer->Pause();
                     g_videoPlayer->SeekToTime(t);
                     if (wasPlaying)
                         g_videoPlayer->Play();
+                    
+                    g_previewSeekTime = -1.0;
                     break;
                 }
                 case VK_RIGHT:
@@ -212,12 +222,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     double t = g_videoPlayer->GetCurrentTime() + offset;
                     double dur = g_videoPlayer->GetDuration();
                     if (t > dur) t = dur;
+
+                    g_previewSeekTime = t;
+                    if (g_hTimeline) {
+                        InvalidateRect(g_hTimeline, NULL, FALSE);
+                        UpdateWindow(g_hTimeline);
+                    }
+
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
                         g_videoPlayer->Pause();
                     g_videoPlayer->SeekToTime(t);
                     if (wasPlaying)
                         g_videoPlayer->Play();
+                    
+                    g_previewSeekTime = -1.0;
                     break;
                 }
                 case 'K':
@@ -231,12 +250,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                 {
                     int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
                     if (frame < 0) frame = 0;
+
+                    if (g_videoPlayer->frameRate > 0) {
+                        g_previewSeekTime = frame / g_videoPlayer->frameRate;
+                        if (g_hTimeline) {
+                            InvalidateRect(g_hTimeline, NULL, FALSE);
+                            UpdateWindow(g_hTimeline);
+                        }
+                    }
+
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
                         g_videoPlayer->Pause();
                     g_videoPlayer->SeekToFrame(frame);
                     if (wasPlaying)
                         g_videoPlayer->Play();
+                    
+                    g_previewSeekTime = -1.0;
                     break;
                 }
                 case VK_OEM_PERIOD:
@@ -249,12 +279,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         if (frame > maxf)
                             frame = maxf;
                     }
+
+                    if (g_videoPlayer->frameRate > 0) {
+                        g_previewSeekTime = frame / g_videoPlayer->frameRate;
+                        if (g_hTimeline) {
+                            InvalidateRect(g_hTimeline, NULL, FALSE);
+                            UpdateWindow(g_hTimeline);
+                        }
+                    }
+
                     bool wasPlaying = g_videoPlayer->IsPlaying();
                     if (wasPlaying)
                         g_videoPlayer->Pause();
                     g_videoPlayer->SeekToFrame(frame);
                     if (wasPlaying)
                         g_videoPlayer->Play();
+                    
+                    g_previewSeekTime = -1.0;
                     break;
                 }
                 default:

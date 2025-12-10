@@ -17,6 +17,7 @@ extern bool g_wasPlayingBeforeDrag;
 enum class DragMode { None, Cursor, StartMarker, EndMarker, Keyframe };
 extern DragMode g_timelineDragMode;
 extern double g_draggedKeyframeTime;
+double g_previewSeekTime = -1.0; // For immediate timeline feedback
 
 // Timeline zoom variables
 double g_timelineZoomLevel = 1.0;  // 1.0 = full video, 2.0 = 2x zoom, etc.
@@ -148,7 +149,15 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();
             if (g_wasPlayingBeforeDrag)
                 g_videoPlayer->Pause();
+            
+            // Immediate UI update
+            g_previewSeekTime = seekTime;
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateWindow(hwnd); // Force restart of paint cycle to draw line immediately
+            
             g_videoPlayer->SeekToTime(seekTime, 0);
+            
+            g_previewSeekTime = -1.0; // Reset after seek
 
             g_isTimelineDragging = true;
             SetCapture(hwnd);
@@ -168,7 +177,14 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             if (g_timelineDragMode == DragMode::Cursor)
             {
+                // Immediate UI update
+                g_previewSeekTime = seekTime;
+                InvalidateRect(hwnd, NULL, FALSE);
+                UpdateWindow(hwnd);
+                
                 g_videoPlayer->SeekToTime(seekTime, 0);
+                
+                g_previewSeekTime = -1.0;
             }
             else if (g_timelineDragMode == DragMode::Keyframe)
             {
@@ -463,7 +479,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             double dur = g_videoPlayer->GetDuration();
-            double cur = g_videoPlayer->GetCurrentTime();
+            double cur = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
             int x = TimeToPixel(cur, rc, dur);
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(200,0,0));
             HGDIOBJ old = SelectObject(hdc, pen);
