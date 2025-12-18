@@ -207,7 +207,9 @@ foreach ($p in $required) {
 }
 Write-Host "FFmpeg validated at: $FFmpegPath" -ForegroundColor Green
 
-taskkill /F /IM VideoEditor.exe 2>$null;
+# Ensure the app isn't running (avoid linker/file-lock issues). In CI this process
+# usually doesn't exist, so swallow any errors.
+Get-Process -Name VideoEditor -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 # 5) vcpkg toolchain
 if ($Static.IsPresent) {
     if (-not (Test-Path "C:\tools\vcpkg")) {
