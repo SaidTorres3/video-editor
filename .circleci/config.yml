@@ -38,15 +38,15 @@ jobs:
 
             $qtPath = Get-QtKitPath $qtBase
             if (-not $qtPath) {
-              choco install python --version=3.11.9 -y
-              refreshenv
+              python --version
               python -m pip install --upgrade pip
               python -m pip install aqtinstall
 
               $kits = @("msvc2022_64", "msvc2019_64")
               foreach ($kit in $kits) {
                 Write-Host "Installing Qt $qtVersion kit: $kit"
-                python -m aqt install-qt windows desktop $qtVersion ("win64_" + $kit) -O $qtRoot -m qtbase
+                # Base Qt (Widgets/Core/etc) is installed by default; `-m` is only for *additional* modules.
+                python -m aqt install-qt windows desktop $qtVersion ("win64_" + $kit) -O $qtRoot
                 if ($LASTEXITCODE -ne 0) {
                   Write-Host "aqt failed for kit: $kit (exit $LASTEXITCODE)"
                   continue
