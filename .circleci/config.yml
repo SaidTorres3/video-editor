@@ -22,7 +22,7 @@ jobs:
           command: |
             $qtRoot = "C:\Qt"
             $qtVersion = "6.6.3"
-            $qtKit = "msvc2019_64"
+            $qtKit = "msvc2022_64"
             $qtPath = Join-Path $qtRoot "$qtVersion\$qtKit"
 
             if (-not (Test-Path $qtPath)) {
@@ -33,9 +33,7 @@ jobs:
               python -m aqt install-qt windows desktop $qtVersion win64_$qtKit -O $qtRoot -m qtbase
             }
 
-            # Expose for later steps
-            $env:QT_PATH = $qtPath
-            Write-Host "QT_PATH=$env:QT_PATH"
+            Write-Host "Qt installed at: $qtPath"
 
       - save_cache:
           key: qt-cache-6.6.3
@@ -85,10 +83,18 @@ jobs:
           name: Run build script
           shell: powershell
           command: |
+            $qtRoot = "C:\Qt"
+            $qtVersion = "6.6.3"
+            $qtKit = "msvc2022_64"
+            $qtPath = Join-Path $qtRoot "$qtVersion\$qtKit"
+            if (-not (Test-Path $qtPath)) {
+              Write-Host "ERROR: Qt not found at $qtPath" -ForegroundColor Red
+              exit 1
+            }
             if ("<<parameters.static>>" -eq "true") {
-              ./run.ps1 -Static -QtPath "$env:QT_PATH"
+              ./run.ps1 -Static -QtPath "$qtPath" -NoLaunch
             } else {
-              ./run.ps1 -QtPath "$env:QT_PATH"
+              ./run.ps1 -QtPath "$qtPath" -NoLaunch
             }
       # // Commented out because it consumes too much space
       # - store_artifacts:

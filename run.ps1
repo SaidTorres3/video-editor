@@ -1,7 +1,8 @@
 param(
     [string]$FFmpegPath = "$PSScriptRoot\third_party\ffmpeg",
     [switch]$Static,
-    [string]$QtPath = $env:QT_PATH
+    [string]$QtPath = $env:QT_PATH,
+    [switch]$NoLaunch
 )
 
 # 0) Clean the build/Release folder based on conditions
@@ -311,4 +312,8 @@ if ($QtPath) {
 }
 Write-Host ""
 Write-Host "✅ Build complete. Launching..." -ForegroundColor Green
-Start-Process -FilePath "$exe" -WorkingDirectory (Split-Path "$exe" -Parent)
+if (-not $NoLaunch.IsPresent) {
+    Start-Process -FilePath "$exe" -WorkingDirectory (Split-Path "$exe" -Parent)
+} else {
+    Write-Host "(Skipped launch: -NoLaunch)" -ForegroundColor Yellow
+}
