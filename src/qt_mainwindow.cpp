@@ -3,6 +3,7 @@
 #include "app_settings.h"
 #include "qt_options_dialog.h"
 #include "qt_progress_dialog.h"
+#include "qt_timeline_slider.h"
 #include "qt_upload_dialog.h"
 #include "utils.h"
 #include "video_player.h"
@@ -30,6 +31,7 @@
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QStyle>
+#include <QDateTime>
 
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -145,7 +147,7 @@ void MainWindow::createUi()
     leftLayout->addWidget(host, 1);
 
     auto* timelineRow = new QHBoxLayout();
-    m_timeline = new QSlider(Qt::Horizontal);
+    m_timeline = new TimelineSlider(Qt::Horizontal);
     m_timeline->setRange(0, 0);
     m_timeline->setSingleStep(50);
     m_timeline->setPageStep(250);
@@ -171,8 +173,36 @@ void MainWindow::createUi()
         if (!m_player || !m_player->IsLoaded())
             return;
         if (m_timeline->isSliderDown())
-            m_timeLabel->setText(QString::fromWCharArray(FormatTime(secondsFromMs(v)).c_str()) + " / " +
-                                 QString::fromWCharArray(FormatTime(m_player->GetDuration()).c_str()));
+            m_timeLabel->setText(QString::fromWCharArray(FormatTime(secondsFromMs(v), true).c_str()) + " / " +
+                                 QString::fromWCharArray(FormatTime(m_player->GetDuration(), true).c_str()));
+    });
+    connect(m_timeline, &TimelineSlider::jumped, this, [this](int v) {
+        if (!m_player || !m_player->IsLoaded())
+            return;
+        bool wasPlaying = m_player->IsPlaying();
+        if (wasPlaying)
+            m_player->Pause();
+        seekToSeconds(secondsFromMs(v), wasPlaying);
+    });
+    connect(m_timeline, &TimelineSlider::requestSeekExact, this, [this](double seconds) {
+        if (!m_player || !m_player->IsLoaded())
+            return;
+        bool wasPlaying = m_player->IsPlaying();
+        if (wasPlaying)
+            m_player->Pause();
+        m_player->SeekToTimeExact(seconds);
+        if (wasPlaying)
+            m_player->Play();
+    });
+    connect(m_timeline, &TimelineSlider::requestDeleteKeyframe, this, [this](double seconds) {
+        if (!m_player || !m_player->IsLoaded())
+            return;
+        if (m_player->RemoveCropKeyframe(seconds))
+        {
+            m_player->UpdateCropForTime(m_player->GetCurrentTime());
+            if (!m_player->IsPlaying())
+                m_player->SeekToTimeExact(m_player->GetCurrentTime());
+        }
     });
 
     left->setLayout(leftLayout);
@@ -319,6 +349,104 @@ void MainWindow::createUi()
 
     setCentralWidget(splitter);
     statusBar()->showMessage("Ready");
+
+    auto* actPlayPause = new QAction(this);
+    actPlayPause->setShortcut(QKeySequence(Qt::Key_Space));
+    actPlayPause->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actPlayPause, &QAction::triggered, this, &MainWindow::shortcutTogglePlayPause);
+    addAction(actPlayPause);
+
+    auto* actPlayPauseK = new QAction(this);
+    actPlayPauseK->setShortcut(QKeySequence(Qt::Key_K));
+    actPlayPauseK->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actPlayPauseK, &QAction::triggered, this, &MainWindow::shortcutTogglePlayPause);
+    addAction(actPlayPauseK);
+
+    auto* actLeft = new QAction(this);
+    actLeft->setShortcut(QKeySequence(Qt::Key_Left));
+    actLeft->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actLeft, &QAction::triggered, this, [this]() { shortcutSeekBy(-5.0); });
+    addAction(actLeft);
+
+    auto* actRight = new QAction(this);
+    actRight->setShortcut(QKeySequence(Qt::Key_Right));
+    actRight->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actRight, &QAction::triggered, this, [this]() { shortcutSeekBy(5.0); });
+    addAction(actRight);
+
+    auto* actJ = new QAction(this);
+    actJ->setShortcut(QKeySequence(Qt::Key_J));
+    actJ->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actJ, &QAction::triggered, this, [this]() { shortcutSeekBy(-10.0); });
+    addAction(actJ);
+
+    auto* actL = new QAction(this);
+    actL->setShortcut(QKeySequence(Qt::Key_L));
+    actL->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actL, &QAction::triggered, this, [this]() { shortcutSeekBy(10.0); });
+    addAction(actL);
+
+    auto* actComma = new QAction(this);
+    actComma->setShortcut(QKeySequence(Qt::Key_Comma));
+    actComma->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actComma, &QAction::triggered, this, [this]() { shortcutStepFrame(-1); });
+    addAction(actComma);
+
+    auto* actDot = new QAction(this);
+    actDot->setShortcut(QKeySequence(Qt::Key_Period));
+    actDot->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actDot, &QAction::triggered, this, [this]() { shortcutStepFrame(1); });
+    addAction(actDot);
+}
+
+bool MainWindow::isTextInputFocused() const
+{
+    QWidget* w = QApplication::focusWidget();
+    return qobject_cast<QLineEdit*>(w) != nullptr;
+}
+
+void MainWindow::shortcutTogglePlayPause()
+{
+    if (isTextInputFocused())
+        return;
+    togglePlayPause();
+}
+
+void MainWindow::shortcutSeekBy(double deltaSeconds)
+{
+    if (isTextInputFocused())
+        return;
+    if (!m_player || !m_player->IsLoaded())
+        return;
+    const double dur = m_player->GetDuration();
+    const double cur = m_player->GetCurrentTime();
+    const double next = std::clamp(cur + deltaSeconds, 0.0, dur > 0.0 ? dur : cur + deltaSeconds);
+    const bool wasPlaying = m_player->IsPlaying();
+    if (wasPlaying)
+        m_player->Pause();
+    m_player->SeekToTime(next, 0);
+    if (wasPlaying)
+        m_player->Play();
+}
+
+void MainWindow::shortcutStepFrame(int deltaFrames)
+{
+    if (isTextInputFocused())
+        return;
+    if (!m_player || !m_player->IsLoaded())
+        return;
+    const bool wasPlaying = m_player->IsPlaying();
+    if (wasPlaying)
+        m_player->Pause();
+    int64_t frame = m_player->GetCurrentFrame() + deltaFrames;
+    if (frame < 0)
+        frame = 0;
+    const int64_t total = m_player->GetTotalFrames();
+    if (total > 0 && frame >= total)
+        frame = total - 1;
+    m_player->SeekToFrame(frame);
+    if (wasPlaying)
+        m_player->Play();
 }
 
 void MainWindow::createPlayer()
@@ -364,8 +492,10 @@ void MainWindow::loadVideoFile(const QString& path)
     m_cutEndTime = -1.0;
     syncTimeEditsFromState();
 
-    m_timeline->setRange(0, msFromSeconds(m_player->GetDuration()));
+    m_timeline->setFullRangeMs(0, msFromSeconds(m_player->GetDuration()));
     m_timeline->setValue(0);
+    m_timeline->setSelectionMs(-1, -1);
+    m_timeline->setCropKeyframes({});
 
     refreshAudioTracks();
     refreshUiEnabledState();
@@ -450,12 +580,34 @@ void MainWindow::tickUi()
     const double cur = m_player->GetCurrentTime();
     const double dur = m_player->GetDuration();
     const int ms = msFromSeconds(cur);
+
+    // Keep the playhead visible while zoomed/panned.
+    m_timeline->ensureValueVisibleMs(ms);
+
     m_timeline->blockSignals(true);
     m_timeline->setValue(ms);
     m_timeline->blockSignals(false);
 
-    m_timeLabel->setText(QString::fromWCharArray(FormatTime(cur).c_str()) + " / " +
-                         QString::fromWCharArray(FormatTime(dur).c_str()));
+    m_timeLabel->setText(QString::fromWCharArray(FormatTime(cur, true).c_str()) + " / " +
+                         QString::fromWCharArray(FormatTime(dur, true).c_str()));
+
+    // Update timeline marks (crop keyframes + selection).
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastKeyframeUiUpdateMs > 200)
+    {
+        std::vector<TimelineKeyframeMark> marks;
+        for (const auto& k : m_player->GetCropKeyframes())
+        {
+            marks.push_back(TimelineKeyframeMark{k.time, k.enabled});
+        }
+        m_timeline->setCropKeyframes(std::move(marks));
+
+        const int startMs = m_cutStartTime >= 0.0 ? msFromSeconds(m_cutStartTime) : -1;
+        const int endMs = m_cutEndTime >= 0.0 ? msFromSeconds(m_cutEndTime) : -1;
+        m_timeline->setSelectionMs(startMs, endMs);
+
+        m_lastKeyframeUiUpdateMs = now;
+    }
 }
 
 bool MainWindow::hasValidSelection() const
@@ -504,6 +656,7 @@ void MainWindow::setStartMarker()
     if (m_cutEndTime >= 0 && m_cutEndTime <= m_cutStartTime)
         m_cutEndTime = -1.0;
     syncTimeEditsFromState();
+    m_timeline->setSelectionMs(msFromSeconds(m_cutStartTime), m_cutEndTime < 0 ? -1 : msFromSeconds(m_cutEndTime));
 }
 
 void MainWindow::setEndMarker()
@@ -518,6 +671,7 @@ void MainWindow::setEndMarker()
     }
     m_cutEndTime = t;
     syncTimeEditsFromState();
+    m_timeline->setSelectionMs(m_cutStartTime < 0 ? -1 : msFromSeconds(m_cutStartTime), msFromSeconds(m_cutEndTime));
 }
 
 void MainWindow::playSelection()

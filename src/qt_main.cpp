@@ -1,5 +1,6 @@
 #include "app_settings.h"
 #include "qt_mainwindow.h"
+#include "qt_native_key_filter.h"
 
 #include <QApplication>
 #include <QPalette>
@@ -44,6 +45,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     MainWindow w;
     w.resize(1200, 760);
     w.show();
+
+    NativeKeyFilter keyFilter(&w);
+    app.installNativeEventFilter(&keyFilter);
 
     if (argc > 1)
         w.loadVideoFile(QString::fromLocal8Bit(argv[1]));

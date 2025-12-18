@@ -14,6 +14,7 @@ class QTimer;
 class QWidget;
 
 class VideoPlayer;
+class TimelineSlider;
 
 class MainWindow final : public QMainWindow
 {
@@ -24,6 +25,11 @@ public:
     ~MainWindow() override;
 
     void loadVideoFile(const QString& path);
+
+public slots:
+    void shortcutTogglePlayPause();
+    void shortcutSeekBy(double deltaSeconds);
+    void shortcutStepFrame(int deltaFrames);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
@@ -36,6 +42,7 @@ private:
     void refreshAudioTracks();
     void refreshAudioSelection();
     void tickUi();
+    bool isTextInputFocused() const;
 
     void openFileDialog();
     void togglePlayPause();
@@ -53,7 +60,7 @@ private:
 
 private:
     QWidget* m_videoHost = nullptr;
-    QSlider* m_timeline = nullptr;
+    TimelineSlider* m_timeline = nullptr;
     QLabel* m_timeLabel = nullptr;
 
     QListWidget* m_audioTracks = nullptr;
@@ -79,5 +86,6 @@ private:
     double m_cutStartTime = -1.0;
     double m_cutEndTime = -1.0;
     bool m_timelineWasPlaying = false;
-};
 
+    qint64 m_lastKeyframeUiUpdateMs = 0;
+};

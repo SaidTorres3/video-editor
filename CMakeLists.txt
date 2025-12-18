@@ -149,6 +149,8 @@ endif()
 add_executable(VideoEditor WIN32
     src/qt_main.cpp
     src/qt_mainwindow.cpp
+    src/qt_native_key_filter.cpp
+    src/qt_timeline_slider.cpp
     src/qt_options_dialog.cpp
     src/qt_progress_dialog.cpp
     src/qt_upload_dialog.cpp
