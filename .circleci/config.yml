@@ -20,19 +20,48 @@ jobs:
           shell: powershell
           no_output_timeout: 2h
           command: |
+            $ErrorActionPreference = "Stop"
             $qtRoot = "C:\Qt"
             $qtVersion = "6.6.3"
-            $qtKit = "msvc2022_64"
-            $qtPath = Join-Path $qtRoot "$qtVersion\$qtKit"
+            $qtBase = Join-Path $qtRoot $qtVersion
 
-            if (-not (Test-Path $qtPath)) {
+            function Get-QtKitPath {
+              param([string]$base)
+              if (-not (Test-Path $base)) { return $null }
+              $preferred = @("msvc2022_64", "msvc2019_64")
+              foreach ($k in $preferred) {
+                $p = Join-Path $base $k
+                if (Test-Path $p) { return $p }
+              }
+              return $null
+            }
+
+            $qtPath = Get-QtKitPath $qtBase
+            if (-not $qtPath) {
               choco install python --version=3.11.9 -y
               refreshenv
               python -m pip install --upgrade pip
               python -m pip install aqtinstall
-              python -m aqt install-qt windows desktop $qtVersion win64_$qtKit -O $qtRoot -m qtbase
+
+              $kits = @("msvc2022_64", "msvc2019_64")
+              foreach ($kit in $kits) {
+                Write-Host "Installing Qt $qtVersion kit: $kit"
+                python -m aqt install-qt windows desktop $qtVersion ("win64_" + $kit) -O $qtRoot -m qtbase
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Host "aqt failed for kit: $kit (exit $LASTEXITCODE)"
+                  continue
+                }
+                $qtPath = Get-QtKitPath $qtBase
+                if ($qtPath) { break }
+              }
             }
 
+            $qtPath = Get-QtKitPath $qtBase
+            if (-not $qtPath) {
+              Write-Host "ERROR: Qt install did not produce an MSVC kit under $qtBase"
+              if (Test-Path $qtRoot) { Get-ChildItem -Recurse -Depth 2 $qtRoot | Select-Object FullName }
+              exit 1
+            }
             Write-Host "Qt installed at: $qtPath"
 
       - save_cache:
@@ -83,12 +112,18 @@ jobs:
           name: Run build script
           shell: powershell
           command: |
+            $ErrorActionPreference = "Stop"
             $qtRoot = "C:\Qt"
             $qtVersion = "6.6.3"
-            $qtKit = "msvc2022_64"
-            $qtPath = Join-Path $qtRoot "$qtVersion\$qtKit"
-            if (-not (Test-Path $qtPath)) {
-              Write-Host "ERROR: Qt not found at $qtPath" -ForegroundColor Red
+            $qtBase = Join-Path $qtRoot $qtVersion
+            $qtPath = $null
+            foreach ($kit in @("msvc2022_64", "msvc2019_64")) {
+              $p = Join-Path $qtBase $kit
+              if (Test-Path $p) { $qtPath = $p; break }
+            }
+            if (-not $qtPath) {
+              Write-Host "ERROR: Qt not found under $qtBase" -ForegroundColor Red
+              if (Test-Path $qtRoot) { Get-ChildItem -Recurse -Depth 2 $qtRoot | Select-Object FullName }
               exit 1
             }
             if ("<<parameters.static>>" -eq "true") {
