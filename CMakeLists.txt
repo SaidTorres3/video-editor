@@ -34,6 +34,46 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Qt (frontend)
+set(CMAKE_AUTOMOC ON)
+# This project does not use Qt Designer `.ui` files. Leaving UIC enabled causes
+# collisions with existing headers like `ui_updates.h` (CMake treats `ui_*.h` as
+# generated from a matching `.ui`).
+set(CMAKE_AUTOUIC OFF)
+set(CMAKE_AUTORCC OFF)
+
+if (MSVC)
+    # If a MinGW Qt was previously configured in this build directory, it will be
+    # cached as Qt*_DIR and break MSVC builds. Clear it so CMake can locate a
+    # matching MSVC Qt (if installed).
+    if (DEFINED Qt6_DIR AND Qt6_DIR MATCHES "mingw")
+        message(STATUS "Clearing cached Qt6_DIR (MinGW): ${Qt6_DIR}")
+        unset(Qt6_DIR CACHE)
+    endif()
+    if (DEFINED Qt5_DIR AND Qt5_DIR MATCHES "mingw")
+        message(STATUS "Clearing cached Qt5_DIR (MinGW): ${Qt5_DIR}")
+        unset(Qt5_DIR CACHE)
+    endif()
+endif()
+
+find_package(Qt6 COMPONENTS Widgets QUIET)
+if (Qt6_FOUND)
+    if (MSVC AND Qt6_DIR MATCHES "mingw")
+        message(FATAL_ERROR "Found a MinGW Qt at: ${Qt6_DIR} but you are building with MSVC. Install the MSVC Qt build (e.g. .../msvc2022_64) and set CMAKE_PREFIX_PATH or Qt6_DIR accordingly, or switch to a MinGW generator/toolchain.")
+    endif()
+    set(VIDEOEDITOR_QT_LIBS Qt6::Widgets)
+else()
+    find_package(Qt5 COMPONENTS Widgets QUIET)
+    if (Qt5_FOUND)
+        if (MSVC AND Qt5_DIR MATCHES "mingw")
+            message(FATAL_ERROR "Found a MinGW Qt at: ${Qt5_DIR} but you are building with MSVC. Install the MSVC Qt build and set CMAKE_PREFIX_PATH or Qt5_DIR accordingly, or switch to a MinGW generator/toolchain.")
+        endif()
+        set(VIDEOEDITOR_QT_LIBS Qt5::Widgets)
+    else()
+        message(FATAL_ERROR "Qt not found. Install Qt (6 or 5) and set CMAKE_PREFIX_PATH (or Qt6_DIR/Qt5_DIR) to the Qt 'lib/cmake' directory. If you are building with MSBuild/MSVC, you must install the MSVC Qt kit (e.g. .../msvc2022_64), not the MinGW kit (e.g. .../mingw_64).")
+    endif()
+endif()
+
 # Enable UNICODE on Win32
 add_compile_definitions(UNICODE _UNICODE)
 
@@ -107,25 +147,21 @@ endif()
 
 # ==== EXECUTABLE AND SOURCE FILES ====
 add_executable(VideoEditor WIN32
-    src/main.cpp
-    src/window_proc.cpp
-    src/ui_controls.cpp
-    src/file_handling.cpp
-    src/ui_updates.cpp
-    src/timeline.cpp
-    src/editing.cpp
+    src/qt_main.cpp
+    src/qt_mainwindow.cpp
+    src/qt_options_dialog.cpp
+    src/qt_progress_dialog.cpp
+    src/qt_upload_dialog.cpp
     src/utils.cpp
     src/video_decoder.cpp
     src/audio_player.cpp
     src/video_renderer.cpp
     src/video_cutter.cpp
     src/video_player.cpp
-    src/options_window.cpp
-    src/progress_window.cpp
     src/b2_upload.cpp
     src/catbox_upload.cpp
     src/debug_log.cpp
-    src/upload_dialog.cpp
+    src/app_settings.cpp
 )
 
 # ==== INCLUDE DIRECTORIES ====
@@ -165,6 +201,11 @@ elseif(MSVC)
     )
 endif()
 
+# Qt requires MSVC to report a correct `__cplusplus` value.
+if(MSVC)
+    target_compile_options(VideoEditor PRIVATE /Zc:__cplusplus)
+endif()
+
 # ==== WINDOWS PLATFORM LIBS ====
 set(PLATFORM_LIBS
     user32 gdi32 d2d1 comctl32 comdlg32 ole32 winmm
@@ -195,6 +236,7 @@ target_link_libraries(VideoEditor PRIVATE
     ${RNNOISE_LIBRARY}
     VENDOR_LIBCURL
     VENDOR_ZLIB
+    ${VIDEOEDITOR_QT_LIBS}
 )
 
 # Force static runtime library linking for static builds

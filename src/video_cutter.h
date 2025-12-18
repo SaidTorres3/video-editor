@@ -4,7 +4,7 @@
 #include <chrono>
 
 class VideoPlayer;
-enum class EncoderSelection : int;
+#include "progress_callback.h"
 
 class VideoCutter {
 public:
@@ -13,7 +13,8 @@ public:
 
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, EncoderSelection encoder,
-                  int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
+                  int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag,
+                  ProgressCallback onProgress = {});
 
 private:
     VideoPlayer* m_player;

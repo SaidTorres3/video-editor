@@ -2,7 +2,6 @@
 #include "video_player.h"
 #include "audio_player.h"
 #include "video_renderer.h"
-#include "ui_updates.h"
 #include <algorithm> // For std::lower_bound
 
 VideoDecoder::VideoDecoder(VideoPlayer* player) : m_player(player) {}
@@ -264,8 +263,7 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay) {
                 else if (scheduleDisplay)
                     InvalidateRect(m_player->videoWindow, nullptr, FALSE);
 
-                if (presentFrame || scheduleDisplay)
-                    UpdateTimeline();
+                // Timeline/UI updates are handled by the Qt frontend.
 
                 if (cropChanged && !presentFrame && !scheduleDisplay)
                     InvalidateRect(m_player->videoWindow, nullptr, FALSE);

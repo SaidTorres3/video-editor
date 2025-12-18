@@ -1,6 +1,7 @@
 param(
     [string]$FFmpegPath = "$PSScriptRoot\third_party\ffmpeg",
-    [switch]$Static
+    [switch]$Static,
+    [string]$QtPath = $env:QT_PATH
 )
 
 # 0) Clean the build/Release folder based on conditions
@@ -226,12 +227,43 @@ if ($Static.IsPresent) {
 # 6) Configure CMake
 $staticFlag = if ($Static.IsPresent) { "ON" } else { "OFF" }
 Write-Host "Config: USE_STATIC=$staticFlag, FFMPEG=$FFmpegPath" -ForegroundColor Cyan
+
+if ($QtPath -and (Test-Path $QtPath)) {
+    # If the user pointed to the root (e.g. C:\Qt), try to find a specific kit folder
+    if (-not (Test-Path "$QtPath\lib\cmake")) {
+        $foundKit = Get-ChildItem -Path $QtPath -Recurse -Depth 2 -Directory | 
+                    Where-Object { $_.Name -match '^(msvc|mingw)' -and (Test-Path "$($_.FullName)\lib\cmake") } | 
+                    Select-Object -First 1
+        if ($foundKit) {
+            $QtPath = $foundKit.FullName
+            Write-Host "Auto-detected Qt kit: $QtPath" -ForegroundColor Cyan
+        }
+    }
+    Write-Host "Qt: $QtPath" -ForegroundColor Cyan
+}
+
 if (-not (Test-Path ".\build")) {
     Write-Host "Configuring CMake..." -ForegroundColor Yellow
-    & cmake -S "." -B "build" "-DUSE_STATIC_FFMPEG:BOOL=$staticFlag" "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
+    $cmakeArgs = @(
+        "-S", ".", "-B", "build",
+        "-DUSE_STATIC_FFMPEG:BOOL=$staticFlag",
+        "-DFFMPEG_ROOT=$FFmpegPath",
+        "-DCURL_ROOT=$env:CURL_ROOT",
+        "-UQt6_*", "-UQt5_*", "-UQt6_DIR", "-UQt5_DIR"
+    )
+    if ($QtPath) { $cmakeArgs += "-DCMAKE_PREFIX_PATH=$QtPath" }
+    & cmake @cmakeArgs
 } else {
     Write-Host "Reconfiguring CMake..." -ForegroundColor Yellow
-    & cmake -S "." -B "build" "-DUSE_STATIC_FFMPEG:BOOL=$staticFlag" "-DFFMPEG_ROOT=$FFmpegPath" "-DCURL_ROOT=$env:CURL_ROOT"
+    $cmakeArgs = @(
+        "-S", ".", "-B", "build",
+        "-DUSE_STATIC_FFMPEG:BOOL=$staticFlag",
+        "-DFFMPEG_ROOT=$FFmpegPath",
+        "-DCURL_ROOT=$env:CURL_ROOT",
+        "-UQt6_*", "-UQt5_*", "-UQt6_DIR", "-UQt5_DIR"
+    )
+    if ($QtPath) { $cmakeArgs += "-DCMAKE_PREFIX_PATH=$QtPath" }
+    & cmake @cmakeArgs
 }
 if ($LASTEXITCODE -ne 0) { Write-Error "CMake failed"; exit 1 }
 
@@ -260,6 +292,22 @@ $exe = ".\build\Release\VideoEditor.exe"
 if (-not (Test-Path "$exe")) {
     Write-Host "ERROR: No executable found." -ForegroundColor Red
     exit 1
+}
+
+# Deploy Qt runtime so the executable can run outside a Qt environment.
+# This fixes errors like "Qt6Core.dll/Qt6Gui.dll/Qt6Widgets.dll was not found".
+if ($QtPath) {
+    $windeployqt = Join-Path $QtPath "bin\\windeployqt.exe"
+    if (Test-Path $windeployqt) {
+        Write-Host "Deploying Qt runtime (windeployqt)..." -ForegroundColor Yellow
+        & $windeployqt --release --compiler-runtime --no-translations --no-opengl-sw "$exe"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: windeployqt failed (exit $LASTEXITCODE). The app may still fail to launch due to missing Qt DLLs." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "WARNING: windeployqt not found at: $windeployqt" -ForegroundColor Yellow
+        Write-Host "Install the full Qt kit (includes windeployqt) or add Qt's bin folder to PATH." -ForegroundColor Yellow
+    }
 }
 Write-Host ""
 Write-Host "✅ Build complete. Launching..." -ForegroundColor Green

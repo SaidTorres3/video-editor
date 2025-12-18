@@ -1,10 +1,16 @@
 #include "catbox_upload.h"
-#include "options_window.h"
+#include "app_settings.h"
 #include "debug_log.h"
 #include <curl/curl.h>
 #include <commctrl.h>
 #include <string>
 #include <sstream>
+
+struct UploadProgressContext {
+    HWND progressBar = nullptr;
+    ProgressCallback onProgress;
+    int lastPct = -1;
+};
 
 static size_t WriteCB(char* ptr, size_t size, size_t nmemb, void* userdata) {
     std::string* out = static_cast<std::string*>(userdata);
@@ -14,11 +20,17 @@ static size_t WriteCB(char* ptr, size_t size, size_t nmemb, void* userdata) {
 
 static int ProgressCB(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
                       curl_off_t ultotal, curl_off_t ulnow) {
-    HWND bar = reinterpret_cast<HWND>(clientp);
-    if (bar && ultotal > 0) {
-        int pct = static_cast<int>((double)ulnow / ultotal * 100.0);
-        SendMessage(bar, PBM_SETPOS, pct, 0);
-    }
+    auto* ctx = static_cast<UploadProgressContext*>(clientp);
+    if (!ctx || ultotal <= 0)
+        return 0;
+    int pct = static_cast<int>((double)ulnow / ultotal * 100.0);
+    if (pct == ctx->lastPct)
+        return 0;
+    ctx->lastPct = pct;
+    if (ctx->progressBar)
+        SendMessage(ctx->progressBar, PBM_SETPOS, pct, 0);
+    if (ctx->onProgress)
+        ctx->onProgress(pct);
     return 0;
 }
 
@@ -41,7 +53,7 @@ static std::string Narrow(const std::wstring& w) {
     return s;
 }
 
-bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND progressBar) {
+bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND progressBar, ProgressCallback onProgress) {
     std::string path = Narrow(filePath);
     std::wstring trimmedHash = Trim(g_catboxUserHash);
 
@@ -91,10 +103,15 @@ bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND prog
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-    if (progressBar) {
-        SendMessage(progressBar, PBM_SETPOS, 0, 0);
+    UploadProgressContext progressCtx;
+    progressCtx.progressBar = progressBar;
+    progressCtx.onProgress = std::move(onProgress);
+    progressCtx.lastPct = -1;
+    if (progressCtx.progressBar)
+        SendMessage(progressCtx.progressBar, PBM_SETPOS, 0, 0);
+    if (progressCtx.progressBar || progressCtx.onProgress) {
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCB);
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, progressBar);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progressCtx);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     }
 

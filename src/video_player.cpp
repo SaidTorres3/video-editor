@@ -3,8 +3,7 @@
 #include "audio_player.h"
 #include "video_renderer.h"
 #include "video_cutter.h"
-#include "options_window.h"
-#include "ui_updates.h"
+#include "app_settings.h"
 #include <iostream>
 #include <windows.h>
 #include <windowsx.h>
@@ -17,8 +16,7 @@
 #include <cstring>
 #include <chrono>
 
-void UpdateControls();
-void UpdateTimeline();
+// UI updates are handled by the Qt frontend (polling / signals).
 
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
@@ -299,7 +297,6 @@ void VideoPlayer::CancelClipPreview()
         if (isPlaying)
         {
             Pause();
-            UpdateControls();
         }
     }
 }
@@ -335,7 +332,6 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
                 currentPts = lower->pts;
                 UpdateCropForTime(currentPts);
                 m_renderer->UpdateDisplay();
-                UpdateTimeline();
                 return;
             }
         }
@@ -514,7 +510,6 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
     
     // Ensure the final frame is displayed
     m_renderer->UpdateDisplay();
-    UpdateTimeline();
 }
 
 void VideoPlayer::SeekToTimeExact(double seconds)
@@ -938,7 +933,6 @@ void VideoPlayer::OnTimer()
         {
             clipPreviewActive = false;
             Pause();
-            UpdateControls();
         }
     }
 }
@@ -1116,7 +1110,6 @@ void VideoPlayer::PlaybackThreadFunction()
         {
             clipPreviewActive = false;
             Pause();
-            UpdateControls();
             break;
         }
 
@@ -1132,9 +1125,10 @@ void VideoPlayer::PlaybackThreadFunction()
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
                            EncoderSelection encoder, int maxBitrate, HWND progressBar,
-                           std::atomic<bool>* cancelFlag)
+                           std::atomic<bool>* cancelFlag, ProgressCallback onProgress)
 {
-    return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, encoder, maxBitrate, progressBar, cancelFlag);
+    return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, encoder, maxBitrate, progressBar,
+                              cancelFlag, std::move(onProgress));
 }
 
 LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -1198,9 +1192,7 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
             if (baseW <= 0.0f || baseH <= 0.0f)
             {
                 InvalidateRect(hwnd, nullptr, FALSE);
-                UpdateControls();
                 player->UpdateCropForTime(player->GetCurrentTime());
-                UpdateTimeline();
                 return 0;
             }
 
@@ -1240,8 +1232,6 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
                 }
             }
             InvalidateRect(hwnd, nullptr, FALSE);
-            UpdateControls();
-            UpdateTimeline();
             return 0;
         }
         else if (msg == WM_RBUTTONUP)
@@ -1314,8 +1304,6 @@ LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam
 
             player->UpdateCropForTime(clampedTime);
             InvalidateRect(hwnd, nullptr, FALSE);
-            UpdateControls();
-            UpdateTimeline();
             return 0;
         }
         return CallWindowProc(player->originalVideoWndProc, hwnd, msg, wParam, lParam);

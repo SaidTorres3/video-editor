@@ -1,5 +1,6 @@
 # CMake build files
 /build/
+/build-qt/
 /third_party
 *.exe
 *.dll

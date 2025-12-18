@@ -34,7 +34,8 @@ extern "C"
 #include <chrono>
 #include <limits>
 
-enum class EncoderSelection : int;
+#include "app_settings.h"
+#include "progress_callback.h"
 
 // Audio output using Windows Audio Session API (WASAPI)
 #include <mmdeviceapi.h>
@@ -239,7 +240,8 @@ public:
     void SetVoiceIsolationEnabled(int trackIndex, bool enabled);
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, EncoderSelection encoder,
-                  int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
+                  int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag,
+                  ProgressCallback onProgress = {});
 
     // Timer callback
     static void CALLBACK TimerProc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD time);

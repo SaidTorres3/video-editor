@@ -1,7 +1,7 @@
 #include "utils.h"
 #include <uxtheme.h>
 
-extern HFONT g_hFont;
+static HFONT g_hFont = nullptr;
 
 std::wstring FormatTime(double totalSeconds, bool showMilliseconds)
 {
