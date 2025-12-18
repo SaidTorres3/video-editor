@@ -11,6 +11,37 @@ jobs:
     steps:
       - checkout
 
+      - restore_cache:
+          keys:
+            - qt-cache-6.6.3
+
+      - run:
+          name: Install Qt (aqtinstall)
+          shell: powershell
+          no_output_timeout: 2h
+          command: |
+            $qtRoot = "C:\Qt"
+            $qtVersion = "6.6.3"
+            $qtKit = "msvc2019_64"
+            $qtPath = Join-Path $qtRoot "$qtVersion\$qtKit"
+
+            if (-not (Test-Path $qtPath)) {
+              choco install python --version=3.11.9 -y
+              refreshenv
+              python -m pip install --upgrade pip
+              python -m pip install aqtinstall
+              python -m aqt install-qt windows desktop $qtVersion win64_$qtKit -O $qtRoot -m qtbase
+            }
+
+            # Expose for later steps
+            $env:QT_PATH = $qtPath
+            Write-Host "QT_PATH=$env:QT_PATH"
+
+      - save_cache:
+          key: qt-cache-6.6.3
+          paths:
+            - C:/Qt/6.6.3
+
       # static=true
       - when:
           condition:
@@ -55,9 +86,9 @@ jobs:
           shell: powershell
           command: |
             if ("<<parameters.static>>" -eq "true") {
-              ./run.ps1 -Static
+              ./run.ps1 -Static -QtPath "$env:QT_PATH"
             } else {
-              ./run.ps1
+              ./run.ps1 -QtPath "$env:QT_PATH"
             }
       # // Commented out because it consumes too much space
       # - store_artifacts:
