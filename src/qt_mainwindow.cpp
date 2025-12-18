@@ -717,7 +717,7 @@ void MainWindow::exportCurrent()
             // Total size budget in kilobits: MB * 8192
             const int totalKbps = (int)((targetSizeMb * 8192.0) / duration);
             const int audioKbps = mergeAudio ? 128 : 256; // coarse fallback estimate
-            bitrateKbps = totalKbps > audioKbps ? (totalKbps - audioKbps) : std::max(200, totalKbps / 2);
+            bitrateKbps = totalKbps > audioKbps ? (totalKbps - audioKbps) : (std::max)(200, totalKbps / 2);
         }
     }
 

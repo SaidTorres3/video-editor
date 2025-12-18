@@ -176,6 +176,12 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
 
     bool needReencode = convertH264 || mergeAudio || anyVoiceIsolation;
 
+    // These are used across multiple branches with `goto cleanup`; declare them
+    // upfront to avoid MSVC errors about jumping past initialization.
+    int64_t startPts = 0;
+    int64_t endPts = 0;
+    int64_t audioPts = 0;
+
     AVFormatContext* inputCtx = nullptr;
     if (avformat_open_input(&inputCtx, utf8Input.c_str(), nullptr, nullptr) < 0) {
         DebugLog("Failed to open input file", true);
@@ -611,8 +617,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
     headerWritten = true;
     DebugLog("Beginning packet processing");
 
-    int64_t startPts = (int64_t)(startTime * AV_TIME_BASE);
-    int64_t endPts = (int64_t)(endTime * AV_TIME_BASE);
+    startPts = (int64_t)(startTime * AV_TIME_BASE);
+    endPts = (int64_t)(endTime * AV_TIME_BASE);
     if (av_seek_frame(inputCtx, -1, startPts, AVSEEK_FLAG_BACKWARD) < 0) {
         DebugLog("Seek failed", true);
     }
@@ -623,7 +629,6 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
     av_init_packet(&pkt);
     av_init_packet(&outPkt); // ensure fields are zeroed before use
 #pragma warning(pop)
-    int64_t audioPts = 0;
     while (av_read_frame(inputCtx, &pkt) >= 0) {
         if (cancelFlag && *cancelFlag) { success = false; goto cleanup; }
         bool handled = false;
