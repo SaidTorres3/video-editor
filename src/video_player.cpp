@@ -38,7 +38,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
-      dropAudioDuringStepping(false), frameCacheLimit(50)
+      dropAudioDuringStepping(false), frameCacheLimit(20)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -407,7 +407,12 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         while (currentFrame <= frameNumber)
         {
             bool last = (currentFrame == frameNumber);
-            if (!m_decoder->DecodeNextFrame(last, false, last))
+            
+            // Cache frames preceding the target to enable instant step-back
+            // But only if we are not too far away from target, to save memory and time
+            bool shouldCache = (frameNumber - currentFrame) < frameCacheLimit;
+
+            if (!m_decoder->DecodeNextFrame(last, false, shouldCache))
                 break;
                 
             // Sync currentFrame to the actual decoded PTS to prevent drift

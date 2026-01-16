@@ -296,6 +296,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     break;
                 case VK_OEM_COMMA:
                 {
+                    // Frame step should pause playback
+                    if (g_videoPlayer->IsPlaying())
+                        g_videoPlayer->Pause();
+
                     int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
                     if (frame < 0) frame = 0;
 
@@ -308,6 +312,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         UpdateControls();
                     }
 
+                    // Throttle: if subsequent keys are waiting, skip this update to remain responsive
                     MSG nextMsg;
                     if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
                         if (nextMsg.wParam == msg.wParam) {
@@ -315,18 +320,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         }
                     }
 
-                    bool wasPlaying = g_videoPlayer->IsPlaying();
-                    if (wasPlaying)
-                        g_videoPlayer->Pause();
                     g_videoPlayer->SeekToFrame(frame);
-                    if (wasPlaying)
-                        g_videoPlayer->Play();
                     
                     g_previewSeekTime = -1.0;
                     break;
                 }
                 case VK_OEM_PERIOD:
                 {
+                    // Frame step should pause playback
+                    if (g_videoPlayer->IsPlaying())
+                        g_videoPlayer->Pause();
+
                     int64_t frame = g_videoPlayer->GetCurrentFrame() + 1;
                     int64_t total = g_videoPlayer->GetTotalFrames();
                     if (total > 0)
@@ -352,12 +356,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         }
                     }
 
-                    bool wasPlaying = g_videoPlayer->IsPlaying();
-                    if (wasPlaying)
-                        g_videoPlayer->Pause();
                     g_videoPlayer->SeekToFrame(frame);
-                    if (wasPlaying)
-                        g_videoPlayer->Play();
                     
                     g_previewSeekTime = -1.0;
                     break;
