@@ -4,11 +4,28 @@
 static HWND g_hOptionsWnd = nullptr;
 static HWND g_hUploadWnd = nullptr;
 static HWND g_hCatboxWnd = nullptr;
+static HWND g_hGeneralPanel = nullptr;
+static HWND g_hEncodingPanel = nullptr;
+static HWND g_hUploadPanel = nullptr;
+static int g_selectedCategory = ID_TAB_GENERAL;
+static HBRUSH g_hOptionsBgBrush = (HBRUSH)GetStockObject(BLACK_BRUSH);
+
+static LRESULT CALLBACK OptionsPanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static void EnsurePanelClassRegistered(HINSTANCE hInst);
+
+static HBRUSH ApplyDarkColors(HDC hdc, UINT msg)
+{
+    SetTextColor(hdc, RGB(240, 240, 240));
+    SetBkColor(hdc, RGB(0, 0, 0));
+    return g_hOptionsBgBrush;
+}
 
 // Global option variables
 EncoderSelection g_encoderSelection = EncoderSelection::Libx264;
 bool g_logToFile = true;
 bool g_autoPlay = true;
+std::wstring g_qualityPreset = L"Medium";
+std::wstring g_customEncoderArgs;
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
 std::wstring g_b2BucketId;
@@ -66,6 +83,12 @@ void LoadSettings()
         sz = sizeof(buf);
         if (RegQueryValueExW(hKey, L"CatboxHash", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
             g_catboxUserHash = buf;
+        sz = sizeof(buf);
+        if (RegQueryValueExW(hKey, L"QualityPreset", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
+            g_qualityPreset = buf;
+        sz = sizeof(buf);
+        if (RegQueryValueExW(hKey, L"CustomEncoderArgs", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
+            g_customEncoderArgs = buf;
         RegCloseKey(hKey);
     }
 }
@@ -95,8 +118,69 @@ void SaveSettings()
         val = g_useB2 ? 1 : 0;
         RegSetValueExW(hKey, L"UseB2", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"CatboxHash", 0, REG_SZ, (const BYTE*)g_catboxUserHash.c_str(), (DWORD)((g_catboxUserHash.size()+1)*sizeof(wchar_t)));
+        RegSetValueExW(hKey, L"QualityPreset", 0, REG_SZ, (const BYTE*)g_qualityPreset.c_str(), (DWORD)((g_qualityPreset.size()+1)*sizeof(wchar_t)));
+        RegSetValueExW(hKey, L"CustomEncoderArgs", 0, REG_SZ, (const BYTE*)g_customEncoderArgs.c_str(), (DWORD)((g_customEncoderArgs.size()+1)*sizeof(wchar_t)));
         RegCloseKey(hKey);
     }
+}
+
+static void EnsurePanelClassRegistered(HINSTANCE hInst)
+{
+    static bool registered = false;
+    if (registered)
+        return;
+
+    WNDCLASS wc = {};
+    wc.lpfnWndProc = OptionsPanelProc;
+    wc.hInstance = hInst;
+    wc.lpszClassName = L"OptionsPanelClass";
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClass(&wc);
+    registered = true;
+}
+
+static LRESULT CALLBACK OptionsPanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_COMMAND:
+        return SendMessage(GetParent(hwnd), msg, wParam, lParam);
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORLISTBOX:
+        return (LRESULT)ApplyDarkColors((HDC)wParam, msg);
+    case WM_ERASEBKGND:
+        {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            FillRect((HDC)wParam, &rc, g_hOptionsBgBrush);
+            return 1;
+        }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+// Helper function to switch between category panels
+void SwitchCategory(int categoryId)
+{
+    g_selectedCategory = categoryId;
+    
+    // Hide all panels
+    if (g_hGeneralPanel) ShowWindow(g_hGeneralPanel, SW_HIDE);
+    if (g_hEncodingPanel) ShowWindow(g_hEncodingPanel, SW_HIDE);
+    if (g_hUploadPanel) ShowWindow(g_hUploadPanel, SW_HIDE);
+    
+    // Show selected panel
+    if (categoryId == ID_TAB_GENERAL && g_hGeneralPanel)
+        ShowWindow(g_hGeneralPanel, SW_SHOW);
+    else if (categoryId == ID_TAB_ENCODING && g_hEncodingPanel)
+        ShowWindow(g_hEncodingPanel, SW_SHOW);
+    else if (categoryId == ID_TAB_UPLOAD && g_hUploadPanel)
+        ShowWindow(g_hUploadPanel, SW_SHOW);
+    
+    // Force redraw of category buttons to update highlighting
+    InvalidateRect(g_hOptionsWnd, nullptr, TRUE);
 }
 
 void ShowOptionsWindow(HWND parent)
@@ -106,116 +190,279 @@ void ShowOptionsWindow(HWND parent)
         return;
     }
 
-    g_hOptionsWnd = CreateWindowEx(0, L"OptionsClass", L"Options",
+    // Create larger, more professional window
+    g_hOptionsWnd = CreateWindowEx(0, L"OptionsClass", L"Preferences",
                                    WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, 280, 260,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, 720, 480,
                                    parent, nullptr,
                                    (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hOptionsWnd);
     CenterWindow(g_hOptionsWnd, parent);
 
-    CreateWindow(L"STATIC", L"Encode H264:", WS_CHILD | WS_VISIBLE,
-                 10, 10, 120, 20, g_hOptionsWnd, nullptr,
-                 (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    HWND hLib = CreateWindow(L"BUTTON", L"libx264",
-                             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                             10, 40, 100, 20, g_hOptionsWnd,
-                             (HMENU)ID_RADIO_ENCODER_LIBX264,
-                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    HWND hNv = CreateWindow(L"BUTTON", L"NVENC h264",
-                            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                            10, 65, 120, 20, g_hOptionsWnd,
-                            (HMENU)ID_RADIO_ENCODER_NVENC,
-                            (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    HWND hAmd = CreateWindow(L"BUTTON", L"AMD AMF h264",
-                             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                             10, 90, 140, 20, g_hOptionsWnd,
-                             (HMENU)ID_RADIO_ENCODER_AMD,
-                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    HWND hLog = CreateWindow(L"BUTTON", L"Enable log file",
-                             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                             10, 125, 150, 20, g_hOptionsWnd,
-                             (HMENU)ID_CHECKBOX_ENABLE_LOG,
-                             (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    HWND hAuto = CreateWindow(L"BUTTON", L"Enable auto-play",
-                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                              10, 145, 150, 20, g_hOptionsWnd,
-                              (HMENU)ID_CHECKBOX_AUTO_PLAY,
-                              (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(hLib);
-    ApplyDarkTheme(hNv);
-    ApplyDarkTheme(hAmd);
-    ApplyDarkTheme(hLog);
-    ApplyDarkTheme(hAuto);
-    HWND hUpload = CreateWindow(L"BUTTON", L"Upload Settings",
-                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                               10, 185, 100, 25, g_hOptionsWnd,
-                               (HMENU)ID_BUTTON_UPLOAD_CONFIG,
-                               (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    HWND hOk = CreateWindow(L"BUTTON", L"OK",
-                            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            120, 185, 60, 25, g_hOptionsWnd,
-                            (HMENU)IDOK,
-                            (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
-                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                190, 185, 60, 25, g_hOptionsWnd,
-                                (HMENU)IDCANCEL,
-                                (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(hOk);
-    ApplyDarkTheme(hCancel);
-    ApplyDarkTheme(hUpload);
+    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(g_hOptionsWnd, GWLP_HINSTANCE);
+    EnsurePanelClassRegistered(hInst);
+    int leftPanelWidth = 180;
+    int contentX = leftPanelWidth + 25;
+    int contentWidth = 720 - contentX - 25;
+    int contentY = 20;
 
-    SendMessage(hLib, BM_SETCHECK, g_encoderSelection == EncoderSelection::Libx264 ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(hNv, BM_SETCHECK, g_encoderSelection == EncoderSelection::Nvenc ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(hAmd, BM_SETCHECK, g_encoderSelection == EncoderSelection::Amf ? BST_CHECKED : BST_UNCHECKED, 0);
+    // ===== LEFT PANEL - Category Navigation (DaVinci Resolve style) =====
+    HWND hTabGeneral = CreateWindow(L"BUTTON", L"  General",
+                                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
+                                    0, 50, leftPanelWidth, 40, g_hOptionsWnd,
+                                    (HMENU)ID_TAB_GENERAL, hInst, nullptr);
+    HWND hTabEncoding = CreateWindow(L"BUTTON", L"  Encoding",
+                                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
+                                     0, 90, leftPanelWidth, 40, g_hOptionsWnd,
+                                     (HMENU)ID_TAB_ENCODING, hInst, nullptr);
+    HWND hTabUpload = CreateWindow(L"BUTTON", L"  Upload",
+                                   WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
+                                   0, 130, leftPanelWidth, 40, g_hOptionsWnd,
+                                   (HMENU)ID_TAB_UPLOAD, hInst, nullptr);
+
+    ApplyDarkTheme(hTabGeneral);
+    ApplyDarkTheme(hTabEncoding);
+    ApplyDarkTheme(hTabUpload);
+
+    // ===== GENERAL PANEL =====
+    g_hGeneralPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
+                                     WS_CHILD | WS_VISIBLE,
+                                     contentX, contentY, contentWidth, 380,
+                                     g_hOptionsWnd, (HMENU)ID_PANEL_GENERAL, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"General Settings", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 0, contentWidth, 26, g_hGeneralPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+                 0, 32, contentWidth, 2, g_hGeneralPanel, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Playback", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 50, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
+    HWND hAuto = CreateWindow(L"BUTTON", L"Auto-play after import",
+                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                              20, 78, 250, 22, g_hGeneralPanel,
+                              (HMENU)ID_CHECKBOX_AUTO_PLAY, hInst, nullptr);
+    ApplyDarkTheme(hAuto);
+
+    CreateWindow(L"STATIC", L"Logging", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 120, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
+    HWND hLog = CreateWindow(L"BUTTON", L"Enable debug logging",
+                             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                             20, 148, 250, 22, g_hGeneralPanel,
+                             (HMENU)ID_CHECKBOX_ENABLE_LOG, hInst, nullptr);
+    ApplyDarkTheme(hLog);
     SendMessage(hLog, BM_SETCHECK, g_logToFile ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hAuto, BM_SETCHECK, g_autoPlay ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    // ===== ENCODING PANEL =====
+    g_hEncodingPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
+                                      WS_CHILD,
+                                      contentX, contentY, contentWidth, 380,
+                                      g_hOptionsWnd, (HMENU)ID_PANEL_ENCODING, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Encoding Settings", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 0, contentWidth, 26, g_hEncodingPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+                 0, 32, contentWidth, 2, g_hEncodingPanel, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Video Codec", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 50, contentWidth, 22, g_hEncodingPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"Encoder:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 20, 80, 120, 22, g_hEncodingPanel, nullptr, hInst, nullptr);
+    HWND hEncoderCombo = CreateWindow(L"COMBOBOX", L"",
+                                      WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                      150, 78, 280, 200, g_hEncodingPanel,
+                                      (HMENU)ID_COMBO_ENCODER, hInst, nullptr);
+    ApplyDarkTheme(hEncoderCombo);
+    SendMessage(hEncoderCombo, CB_ADDSTRING, 0, (LPARAM)L"H.264 (libx264) - Software");
+    SendMessage(hEncoderCombo, CB_ADDSTRING, 0, (LPARAM)L"H.264 (NVENC) - NVIDIA GPU");
+    SendMessage(hEncoderCombo, CB_ADDSTRING, 0, (LPARAM)L"H.264 (AMF) - AMD GPU");
+    SendMessage(hEncoderCombo, CB_SETCURSEL, static_cast<int>(g_encoderSelection), 0);
+
+    CreateWindow(L"STATIC", L"Quality:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 20, 115, 120, 22, g_hEncodingPanel, nullptr, hInst, nullptr);
+    HWND hQualityCombo = CreateWindow(L"COMBOBOX", L"",
+                                      WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                      150, 113, 280, 200, g_hEncodingPanel,
+                                      (HMENU)ID_COMBO_QUALITY, hInst, nullptr);
+    ApplyDarkTheme(hQualityCombo);
+    SendMessage(hQualityCombo, CB_ADDSTRING, 0, (LPARAM)L"Low");
+    SendMessage(hQualityCombo, CB_ADDSTRING, 0, (LPARAM)L"Medium");
+    SendMessage(hQualityCombo, CB_ADDSTRING, 0, (LPARAM)L"High");
+    SendMessage(hQualityCombo, CB_ADDSTRING, 0, (LPARAM)L"Very High");
+    int qualIdx = 1;
+    if (g_qualityPreset == L"Low") qualIdx = 0;
+    else if (g_qualityPreset == L"Medium") qualIdx = 1;
+    else if (g_qualityPreset == L"High") qualIdx = 2;
+    else if (g_qualityPreset == L"Very High") qualIdx = 3;
+    SendMessage(hQualityCombo, CB_SETCURSEL, qualIdx, 0);
+
+    CreateWindow(L"STATIC", L"Advanced", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 160, contentWidth, 22, g_hEncodingPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"Custom Arguments:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 20, 190, 120, 22, g_hEncodingPanel, nullptr, hInst, nullptr);
+    HWND hCustomArgs = CreateWindow(L"EDIT", g_customEncoderArgs.c_str(),
+                                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                                    150, 188, 350, 24, g_hEncodingPanel,
+                                    (HMENU)ID_EDIT_CUSTOM_ARGS, hInst, nullptr);
+    ApplyDarkTheme(hCustomArgs);
+
+    // ===== UPLOAD PANEL =====
+    g_hUploadPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
+                                    WS_CHILD,
+                                    contentX, contentY, contentWidth, 380,
+                                    g_hOptionsWnd, (HMENU)ID_PANEL_UPLOAD, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Upload Settings", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 0, contentWidth, 26, g_hUploadPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+                 0, 32, contentWidth, 2, g_hUploadPanel, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Auto Upload", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 50, contentWidth, 22, g_hUploadPanel, nullptr, hInst, nullptr);
+    HWND hAutoUpload = CreateWindow(L"BUTTON", L"Automatically upload after export",
+                                    WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                    20, 78, 300, 22, g_hUploadPanel,
+                                    (HMENU)ID_CHECKBOX_AUTO_UPLOAD, hInst, nullptr);
+    ApplyDarkTheme(hAutoUpload);
+    SendMessage(hAutoUpload, BM_SETCHECK, g_autoUpload ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    CreateWindow(L"STATIC", L"Upload Services", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 115, contentWidth, 22, g_hUploadPanel, nullptr, hInst, nullptr);
+
+    HWND hCatbox = CreateWindow(L"BUTTON", L"Catbox.moe Settings",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                20, 145, 200, 32, g_hUploadPanel,
+                                (HMENU)ID_BUTTON_CATBOX_CONFIG, hInst, nullptr);
+
+    HWND hB2 = CreateWindow(L"BUTTON", L"Backblaze B2 Settings",
+                            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                            240, 145, 200, 32, g_hUploadPanel,
+                            (HMENU)ID_BUTTON_B2_SETTINGS, hInst, nullptr);
+
+    ApplyDarkTheme(hCatbox);
+    ApplyDarkTheme(hB2);
+
+    // ===== BOTTOM BUTTONS =====
+    HWND hOk = CreateWindow(L"BUTTON", L"OK",
+                            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                            520, 420, 90, 32, g_hOptionsWnd,
+                            (HMENU)IDOK, hInst, nullptr);
+    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                620, 420, 90, 32, g_hOptionsWnd,
+                                (HMENU)IDCANCEL, hInst, nullptr);
+    ApplyDarkTheme(hOk);
+    ApplyDarkTheme(hCancel);
+
+    // Show General panel by default
+    g_selectedCategory = ID_TAB_GENERAL;
+    SwitchCategory(ID_TAB_GENERAL);
 }
 
 LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORLISTBOX:
+        return (LRESULT)ApplyDarkColors((HDC)wParam, msg);
+    case WM_ERASEBKGND:
+        {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            FillRect((HDC)wParam, &rc, g_hOptionsBgBrush);
+            return 1;
+        }
     case WM_COMMAND:
-        if (LOWORD(wParam) == ID_BUTTON_UPLOAD_CONFIG) {
-            ShowUploadWindow(hwnd);
+        // Handle category button clicks
+        if (LOWORD(wParam) == ID_TAB_GENERAL || 
+            LOWORD(wParam) == ID_TAB_ENCODING || 
+            LOWORD(wParam) == ID_TAB_UPLOAD) {
+            SwitchCategory(LOWORD(wParam));
+        }
+        else if (LOWORD(wParam) == ID_BUTTON_CATBOX_CONFIG) {
+            ShowCatboxConfigWindow(hwnd);
+        }
+        else if (LOWORD(wParam) == ID_BUTTON_B2_SETTINGS) {
+            ShowB2ConfigWindow(hwnd);
         } else if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
-            HWND hNv = GetDlgItem(hwnd, ID_RADIO_ENCODER_NVENC);
-            HWND hAmd = GetDlgItem(hwnd, ID_RADIO_ENCODER_AMD);
+            // Get encoder selection from combo box
+            HWND hEncoderCombo = GetDlgItem(hwnd, ID_COMBO_ENCODER);
+            int encoderIdx = (int)SendMessage(hEncoderCombo, CB_GETCURSEL, 0, 0);
+            if (encoderIdx >= 0 && encoderIdx <= 2) {
+                g_encoderSelection = static_cast<EncoderSelection>(encoderIdx);
+            }
+
+            // Get quality preset from combo box
+            HWND hQualityCombo = GetDlgItem(hwnd, ID_COMBO_QUALITY);
+            int qualityIdx = (int)SendMessage(hQualityCombo, CB_GETCURSEL, 0, 0);
+            switch (qualityIdx) {
+                case 0: g_qualityPreset = L"Low"; break;
+                case 1: g_qualityPreset = L"Medium"; break;
+                case 2: g_qualityPreset = L"High"; break;
+                case 3: g_qualityPreset = L"Very High"; break;
+                default: g_qualityPreset = L"Medium"; break;
+            }
+
+            // Get custom encoder arguments
+            wchar_t customArgs[512];
+            GetWindowTextW(GetDlgItem(hwnd, ID_EDIT_CUSTOM_ARGS), customArgs, 512);
+            g_customEncoderArgs = customArgs;
+
+            // Get checkbox states
             HWND hLog = GetDlgItem(hwnd, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_PLAY);
-            if (SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED)
-                g_encoderSelection = EncoderSelection::Nvenc;
-            else if (SendMessage(hAmd, BM_GETCHECK, 0, 0) == BST_CHECKED)
-                g_encoderSelection = EncoderSelection::Amf;
-            else
-                g_encoderSelection = EncoderSelection::Libx264;
+            HWND hAutoUpload = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_UPLOAD);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g_autoUpload = SendMessage(hAutoUpload, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            
             SaveSettings();
             DestroyWindow(hwnd);
         }
         break;
     case WM_CLOSE:
         {
-            HWND hNv = GetDlgItem(hwnd, ID_RADIO_ENCODER_NVENC);
-            HWND hAmd = GetDlgItem(hwnd, ID_RADIO_ENCODER_AMD);
+            // Get encoder selection from combo box
+            HWND hEncoderCombo = GetDlgItem(hwnd, ID_COMBO_ENCODER);
+            int encoderIdx = (int)SendMessage(hEncoderCombo, CB_GETCURSEL, 0, 0);
+            if (encoderIdx >= 0 && encoderIdx <= 2) {
+                g_encoderSelection = static_cast<EncoderSelection>(encoderIdx);
+            }
+
+            // Get quality preset from combo box
+            HWND hQualityCombo = GetDlgItem(hwnd, ID_COMBO_QUALITY);
+            int qualityIdx = (int)SendMessage(hQualityCombo, CB_GETCURSEL, 0, 0);
+            switch (qualityIdx) {
+                case 0: g_qualityPreset = L"Low"; break;
+                case 1: g_qualityPreset = L"Medium"; break;
+                case 2: g_qualityPreset = L"High"; break;
+                case 3: g_qualityPreset = L"Very High"; break;
+                default: g_qualityPreset = L"Medium"; break;
+            }
+
+            // Get custom encoder arguments
+            wchar_t customArgs[512];
+            GetWindowTextW(GetDlgItem(hwnd, ID_EDIT_CUSTOM_ARGS), customArgs, 512);
+            g_customEncoderArgs = customArgs;
+
+            // Get checkbox states
             HWND hLog = GetDlgItem(hwnd, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_PLAY);
-            if (SendMessage(hNv, BM_GETCHECK, 0, 0) == BST_CHECKED)
-                g_encoderSelection = EncoderSelection::Nvenc;
-            else if (SendMessage(hAmd, BM_GETCHECK, 0, 0) == BST_CHECKED)
-                g_encoderSelection = EncoderSelection::Amf;
-            else
-                g_encoderSelection = EncoderSelection::Libx264;
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            
             SaveSettings();
             DestroyWindow(hwnd);
         }
         break;
     case WM_DESTROY:
         g_hOptionsWnd = nullptr;
+        g_hGeneralPanel = nullptr;
+        g_hEncodingPanel = nullptr;
+        g_hUploadPanel = nullptr;
+        g_selectedCategory = ID_TAB_GENERAL;
         break;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -229,81 +476,91 @@ void ShowB2ConfigWindow(HWND parent)
 {
     if (g_hB2Wnd) { SetForegroundWindow(g_hB2Wnd); return; }
 
-    g_hB2Wnd = CreateWindowEx(0, L"B2ConfigClass", L"Upload Settings",
-                              WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 340, 300,
+    g_hB2Wnd = CreateWindowEx(0, L"B2ConfigClass", L"Backblaze B2 Configuration",
+                              WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_VSCROLL,
+                              CW_USEDEFAULT, CW_USEDEFAULT, 650, 380,
                               parent, nullptr,
                               (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hB2Wnd);
     CenterWindow(g_hB2Wnd, parent);
 
-    CreateWindow(L"STATIC", L"Key ID:", WS_CHILD | WS_VISIBLE,
-                 10, 10, 100, 20, g_hB2Wnd, nullptr,
-                 (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE);
+    int labelWidth = 130;
+    int inputX = labelWidth + 15;
+    int inputWidth = 380;
+
+    // Header
+    CreateWindow(L"STATIC", L"Backblaze B2 Settings", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 15, 15, 250, 22, g_hB2Wnd, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+                 15, 42, 550, 2, g_hB2Wnd, nullptr, hInst, nullptr);
+
+    // Enable B2 checkbox
+    HWND hEnableB2 = CreateWindow(L"BUTTON", L"Enable Backblaze B2 Upload", 
+                                  WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                  15, 55, 250, 20, g_hB2Wnd,
+                                  (HMENU)ID_CHECKBOX_USE_B2, hInst, nullptr);
+    ApplyDarkTheme(hEnableB2);
+
+    // Credentials section
+    CreateWindow(L"STATIC", L"Credentials", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 15, 88, labelWidth, 18, g_hB2Wnd, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Key ID:", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                 15, 115, labelWidth, 20, g_hB2Wnd, nullptr, hInst, nullptr);
     HWND hKeyId = CreateWindow(L"EDIT", g_b2KeyId.c_str(),
                                WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                               120, 10, 190, 20, g_hB2Wnd,
-                               (HMENU)ID_EDIT_B2_KEY_ID,
-                               (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+                               inputX, 113, inputWidth, 22, g_hB2Wnd,
+                               (HMENU)ID_EDIT_B2_KEY_ID, hInst, nullptr);
 
-    CreateWindow(L"STATIC", L"App Key:", WS_CHILD | WS_VISIBLE,
-                 10, 40, 100, 20, g_hB2Wnd, nullptr,
-                 (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+    CreateWindow(L"STATIC", L"Application Key:", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                 15, 145, labelWidth, 20, g_hB2Wnd, nullptr, hInst, nullptr);
     HWND hAppKey = CreateWindow(L"EDIT", g_b2AppKey.c_str(),
-                               WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                               120, 40, 190, 20, g_hB2Wnd,
-                               (HMENU)ID_EDIT_B2_APP_KEY,
-                               (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+                               WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD,
+                               inputX, 143, inputWidth, 22, g_hB2Wnd,
+                               (HMENU)ID_EDIT_B2_APP_KEY, hInst, nullptr);
 
-    CreateWindow(L"STATIC", L"Bucket ID:", WS_CHILD | WS_VISIBLE,
-                 10, 70, 100, 20, g_hB2Wnd, nullptr,
-                 (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+    // Bucket section
+    CreateWindow(L"STATIC", L"Bucket Information", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 15, 178, labelWidth, 18, g_hB2Wnd, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Bucket ID:", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                 15, 205, labelWidth, 20, g_hB2Wnd, nullptr, hInst, nullptr);
     HWND hBucketId = CreateWindow(L"EDIT", g_b2BucketId.c_str(),
                                  WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                                 120, 70, 190, 20, g_hB2Wnd,
-                                 (HMENU)ID_EDIT_B2_BUCKET_ID,
-                                 (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+                                 inputX, 203, inputWidth, 22, g_hB2Wnd,
+                                 (HMENU)ID_EDIT_B2_BUCKET_ID, hInst, nullptr);
 
-    CreateWindow(L"STATIC", L"Bucket Name:", WS_CHILD | WS_VISIBLE,
-                 10, 100, 100, 20, g_hB2Wnd, nullptr,
-                 (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+    CreateWindow(L"STATIC", L"Bucket Name:", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                 15, 235, labelWidth, 20, g_hB2Wnd, nullptr, hInst, nullptr);
     HWND hBucketName = CreateWindow(L"EDIT", g_b2BucketName.c_str(),
                                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                                   120, 100, 190, 20, g_hB2Wnd,
-                                   (HMENU)ID_EDIT_B2_BUCKET_NAME,
-                                   (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+                                   inputX, 233, inputWidth, 22, g_hB2Wnd,
+                                   (HMENU)ID_EDIT_B2_BUCKET_NAME, hInst, nullptr);
 
-    CreateWindow(L"STATIC", L"Custom URL:", WS_CHILD | WS_VISIBLE,
-                 10, 130, 100, 20, g_hB2Wnd, nullptr,
-                 (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+    CreateWindow(L"STATIC", L"Custom URL:", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                 15, 265, labelWidth, 20, g_hB2Wnd, nullptr, hInst, nullptr);
     HWND hCustomUrl = CreateWindow(L"EDIT", g_b2CustomUrl.c_str(),
                                   WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                                  120, 130, 190, 20, g_hB2Wnd,
-                                  (HMENU)ID_EDIT_B2_CUSTOM_URL,
-                                  (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
-
-    HWND hEnableB2 = CreateWindow(L"BUTTON", L"Enable Backblaze B2", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                  10, 160, 180, 20, g_hB2Wnd,
-                                  (HMENU)ID_CHECKBOX_USE_B2,
-                                  (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
-
-    HWND hOk = CreateWindow(L"BUTTON", L"OK",
-                            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            70, 200, 80, 25, g_hB2Wnd,
-                            (HMENU)IDOK,
-                            (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
-    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
-                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                170, 200, 80, 25, g_hB2Wnd,
-                                (HMENU)IDCANCEL,
-                                (HINSTANCE)GetWindowLongPtr(g_hB2Wnd, GWLP_HINSTANCE), nullptr);
+                                  inputX, 263, inputWidth, 22, g_hB2Wnd,
+                                  (HMENU)ID_EDIT_B2_CUSTOM_URL, hInst, nullptr);
 
     ApplyDarkTheme(hKeyId);
     ApplyDarkTheme(hAppKey);
     ApplyDarkTheme(hBucketId);
     ApplyDarkTheme(hBucketName);
     ApplyDarkTheme(hCustomUrl);
-    ApplyDarkTheme(hEnableB2);
+
+    // Bottom buttons
+    HWND hOk = CreateWindow(L"BUTTON", L"OK",
+                            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                            300, 300, 85, 28, g_hB2Wnd,
+                            (HMENU)IDOK, hInst, nullptr);
+    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                395, 300, 85, 28, g_hB2Wnd,
+                                (HMENU)IDCANCEL, hInst, nullptr);
+
     ApplyDarkTheme(hOk);
     ApplyDarkTheme(hCancel);
     SendMessage(hEnableB2, BM_SETCHECK, g_useB2 ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -312,6 +569,18 @@ void ShowB2ConfigWindow(HWND parent)
 LRESULT CALLBACK B2ConfigProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORLISTBOX:
+        return (LRESULT)ApplyDarkColors((HDC)wParam, msg);
+    case WM_ERASEBKGND:
+        {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            FillRect((HDC)wParam, &rc, g_hOptionsBgBrush);
+            return 1;
+        }
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
             wchar_t buf[256];
@@ -361,46 +630,56 @@ void ShowUploadWindow(HWND parent)
 {
     if (g_hUploadWnd) { SetForegroundWindow(g_hUploadWnd); return; }
 
-    g_hUploadWnd = CreateWindowEx(0, L"UploadConfigClass", L"Upload Settings",
+    g_hUploadWnd = CreateWindowEx(0, L"UploadConfigClass", L"Upload Services",
                                   WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, 300, 150,
+                                  CW_USEDEFAULT, CW_USEDEFAULT, 420, 200,
                                   parent, nullptr,
                                   (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hUploadWnd);
     CenterWindow(g_hUploadWnd, parent);
 
-    HWND hAuto = CreateWindow(L"BUTTON", L"Auto upload after export",
-                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                              10, 10, 200, 20, g_hUploadWnd,
-                              (HMENU)ID_CHECKBOX_AUTO_UPLOAD,
-                              (HINSTANCE)GetWindowLongPtr(g_hUploadWnd, GWLP_HINSTANCE), nullptr);
+    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(g_hUploadWnd, GWLP_HINSTANCE);
 
-    HWND hCatbox = CreateWindow(L"BUTTON", L"Catbox Settings",
+    // Header
+    CreateWindow(L"STATIC", L"Upload Configuration", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 15, 15, 200, 22, g_hUploadWnd, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+                 15, 42, 380, 2, g_hUploadWnd, nullptr, hInst, nullptr);
+
+    // Auto upload option
+    HWND hAuto = CreateWindow(L"BUTTON", L"Automatically upload after export",
+                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                              15, 55, 250, 20, g_hUploadWnd,
+                              (HMENU)ID_CHECKBOX_AUTO_UPLOAD, hInst, nullptr);
+    ApplyDarkTheme(hAuto);
+
+    // Service configuration buttons
+    CreateWindow(L"STATIC", L"Configure Services:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 15, 90, 150, 18, g_hUploadWnd, nullptr, hInst, nullptr);
+
+    HWND hCatbox = CreateWindow(L"BUTTON", L"Catbox.moe Settings",
                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                10, 40, 110, 25, g_hUploadWnd,
-                                (HMENU)ID_BUTTON_CATBOX_CONFIG,
-                                (HINSTANCE)GetWindowLongPtr(g_hUploadWnd, GWLP_HINSTANCE), nullptr);
+                                15, 115, 180, 30, g_hUploadWnd,
+                                (HMENU)ID_BUTTON_CATBOX_CONFIG, hInst, nullptr);
 
     HWND hB2 = CreateWindow(L"BUTTON", L"Backblaze B2 Settings",
                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                             130, 40, 130, 25, g_hUploadWnd,
-                             (HMENU)ID_BUTTON_B2_SETTINGS,
-                             (HINSTANCE)GetWindowLongPtr(g_hUploadWnd, GWLP_HINSTANCE), nullptr);
+                             210, 115, 180, 30, g_hUploadWnd,
+                             (HMENU)ID_BUTTON_B2_SETTINGS, hInst, nullptr);
 
-    HWND hOk = CreateWindow(L"BUTTON", L"OK",
-                            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            40, 80, 80, 25, g_hUploadWnd,
-                            (HMENU)IDOK,
-                            (HINSTANCE)GetWindowLongPtr(g_hUploadWnd, GWLP_HINSTANCE), nullptr);
-    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
-                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                140, 80, 80, 25, g_hUploadWnd,
-                                (HMENU)IDCANCEL,
-                                (HINSTANCE)GetWindowLongPtr(g_hUploadWnd, GWLP_HINSTANCE), nullptr);
-
-    ApplyDarkTheme(hAuto);
     ApplyDarkTheme(hCatbox);
     ApplyDarkTheme(hB2);
+
+    // Bottom buttons
+    HWND hOk = CreateWindow(L"BUTTON", L"OK",
+                            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                            220, 155, 85, 28, g_hUploadWnd,
+                            (HMENU)IDOK, hInst, nullptr);
+    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                315, 155, 85, 28, g_hUploadWnd,
+                                (HMENU)IDCANCEL, hInst, nullptr);
+
     ApplyDarkTheme(hOk);
     ApplyDarkTheme(hCancel);
 
@@ -410,6 +689,18 @@ void ShowUploadWindow(HWND parent)
 LRESULT CALLBACK UploadProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORLISTBOX:
+        return (LRESULT)ApplyDarkColors((HDC)wParam, msg);
+    case WM_ERASEBKGND:
+        {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            FillRect((HDC)wParam, &rc, g_hOptionsBgBrush);
+            return 1;
+        }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case ID_BUTTON_CATBOX_CONFIG:
@@ -444,37 +735,54 @@ void ShowCatboxConfigWindow(HWND parent)
 {
     if (g_hCatboxWnd) { SetForegroundWindow(g_hCatboxWnd); return; }
 
-    g_hCatboxWnd = CreateWindowEx(0, L"CatboxConfigClass", L"Catbox Settings",
-                                  WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, 300, 150,
+    g_hCatboxWnd = CreateWindowEx(0, L"CatboxConfigClass", L"Catbox Configuration",
+                                  WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE | WS_THICKFRAME | WS_MAXIMIZEBOX,
+                                  CW_USEDEFAULT, CW_USEDEFAULT, 550, 250,
                                   parent, nullptr,
                                   (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hCatboxWnd);
     CenterWindow(g_hCatboxWnd, parent);
 
-    CreateWindow(L"STATIC", L"User Hash:", WS_CHILD | WS_VISIBLE,
-                 10, 10, 100, 20, g_hCatboxWnd, nullptr,
-                 (HINSTANCE)GetWindowLongPtr(g_hCatboxWnd, GWLP_HINSTANCE), nullptr);
+    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(g_hCatboxWnd, GWLP_HINSTANCE);
+    int labelWidth = 100;
+    int inputX = labelWidth + 15;
+
+    // Header
+    CreateWindow(L"STATIC", L"Catbox.moe Settings", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 15, 15, 200, 22, g_hCatboxWnd, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+                 15, 42, 470, 2, g_hCatboxWnd, nullptr, hInst, nullptr);
+
+    // Enable checkbox
+    HWND hEnable = CreateWindow(L"BUTTON", L"Enable Catbox.moe Upload", 
+                                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                15, 55, 250, 20, g_hCatboxWnd,
+                                (HMENU)ID_CHECKBOX_USE_CATBOX, hInst, nullptr);
+    ApplyDarkTheme(hEnable);
+
+    // User hash field
+    CreateWindow(L"STATIC", L"User Hash:", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                 15, 88, labelWidth, 20, g_hCatboxWnd, nullptr, hInst, nullptr);
     HWND hHash = CreateWindow(L"EDIT", g_catboxUserHash.c_str(),
                               WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                              120, 10, 160, 20, g_hCatboxWnd,
-                              (HMENU)ID_EDIT_CATBOX_HASH,
-                              (HINSTANCE)GetWindowLongPtr(g_hCatboxWnd, GWLP_HINSTANCE), nullptr);
-
-    HWND hEnable = CreateWindow(L"BUTTON", L"Enable catbox.moe", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                10, 40, 180, 20, g_hCatboxWnd,
-                                (HMENU)ID_CHECKBOX_USE_CATBOX,
-                                (HINSTANCE)GetWindowLongPtr(g_hCatboxWnd, GWLP_HINSTANCE), nullptr);
-
-    HWND hOk = CreateWindow(L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            60, 80, 80, 25, g_hCatboxWnd, (HMENU)IDOK,
-                            (HINSTANCE)GetWindowLongPtr(g_hCatboxWnd, GWLP_HINSTANCE), nullptr);
-    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                160, 80, 80, 25, g_hCatboxWnd, (HMENU)IDCANCEL,
-                                (HINSTANCE)GetWindowLongPtr(g_hCatboxWnd, GWLP_HINSTANCE), nullptr);
-
+                              inputX, 86, 330, 22, g_hCatboxWnd,
+                              (HMENU)ID_EDIT_CATBOX_HASH, hInst, nullptr);
     ApplyDarkTheme(hHash);
-    ApplyDarkTheme(hEnable);
+
+    CreateWindow(L"STATIC", L"(Optional - for authenticated uploads)", 
+                 WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 inputX, 112, 330, 16, g_hCatboxWnd, nullptr, hInst, nullptr);
+
+    // Bottom buttons
+    HWND hOk = CreateWindow(L"BUTTON", L"OK", 
+                            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                            200, 150, 85, 28, g_hCatboxWnd, 
+                            (HMENU)IDOK, hInst, nullptr);
+    HWND hCancel = CreateWindow(L"BUTTON", L"Cancel", 
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                375, 150, 85, 28, g_hCatboxWnd, 
+                                (HMENU)IDCANCEL, hInst, nullptr);
+
     ApplyDarkTheme(hOk);
     ApplyDarkTheme(hCancel);
 
@@ -484,6 +792,18 @@ void ShowCatboxConfigWindow(HWND parent)
 LRESULT CALLBACK CatboxConfigProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORLISTBOX:
+        return (LRESULT)ApplyDarkColors((HDC)wParam, msg);
+    case WM_ERASEBKGND:
+        {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            FillRect((HDC)wParam, &rc, g_hOptionsBgBrush);
+            return 1;
+        }
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
             wchar_t buf[256];
