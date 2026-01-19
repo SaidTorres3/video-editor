@@ -993,7 +993,7 @@ void VideoPlayer::SetAudioTrackVolume(int trackIndex, float volume)
 {
     if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
         return;
-    float clampedVolume = volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume);
+    float clampedVolume = volume < 0.0f ? 0.0f : volume;
     audioTracks[trackIndex]->volume = clampedVolume;
 }
 

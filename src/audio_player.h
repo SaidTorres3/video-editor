@@ -27,4 +27,5 @@ private:
 
     VideoPlayer* m_player;
     int64_t m_framesWritten;
+    float m_masterVolume;
 };

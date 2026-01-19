@@ -3,13 +3,14 @@
 #include "utils.h"
 #include <string>
 #include <commctrl.h>
+#include <cmath>
 
 // Forward declarations
 std::wstring FormatTime(double totalSeconds, bool showMilliseconds);
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
-extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hStatusText, g_hLabelCutInfo, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize;
+extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hStatusText, g_hLabelCutInfo, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize, g_hLabelTrackVolume, g_hLabelMasterVolume;
 extern double g_cutStartTime, g_cutEndTime;
 extern double g_previewSeekTime;
 
@@ -161,9 +162,35 @@ void OnAudioTrackSelectionChanged()
     {
         // Update track volume slider
         float volume = g_videoPlayer->GetAudioTrackVolume(selectedIndex);
-        int sliderPos = (int)(volume * 100); // Convert to 0-200 range
+        
+        // Convert map volume to dB and then to slider position
+        // Range 0-400, Center 200 (0dB)
+        // 0dB = 20 * log10(1.0)
+        // dB range -20 to +20
+        int sliderPos = 200;
+        if (volume > 0.0001f) {
+             float db = 20.0f * log10f(volume);
+             sliderPos = (int)(200.0f + (db * 10.0f));
+        } else {
+             sliderPos = 0;
+        }
+        
+        if (sliderPos < 0) sliderPos = 0;
+        if (sliderPos > 400) sliderPos = 400;
+
         SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, sliderPos);
         
+        // Update label with dB value
+        float dbDisplay = (sliderPos - 200.0f) / 10.0f;
+        wchar_t buf[64];
+        if (dbDisplay > 0.05f)
+            swprintf_s(buf, L"Track Volume: +%.1f dB", dbDisplay);
+        else if (dbDisplay < -0.05f)
+            swprintf_s(buf, L"Track Volume: %.1f dB", dbDisplay);
+        else
+            swprintf_s(buf, L"Track Volume: 0.0 dB");
+        SetWindowTextW(g_hLabelTrackVolume, buf);
+
         // Update mute button text
         bool isMuted = g_videoPlayer->IsAudioTrackMuted(selectedIndex);
         SetWindowTextW(g_hButtonMuteTrack, isMuted ? L"Unmute" : L"Mute");
@@ -197,8 +224,31 @@ void OnTrackVolumeChanged()
     if (selectedIndex != LB_ERR)
     {
         int sliderPos = (int)SendMessage(g_hSliderTrackVolume, TBM_GETPOS, 0, 0);
-        float volume = sliderPos / 100.0f; // Convert from 0-200 to 0.0-2.0
+        
+        // Magnetic snap to center (0dB)
+        if (sliderPos > 198 && sliderPos < 202) {
+            sliderPos = 200;
+            SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, sliderPos);
+        }
+
+        // Convert slider position to dB then to volume (amplitude)
+        // dB = (sliderPos - 200) / 10
+        // volume = 10 ^ (dB / 20)
+        
+        float db = (sliderPos - 200.0f) / 10.0f;
+        float volume = powf(10.0f, db / 20.0f);
+
         g_videoPlayer->SetAudioTrackVolume(selectedIndex, volume);
+
+        // Update label with dB value
+        wchar_t buf[64];
+        if (db > 0.05f)
+            swprintf_s(buf, L"Track Volume: +%.1f dB", db);
+        else if (db < -0.05f)
+            swprintf_s(buf, L"Track Volume: %.1f dB", db);
+        else
+            swprintf_s(buf, L"Track Volume: 0.0 dB");
+        SetWindowTextW(g_hLabelTrackVolume, buf);
     }
 }
 
@@ -208,15 +258,31 @@ void OnMasterVolumeChanged()
         return;
     
     int sliderPos = (int)SendMessage(g_hSliderMasterVolume, TBM_GETPOS, 0, 0);
-    float volume = sliderPos / 100.0f; // Convert from 0-200 to 0.0-2.0
+    
+    // Magnetic snap to center (0dB)
+    if (sliderPos > 198 && sliderPos < 202) {
+        sliderPos = 200;
+        SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, sliderPos);
+    }
+
+    // Convert slider position to dB then to volume (amplitude)
+    // dB = (sliderPos - 200) / 10
+    // volume = 10 ^ (dB / 20)
+    
+    float db = (sliderPos - 200.0f) / 10.0f;
+    float volume = powf(10.0f, db / 20.0f);
+
     g_videoPlayer->SetMasterVolume(volume);
     
-    // Update the track volume slider if a track is selected
-    int selectedIndex = (int)SendMessage(g_hListBoxAudioTracks, LB_GETCURSEL, 0, 0);
-    if (selectedIndex != LB_ERR)
-    {
-        OnAudioTrackSelectionChanged();
-    }
+    // Update label with dB value
+    wchar_t buf[64];
+    if (db > 0.05f)
+        swprintf_s(buf, L"Master Volume: +%.1f dB", db);
+    else if (db < -0.05f)
+        swprintf_s(buf, L"Master Volume: %.1f dB", db);
+    else
+        swprintf_s(buf, L"Master Volume: 0.0 dB");
+    SetWindowTextW(g_hLabelMasterVolume, buf);
 }
 
 void UpdateCutTimeEdits()

@@ -5,7 +5,7 @@
 #include <mmreg.h>
 #include <ksmedia.h>
 
-AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player), m_framesWritten(0) {}
+AudioPlayer::AudioPlayer(VideoPlayer* player) : m_player(player), m_framesWritten(0), m_masterVolume(1.0f) {}
 
 AudioPlayer::~AudioPlayer() {
     Cleanup();
@@ -421,11 +421,7 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
 }
 
 void AudioPlayer::SetMasterVolume(float volume) {
-    float clampedVolume = volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume);
-    for (auto& track : m_player->audioTracks)
-    {
-        track->volume = clampedVolume;
-    }
+    m_masterVolume = volume < 0.0f ? 0.0f : volume;
 }
 
 void AudioPlayer::AudioThreadFunction() {
@@ -539,7 +535,7 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
                 {
                     int16_t val = track->buffer.front();
                     track->buffer.pop_front();
-                    mix[ch] += static_cast<int32_t>(val * track->volume);
+                    mix[ch] += static_cast<int32_t>(val * track->volume * m_masterVolume);
                 }
                 track->bufferPts += 1.0 / m_player->audioSampleRate;
             }
