@@ -59,7 +59,7 @@ void VideoCutter::ResetProgressTracking() {
 
 bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
-                           EncoderSelection encoder, int maxBitrate, HWND progressBar,
+                           EncoderSelection encoder, const std::wstring& qualityPreset, int maxBitrate, HWND progressBar,
                            std::atomic<bool>* cancelFlag)
 {
     ResetProgressTracking();
@@ -265,7 +265,6 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 vEncCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             AVDictionary* encOpts = nullptr;
             if (useNvenc) {
-                // Use fastest preset for NVENC as requested
                 if (maxBitrate > 0) {
                     std::string br = std::to_string(maxBitrate) + "k";
                     av_dict_set(&encOpts, "b", br.c_str(), 0);
@@ -274,19 +273,38 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                     std::string buf = std::to_string(maxBitrate * 2) + "k";
                     av_dict_set(&encOpts, "bufsize", buf.c_str(), 0);
                 }
-                av_dict_set(&encOpts, "preset", "p1", 0);
+                
+                const char* nvPreset = "p4";
+                if (qualityPreset == L"Low") nvPreset = "p1";
+                else if (qualityPreset == L"Medium") nvPreset = "p4";
+                else if (qualityPreset == L"High") nvPreset = "p6";
+                else if (qualityPreset == L"Very High") nvPreset = "p7";
+
+                av_dict_set(&encOpts, "preset", nvPreset, 0);
                 av_dict_set(&encOpts, "rc", "cbr", 0);
-                av_dict_set(&encOpts, "rc-lookahead", "0", 0);
-                av_dict_set(&encOpts, "no-scenecut", "1", 0);
-                av_dict_set(&encOpts, "b_adapt", "0", 0);
-                av_dict_set(&encOpts, "forced-idr", "1", 0);
-                av_dict_set(&encOpts, "spatial-aq", "0", 0);
-                av_dict_set(&encOpts, "temporal-aq", "0", 0);
+
+                if (qualityPreset == L"Low") {
+                    av_dict_set(&encOpts, "rc-lookahead", "0", 0);
+                    av_dict_set(&encOpts, "no-scenecut", "1", 0);
+                    av_dict_set(&encOpts, "b_adapt", "0", 0);
+                    av_dict_set(&encOpts, "forced-idr", "1", 0);
+                    av_dict_set(&encOpts, "spatial-aq", "0", 0);
+                    av_dict_set(&encOpts, "temporal-aq", "0", 0);
+                }
             } else if (useAmf) {
                 av_dict_set(&encOpts, "usage", "transcoding", 0);
-                av_dict_set(&encOpts, "quality", "speed", 0);
+                const char* amfQuality = "balanced";
+                if (qualityPreset == L"Low") amfQuality = "speed";
+                else if (qualityPreset == L"Medium") amfQuality = "balanced";
+                else amfQuality = "quality";
+                av_dict_set(&encOpts, "quality", amfQuality, 0);
             } else {
-                av_dict_set(&encOpts, "preset", "fast", 0);
+                const char* x264Preset = "fast";
+                if (qualityPreset == L"Low") x264Preset = "superfast";
+                else if (qualityPreset == L"Medium") x264Preset = "fast";
+                else if (qualityPreset == L"High") x264Preset = "medium";
+                else if (qualityPreset == L"Very High") x264Preset = "slow";
+                av_dict_set(&encOpts, "preset", x264Preset, 0);
             }
             if (avcodec_open2(vEncCtx, vEnc, &encOpts) < 0) {
                 DebugLog("Failed to open H.264 encoder", true);

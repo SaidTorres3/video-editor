@@ -388,14 +388,14 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             ShowB2ConfigWindow(hwnd);
         } else if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
             // Get encoder selection from combo box
-            HWND hEncoderCombo = GetDlgItem(hwnd, ID_COMBO_ENCODER);
+            HWND hEncoderCombo = GetDlgItem(g_hEncodingPanel, ID_COMBO_ENCODER);
             int encoderIdx = (int)SendMessage(hEncoderCombo, CB_GETCURSEL, 0, 0);
             if (encoderIdx >= 0 && encoderIdx <= 2) {
                 g_encoderSelection = static_cast<EncoderSelection>(encoderIdx);
             }
 
             // Get quality preset from combo box
-            HWND hQualityCombo = GetDlgItem(hwnd, ID_COMBO_QUALITY);
+            HWND hQualityCombo = GetDlgItem(g_hEncodingPanel, ID_COMBO_QUALITY);
             int qualityIdx = (int)SendMessage(hQualityCombo, CB_GETCURSEL, 0, 0);
             switch (qualityIdx) {
                 case 0: g_qualityPreset = L"Low"; break;
@@ -407,13 +407,13 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             // Get custom encoder arguments
             wchar_t customArgs[512];
-            GetWindowTextW(GetDlgItem(hwnd, ID_EDIT_CUSTOM_ARGS), customArgs, 512);
+            GetWindowTextW(GetDlgItem(g_hEncodingPanel, ID_EDIT_CUSTOM_ARGS), customArgs, 512);
             g_customEncoderArgs = customArgs;
 
             // Get checkbox states
-            HWND hLog = GetDlgItem(hwnd, ID_CHECKBOX_ENABLE_LOG);
-            HWND hAuto = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_PLAY);
-            HWND hAutoUpload = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_UPLOAD);
+            HWND hLog = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_ENABLE_LOG);
+            HWND hAuto = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUTO_PLAY);
+            HWND hAutoUpload = GetDlgItem(g_hUploadPanel, ID_CHECKBOX_AUTO_UPLOAD);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoUpload = SendMessage(hAutoUpload, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -425,14 +425,14 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CLOSE:
         {
             // Get encoder selection from combo box
-            HWND hEncoderCombo = GetDlgItem(hwnd, ID_COMBO_ENCODER);
+            HWND hEncoderCombo = GetDlgItem(g_hEncodingPanel, ID_COMBO_ENCODER);
             int encoderIdx = (int)SendMessage(hEncoderCombo, CB_GETCURSEL, 0, 0);
             if (encoderIdx >= 0 && encoderIdx <= 2) {
                 g_encoderSelection = static_cast<EncoderSelection>(encoderIdx);
             }
 
             // Get quality preset from combo box
-            HWND hQualityCombo = GetDlgItem(hwnd, ID_COMBO_QUALITY);
+            HWND hQualityCombo = GetDlgItem(g_hEncodingPanel, ID_COMBO_QUALITY);
             int qualityIdx = (int)SendMessage(hQualityCombo, CB_GETCURSEL, 0, 0);
             switch (qualityIdx) {
                 case 0: g_qualityPreset = L"Low"; break;
@@ -444,12 +444,12 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             // Get custom encoder arguments
             wchar_t customArgs[512];
-            GetWindowTextW(GetDlgItem(hwnd, ID_EDIT_CUSTOM_ARGS), customArgs, 512);
+            GetWindowTextW(GetDlgItem(g_hEncodingPanel, ID_EDIT_CUSTOM_ARGS), customArgs, 512);
             g_customEncoderArgs = customArgs;
 
             // Get checkbox states
-            HWND hLog = GetDlgItem(hwnd, ID_CHECKBOX_ENABLE_LOG);
-            HWND hAuto = GetDlgItem(hwnd, ID_CHECKBOX_AUTO_PLAY);
+            HWND hLog = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_ENABLE_LOG);
+            HWND hAuto = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUTO_PLAY);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             

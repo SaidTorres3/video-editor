@@ -12,7 +12,7 @@ public:
     ~VideoCutter();
 
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
-                  bool mergeAudio, bool convertH264, EncoderSelection encoder,
+                  bool mergeAudio, bool convertH264, EncoderSelection encoder, const std::wstring& qualityPreset,
                   int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
 
 private:

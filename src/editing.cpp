@@ -158,7 +158,7 @@ void OnCutClicked(HWND hwnd)
             g_catboxUploadedUrl.clear();
             g_b2UploadedUrl.clear();
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
-                                             mergeAudio, convertH264, g_encoderSelection,
+                                             mergeAudio, convertH264, g_encoderSelection, g_qualityPreset,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             g_lastOutputFile = ok ? outFile : L"";
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {
@@ -265,7 +265,7 @@ void OnExportClicked(HWND hwnd)
             g_catboxUploadedUrl.clear();
             g_b2UploadedUrl.clear();
             bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
-                                             mergeAudio, convertH264, g_encoderSelection,
+                                             mergeAudio, convertH264, g_encoderSelection, g_qualityPreset,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             g_lastOutputFile = ok ? outFile : L"";
             if (ok && g_autoUpload && (g_useCatbox || g_useB2)) {

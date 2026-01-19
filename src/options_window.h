@@ -42,6 +42,7 @@ enum class EncoderSelection : int {
 extern EncoderSelection g_encoderSelection;
 extern bool g_logToFile;
 extern bool g_autoPlay;
+extern std::wstring g_qualityPreset;
 
 extern std::wstring g_b2KeyId;
 extern std::wstring g_b2AppKey;
