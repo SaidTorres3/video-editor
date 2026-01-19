@@ -420,6 +420,9 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
             int64_t ptsFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
             currentFrame = ptsFrame + 1;
         }
+        
+        // Ensure currentFrame is exactly the frame we targeted to maintain consistent 1-frame stepping
+        currentFrame = frameNumber;
     }
     else
     {
