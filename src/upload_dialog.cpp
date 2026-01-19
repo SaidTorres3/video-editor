@@ -256,8 +256,9 @@ void ShowManualUploadDialog(HWND parent, const std::wstring& exportPath, bool al
     g_b2UploadedUrl.clear();
 
     int providerCount = (allowCatbox ? 1 : 0) + (allowB2 ? 1 : 0);
-    const int width = 520;
-    int height = 60 + providerCount * 70 + 90;
+    const int width = 600;
+    int height = 170 + providerCount * 80;
+
     g_hManualUploadDlg = CreateWindowEx(0, L"ManualUploadClass", L"Export Complete",
                                         WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE,
                                         CW_USEDEFAULT, CW_USEDEFAULT, width, height,
@@ -270,52 +271,51 @@ void ShowManualUploadDialog(HWND parent, const std::wstring& exportPath, bool al
 
     std::wstring successMsg = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
     CreateWindow(L"STATIC", successMsg.c_str(), WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 10, 10, width - 20, 20, g_hManualUploadDlg, nullptr,
+                 25, 20, width - 50, 20, g_hManualUploadDlg, nullptr,
                  (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
     CreateWindow(L"STATIC", L"Upload it now? Choose a destination below.", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 10, 30, width - 20, 20, g_hManualUploadDlg, nullptr,
+                 25, 45, width - 50, 20, g_hManualUploadDlg, nullptr,
                  (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
 
-    const int buttonWidth = 140;
-    const int progressWidth = 230;
-    const int copyWidth = 70;
-    const int rowHeight = 26;
-    const int barHeight = 20;
-    const int editHeight = 22;
-    const int copyHeight = 24;
-    int y = 60;
+    const int margin = 25;
+    const int buttonWidth = 160;
+    const int copyWidth = 80;
+    const int gap = 15;
+    const int progressWidth = width - (margin * 2) - buttonWidth - copyWidth - (gap * 2);
+
+    const int rowHeight = 30;
+    const int statusOffset = 34;
+    int y = 90;
 
     if (allowCatbox) {
-        int barY = y;
-        int editY = y;
-        int copyY = y;
-
         g_hCatboxButton = CreateWindow(L"BUTTON", L"Upload to Catbox", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                       10, y, buttonWidth, rowHeight, g_hManualUploadDlg,
+                                       margin, y, buttonWidth, rowHeight, g_hManualUploadDlg,
                                        (HMENU)(INT_PTR)ID_BTN_CATBOX_UPLOAD,
                                        (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
+
+        int xComponents = margin + buttonWidth + gap;
         g_hCatboxProgress = CreateWindowEx(0, PROGRESS_CLASS, nullptr, WS_CHILD,
-                                           10 + buttonWidth + 10, barY, progressWidth, barHeight,
+                                           xComponents, y + 3, progressWidth, 24,
                                            g_hManualUploadDlg, nullptr,
                                            (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
         SendMessage(g_hCatboxProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
         ShowWindow(g_hCatboxProgress, SW_HIDE);
 
         g_hCatboxUrl = CreateWindow(L"EDIT", L"", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_READONLY,
-                                    10 + buttonWidth + 10, editY, progressWidth, editHeight,
+                                    xComponents, y + 2, progressWidth, 26,
                                     g_hManualUploadDlg, nullptr,
                                     (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
         ShowWindow(g_hCatboxUrl, SW_HIDE);
 
         g_hCatboxCopy = CreateWindow(L"BUTTON", L"Copy", WS_CHILD | BS_PUSHBUTTON,
-                                     10 + buttonWidth + 10 + progressWidth + 10, copyY,
-                                     copyWidth, copyHeight, g_hManualUploadDlg,
+                                     xComponents + progressWidth + gap, y,
+                                     copyWidth, rowHeight, g_hManualUploadDlg,
                                      (HMENU)(INT_PTR)ID_BTN_CATBOX_COPY,
                                      (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
         ShowWindow(g_hCatboxCopy, SW_HIDE);
 
         g_hCatboxStatus = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                       10 + buttonWidth + 10, y + rowHeight + 6, progressWidth + copyWidth + 10,
+                                       xComponents, y + statusOffset, progressWidth + copyWidth + gap,
                                        18, g_hManualUploadDlg, nullptr,
                                        (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
 
@@ -325,40 +325,38 @@ void ShowManualUploadDialog(HWND parent, const std::wstring& exportPath, bool al
         ApplyDarkTheme(g_hCatboxCopy);
         ApplyDarkTheme(g_hCatboxStatus);
 
-        y += 70;
+        y += 80;
     }
 
     if (allowB2) {
-        int barY = y;
-        int editY = y;
-        int copyY = y;
-
         g_hB2Button = CreateWindow(L"BUTTON", L"Upload to Backblaze B2", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                   10, y, buttonWidth + 40, rowHeight, g_hManualUploadDlg,
+                                   margin, y, buttonWidth, rowHeight, g_hManualUploadDlg,
                                    (HMENU)(INT_PTR)ID_BTN_B2_UPLOAD,
                                    (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
+
+        int xComponents = margin + buttonWidth + gap;
         g_hB2Progress = CreateWindowEx(0, PROGRESS_CLASS, nullptr, WS_CHILD,
-                                       10 + buttonWidth + 50, barY, progressWidth, barHeight,
+                                       xComponents, y + 3, progressWidth, 24,
                                        g_hManualUploadDlg, nullptr,
                                        (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
         SendMessage(g_hB2Progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
         ShowWindow(g_hB2Progress, SW_HIDE);
 
         g_hB2Url = CreateWindow(L"EDIT", L"", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_READONLY,
-                                10 + buttonWidth + 50, editY, progressWidth, editHeight,
+                                xComponents, y + 2, progressWidth, 26,
                                 g_hManualUploadDlg, nullptr,
                                 (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
         ShowWindow(g_hB2Url, SW_HIDE);
 
         g_hB2Copy = CreateWindow(L"BUTTON", L"Copy", WS_CHILD | BS_PUSHBUTTON,
-                                 10 + buttonWidth + 50 + progressWidth + 10, copyY,
-                                 copyWidth, copyHeight, g_hManualUploadDlg,
+                                 xComponents + progressWidth + gap, y,
+                                 copyWidth, rowHeight, g_hManualUploadDlg,
                                  (HMENU)(INT_PTR)ID_BTN_B2_COPY,
                                  (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
         ShowWindow(g_hB2Copy, SW_HIDE);
 
         g_hB2Status = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                   10 + buttonWidth + 50, y + rowHeight + 6, progressWidth + copyWidth + 10,
+                                   xComponents, y + statusOffset, progressWidth + copyWidth + gap,
                                    18, g_hManualUploadDlg, nullptr,
                                    (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
 
@@ -373,16 +371,16 @@ void ShowManualUploadDialog(HWND parent, const std::wstring& exportPath, bool al
             SetWindowTextW(g_hB2Status, L"Backblaze credentials are missing.");
         }
 
-        y += 70;
+        y += 80;
     }
 
-    int footerY = y + 10;
+    int footerY = y;
     g_hOpenFolder = CreateWindow(L"BUTTON", L"Open Containing Folder", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                 10, footerY, 170, 26, g_hManualUploadDlg,
+                                 margin, footerY, 180, 30, g_hManualUploadDlg,
                                  (HMENU)(INT_PTR)ID_BTN_OPEN_FOLDER,
                                  (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
     g_hManualClose = CreateWindow(L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                  width - 90, footerY, 70, 26, g_hManualUploadDlg,
+                                  width - margin - 80, footerY, 80, 30, g_hManualUploadDlg,
                                   (HMENU)(INT_PTR)ID_BTN_MANUAL_CLOSE,
                                   (HINSTANCE)GetWindowLongPtr(g_hManualUploadDlg, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hManualClose);
@@ -391,6 +389,13 @@ void ShowManualUploadDialog(HWND parent, const std::wstring& exportPath, bool al
 
 LRESULT CALLBACK ManualUploadProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_CTLCOLORSTATIC:
+    {
+        HDC hdc = (HDC)wParam;
+        SetTextColor(hdc, RGB(255, 255, 255));
+        SetBkMode(hdc, TRANSPARENT);
+        return (LRESULT)GetStockObject(BLACK_BRUSH);
+    }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case ID_BTN_CATBOX_UPLOAD:
