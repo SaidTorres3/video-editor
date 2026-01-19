@@ -347,6 +347,9 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     if (frameNumber == currentFrame + 1)
     {
         m_decoder->DecodeNextFrame(true);
+        // Ensure currentFrame stays in sync with PTS to prevent drift
+        int64_t ptsFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
+        currentFrame = ptsFrame;
         dropAudioDuringStepping = false;
         return;
     }
@@ -418,7 +421,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
             // Sync currentFrame to the actual decoded PTS to prevent drift
             // currentFrame tracks the next frame index (or count of decoded frames), so it should be FrameIndex + 1
             int64_t ptsFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
-            currentFrame = ptsFrame + 1;
+            currentFrame = ptsFrame;
         }
         
         // Ensure currentFrame is exactly the frame we targeted to maintain consistent 1-frame stepping
@@ -436,6 +439,9 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
             if (!m_decoder->DecodeNextFrame(last, false, last))
                 break;
         }
+        
+        // Ensure currentFrame is exactly the frame we targeted to prevent drift
+        currentFrame = frameNumber;
     }
 
     dropAudioDuringStepping = false;

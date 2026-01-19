@@ -209,7 +209,10 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
                 m_player->currentPts = pts - m_player->startTimeOffset;
                 if (m_player->currentPts < 0.0)
                     m_player->currentPts = 0.0;
-                m_player->currentFrame++;
+                
+                // Calculate currentFrame from PTS to keep them in sync and prevent drift
+                m_player->currentFrame = static_cast<int64_t>(m_player->currentPts * m_player->frameRate + 0.5);
+                
                 bool cropChanged = m_player->UpdateCropForTime(m_player->currentPts);
                 
                 if (generateImage)

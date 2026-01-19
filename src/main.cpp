@@ -303,15 +303,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
                     if (frame < 0) frame = 0;
 
-                    if (g_videoPlayer->frameRate > 0) {
-                        g_previewSeekTime = frame / g_videoPlayer->frameRate;
-                        if (g_hTimeline) {
-                            InvalidateRect(g_hTimeline, NULL, FALSE);
-                            UpdateWindow(g_hTimeline);
-                        }
-                        UpdateControls();
-                    }
-
                     // Throttle: if subsequent keys are waiting, skip this update to remain responsive
                     MSG nextMsg;
                     if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
@@ -322,7 +313,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 
                     g_videoPlayer->SeekToFrame(frame);
                     
-                    g_previewSeekTime = -1.0;
+                    if (g_hTimeline) {
+                        InvalidateRect(g_hTimeline, NULL, FALSE);
+                    }
+                    UpdateControls();
                     break;
                 }
                 case VK_OEM_PERIOD:
@@ -340,15 +334,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             frame = maxf;
                     }
 
-                    if (g_videoPlayer->frameRate > 0) {
-                        g_previewSeekTime = frame / g_videoPlayer->frameRate;
-                        if (g_hTimeline) {
-                            InvalidateRect(g_hTimeline, NULL, FALSE);
-                            UpdateWindow(g_hTimeline);
-                        }
-                        UpdateControls();
-                    }
-
+                    // Throttle: if subsequent keys are waiting, skip this update to remain responsive
                     MSG nextMsg;
                     if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
                         if (nextMsg.wParam == msg.wParam) {
@@ -358,7 +344,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 
                     g_videoPlayer->SeekToFrame(frame);
                     
-                    g_previewSeekTime = -1.0;
+                    if (g_hTimeline) {
+                        InvalidateRect(g_hTimeline, NULL, FALSE);
+                    }
+                    UpdateControls();
                     break;
                 }
                 default:
