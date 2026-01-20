@@ -174,6 +174,15 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (x < 0) x = 0; if (x > rc.right) x = rc.right;
             double dur = g_videoPlayer->GetDuration();
             double seekTime = PixelToTime(x, rc, dur);
+            
+            // Clamp seekTime to valid range [0, duration)
+            if (seekTime < 0.0) seekTime = 0.0;
+            if (dur > 0.0 && seekTime >= dur) {
+                // Clamp to just before the end (last frame)
+                double frameTime = g_videoPlayer->frameRate > 0 ? (1.0 / g_videoPlayer->frameRate) : 0.033;
+                seekTime = dur - frameTime;
+                if (seekTime < 0.0) seekTime = 0.0;
+            }
 
             if (g_timelineDragMode == DragMode::Cursor)
             {
@@ -237,6 +246,15 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (x < 0) x = 0; if (x > rc.right) x = rc.right;
             double dur = g_videoPlayer->GetDuration();
             double seekTime = PixelToTime(x, rc, dur);
+            
+            // Clamp seekTime to valid range [0, duration)
+            if (seekTime < 0.0) seekTime = 0.0;
+            if (dur > 0.0 && seekTime >= dur) {
+                // Clamp to just before the end (last frame)
+                double frameTime = g_videoPlayer->frameRate > 0 ? (1.0 / g_videoPlayer->frameRate) : 0.033;
+                seekTime = dur - frameTime;
+                if (seekTime < 0.0) seekTime = 0.0;
+            }
 
             if (g_timelineDragMode == DragMode::Cursor)
             {

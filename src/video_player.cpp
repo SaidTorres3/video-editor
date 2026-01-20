@@ -490,6 +490,14 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
     if (!isLoaded)
         return;
 
+    // Clamp seconds to valid range
+    if (seconds < 0.0) seconds = 0.0;
+    if (duration > 0.0 && seconds >= duration) {
+        double frameDur = (frameRate > 0) ? (1.0 / frameRate) : 0.033;
+        seconds = duration - frameDur;
+        if (seconds < 0.0) seconds = 0.0;
+    }
+
     double frameDuration = (frameRate > 0) ? (1.0 / frameRate) : 0.033;
     bool smartSeek = false;
 
@@ -551,10 +559,15 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
     int maxDecodeFrames = 1000; // Safety limit
     int decoded = 0;
     
+    // After a full seek (non-smartSeek), we must decode at least one frame
+    // because the seek only positions the decoder - it doesn't decode a frame yet
+    bool needAtLeastOneFrame = !smartSeek;
+    
     while (decoded < maxDecodeFrames)
     {
         // Check if we reached target (within half a frame tolerance)
-        if (currentPts >= seconds - (frameDuration * 0.5))
+        // But always decode at least one frame after a full seek
+        if (!needAtLeastOneFrame && currentPts >= seconds - (frameDuration * 0.5))
             break;
             
         // Optimization: only generate image if we are close to the target
@@ -565,6 +578,7 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
             break;
             
         decoded++;
+        needAtLeastOneFrame = false;  // We've decoded at least one frame now
     }
     
     // Ensure the final frame is displayed
