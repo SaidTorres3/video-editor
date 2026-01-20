@@ -343,15 +343,49 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 
     dropAudioDuringStepping = true;
 
+    // Helper lambda to cache the current frame before stepping away from it
+    auto cacheCurrentFrame = [this]() {
+        if (buffer && rgbBufferSize > 0) {
+            // Check if this frame is already in cache
+            bool alreadyCached = false;
+            for (const auto& cf : frameCache) {
+                if (cf.number == currentFrame) {
+                    alreadyCached = true;
+                    break;
+                }
+            }
+            if (!alreadyCached) {
+                // Evict oldest if at limit
+                if (frameCache.size() >= frameCacheLimit) {
+                    frameCache.pop_front();
+                }
+                frameCache.push_back({
+                    currentFrame,
+                    currentPts,
+                    std::vector<uint8_t>(buffer, buffer + rgbBufferSize)
+                });
+            }
+        }
+    };
+
     // Optimize stepping forward one frame by decoding without seeking
     if (frameNumber == currentFrame + 1)
     {
+        // Cache current frame before moving forward (enables fast backward stepping)
+        cacheCurrentFrame();
+        
         m_decoder->DecodeNextFrame(true);
         // Ensure currentFrame stays in sync with PTS to prevent drift
         int64_t ptsFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
         currentFrame = ptsFrame;
         dropAudioDuringStepping = false;
         return;
+    }
+    
+    // Optimize stepping backward one frame - cache current before seeking
+    if (frameNumber == currentFrame - 1)
+    {
+        cacheCurrentFrame();
     }
 
     // For backwards navigation
@@ -370,8 +404,12 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
         {
             std::lock_guard<std::mutex> lock(decodeMutex);
             
-            // Clear the frame cache to avoid using stale frames
-            frameCache.clear();
+            // Remove only frames before the target from cache, keep frames at or after target
+            // This preserves cached frames we might step forward to again
+            while (!frameCache.empty() && frameCache.front().number < frameNumber)
+            {
+                frameCache.pop_front();
+            }
             
             // Seek to the keyframe using BACKWARD flag but not ANY flag
             av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
