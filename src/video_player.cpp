@@ -413,7 +413,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
             
             // Cache frames preceding the target to enable instant step-back
             // But only if we are not too far away from target, to save memory and time
-            bool shouldCache = (frameNumber - currentFrame) < frameCacheLimit;
+            bool shouldCache = (frameNumber - currentFrame) < static_cast<int64_t>(frameCacheLimit);
 
             if (!m_decoder->DecodeNextFrame(last, false, shouldCache))
                 break;
