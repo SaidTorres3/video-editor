@@ -1,5 +1,12 @@
 #include "utils.h"
 #include <uxtheme.h>
+#include <dwmapi.h>
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+
+#pragma comment(lib, "dwmapi.lib")
 
 extern HFONT g_hFont;
 
@@ -45,6 +52,13 @@ void ApplyDarkTheme(HWND hwnd)
     if (g_hFont)
         SendMessage(hwnd, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     SetWindowTheme(hwnd, L"DarkMode_Explorer", nullptr);
+
+    // Set immersive dark mode for the title bar if it's a top-level window or has a caption
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+    if ((style & WS_CAPTION) || GetParent(hwnd) == nullptr) {
+        BOOL useDark = TRUE;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(useDark));
+    }
 }
 
 void CenterWindow(HWND hwnd, HWND parent)

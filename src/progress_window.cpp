@@ -31,6 +31,7 @@ void ShowProgressWindow(HWND parent) {
         parent, nullptr, GetModuleHandle(nullptr), nullptr);
 
     if (g_hProgressWindow) {
+        ApplyDarkTheme(g_hProgressWindow);
         CenterWindow(g_hProgressWindow, parent);
         g_cancelExport = false;
         ShowWindow(g_hProgressWindow, SW_SHOW);
