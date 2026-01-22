@@ -25,7 +25,6 @@ EncoderSelection g_encoderSelection = EncoderSelection::Libx264;
 bool g_logToFile = true;
 bool g_autoPlay = true;
 std::wstring g_qualityPreset = L"Medium";
-std::wstring g_customEncoderArgs;
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
 std::wstring g_b2BucketId;
@@ -86,9 +85,6 @@ void LoadSettings()
         sz = sizeof(buf);
         if (RegQueryValueExW(hKey, L"QualityPreset", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
             g_qualityPreset = buf;
-        sz = sizeof(buf);
-        if (RegQueryValueExW(hKey, L"CustomEncoderArgs", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
-            g_customEncoderArgs = buf;
         RegCloseKey(hKey);
     }
 }
@@ -119,7 +115,6 @@ void SaveSettings()
         RegSetValueExW(hKey, L"UseB2", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"CatboxHash", 0, REG_SZ, (const BYTE*)g_catboxUserHash.c_str(), (DWORD)((g_catboxUserHash.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"QualityPreset", 0, REG_SZ, (const BYTE*)g_qualityPreset.c_str(), (DWORD)((g_qualityPreset.size()+1)*sizeof(wchar_t)));
-        RegSetValueExW(hKey, L"CustomEncoderArgs", 0, REG_SZ, (const BYTE*)g_customEncoderArgs.c_str(), (DWORD)((g_customEncoderArgs.size()+1)*sizeof(wchar_t)));
         RegCloseKey(hKey);
     }
 }
@@ -296,16 +291,6 @@ void ShowOptionsWindow(HWND parent)
     else if (g_qualityPreset == L"Very High") qualIdx = 3;
     SendMessage(hQualityCombo, CB_SETCURSEL, qualIdx, 0);
 
-    CreateWindow(L"STATIC", L"Advanced", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 0, 160, contentWidth, 22, g_hEncodingPanel, nullptr, hInst, nullptr);
-    CreateWindow(L"STATIC", L"Custom Arguments:", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 20, 190, 120, 22, g_hEncodingPanel, nullptr, hInst, nullptr);
-    HWND hCustomArgs = CreateWindow(L"EDIT", g_customEncoderArgs.c_str(),
-                                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                                    150, 188, 350, 24, g_hEncodingPanel,
-                                    (HMENU)ID_EDIT_CUSTOM_ARGS, hInst, nullptr);
-    ApplyDarkTheme(hCustomArgs);
-
     // ===== UPLOAD PANEL =====
     g_hUploadPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
                                     WS_CHILD,
@@ -345,11 +330,11 @@ void ShowOptionsWindow(HWND parent)
     // ===== BOTTOM BUTTONS =====
     HWND hOk = CreateWindow(L"BUTTON", L"OK",
                             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            520, 420, 90, 32, g_hOptionsWnd,
+                            500, 400, 90, 32, g_hOptionsWnd,
                             (HMENU)IDOK, hInst, nullptr);
     HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                620, 420, 90, 32, g_hOptionsWnd,
+                                600, 400, 90, 32, g_hOptionsWnd,
                                 (HMENU)IDCANCEL, hInst, nullptr);
     ApplyDarkTheme(hOk);
     ApplyDarkTheme(hCancel);
@@ -405,11 +390,6 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 default: g_qualityPreset = L"Medium"; break;
             }
 
-            // Get custom encoder arguments
-            wchar_t customArgs[512];
-            GetWindowTextW(GetDlgItem(g_hEncodingPanel, ID_EDIT_CUSTOM_ARGS), customArgs, 512);
-            g_customEncoderArgs = customArgs;
-
             // Get checkbox states
             HWND hLog = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUTO_PLAY);
@@ -441,11 +421,6 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 case 3: g_qualityPreset = L"Very High"; break;
                 default: g_qualityPreset = L"Medium"; break;
             }
-
-            // Get custom encoder arguments
-            wchar_t customArgs[512];
-            GetWindowTextW(GetDlgItem(g_hEncodingPanel, ID_EDIT_CUSTOM_ARGS), customArgs, 512);
-            g_customEncoderArgs = customArgs;
 
             // Get checkbox states
             HWND hLog = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_ENABLE_LOG);

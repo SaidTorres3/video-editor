@@ -256,9 +256,9 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                     // Enforce bitrate for NVENC with a 2s VBV to prevent under-shooting
                     vEncCtx->rc_max_rate = targetBitrate;
                     vEncCtx->rc_min_rate = targetBitrate;
-                    vEncCtx->rc_buffer_size = targetBitrate * 2;
+                    vEncCtx->rc_buffer_size = static_cast<int>(targetBitrate * 2);
                     vEncCtx->rc_initial_buffer_occupancy = vEncCtx->rc_buffer_size * 3 / 4;
-                    vEncCtx->bit_rate_tolerance = targetBitrate / 2;
+                    vEncCtx->bit_rate_tolerance = static_cast<int>(targetBitrate / 2);
                 }
             }
             if (outputCtx->oformat->flags & AVFMT_GLOBALHEADER)

@@ -17,7 +17,6 @@
 #define ID_TAB_UPLOAD           1042
 #define ID_TAB_CONTROL          1043
 #define ID_COMBO_QUALITY        1044
-#define ID_EDIT_CUSTOM_ARGS     1045
 #define ID_PANEL_GENERAL        1046
 #define ID_PANEL_ENCODING       1047
 #define ID_PANEL_UPLOAD         1048

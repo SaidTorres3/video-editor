@@ -168,7 +168,10 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
         int ret = av_read_frame(m_player->formatContext, m_player->packet);
         if (ret < 0)
         {
-            m_player->Stop();
+            // Only reset to beginning (Stop) if we were actually playing
+            // If paused and manually seeking, stay at current position
+            if (m_player->isPlaying)
+                m_player->Stop();
             return false;
         }
 

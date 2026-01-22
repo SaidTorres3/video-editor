@@ -154,9 +154,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     if (!hwnd)
         return 0;
 
-    // Enable immersive dark mode for the window
-    BOOL useDark = TRUE;
-    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(useDark));
     ApplyDarkTheme(hwnd);
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
