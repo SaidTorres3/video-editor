@@ -29,6 +29,10 @@ ScrollArrowState g_scrollArrowPressed = ScrollArrowState::None;
 const int SCROLL_ARROW_TIMER_ID = 1001;
 const int SCROLL_ARROW_TIMER_INTERVAL = 50;  // milliseconds
 
+// Context-menu keyframe move state (move follows cursor until next click).
+bool g_isContextKeyframeMoveMode = false;
+double g_contextMovingKeyframeTime = -1.0;
+
 // Helper function to convert pixel X coordinate to time, accounting for zoom and scroll
 inline double PixelToTime(int x, RECT &rc, double duration)
 {
@@ -54,6 +58,31 @@ inline int TimeToPixel(double time, RECT &rc, double duration)
     return (int)(ratio * rc.right);
 }
 
+inline double ClampTimelineTimeFromMouseX(int x, RECT& rc, double duration)
+{
+    if (rc.right <= 0 || duration <= 0.0)
+        return 0.0;
+
+    if (x < 0)
+        x = 0;
+    else if (x > rc.right)
+        x = rc.right;
+
+    double seekTime = PixelToTime(x, rc, duration);
+    if (seekTime < 0.0)
+        seekTime = 0.0;
+    if (seekTime >= duration)
+    {
+        // Keep the keyframe on the last displayable frame instead of placing it past EOF.
+        double frameTime = g_videoPlayer->frameRate > 0 ? (1.0 / g_videoPlayer->frameRate) : 0.033;
+        seekTime = duration - frameTime;
+        if (seekTime < 0.0)
+            seekTime = 0.0;
+    }
+
+    return seekTime;
+}
+
 LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -61,6 +90,28 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_LBUTTONDOWN:
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
+            if (g_isContextKeyframeMoveMode)
+            {
+                RECT rc; GetClientRect(hwnd, &rc);
+                double dur = g_videoPlayer->GetDuration();
+                if (dur > 0.0 && g_contextMovingKeyframeTime >= 0.0)
+                {
+                    int x = GET_X_LPARAM(lParam);
+                    double targetTime = ClampTimelineTimeFromMouseX(x, rc, dur);
+                    g_videoPlayer->MoveCropKeyframe(g_contextMovingKeyframeTime, targetTime);
+                    g_videoPlayer->SeekToTime(targetTime, 0);
+                }
+
+                g_isContextKeyframeMoveMode = false;
+                g_contextMovingKeyframeTime = -1.0;
+                if (GetCapture() == hwnd)
+                    ReleaseCapture();
+                InvalidateRect(hwnd, NULL, FALSE);
+                UpdateControls();
+                UpdateTimeline();
+                return 0;
+            }
+
             SetFocus(hwnd);
             RECT rc; GetClientRect(hwnd, &rc);
             int x = GET_X_LPARAM(lParam);
@@ -167,6 +218,26 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_MOUSEMOVE:
+        if (g_isContextKeyframeMoveMode && g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            RECT rc; GetClientRect(hwnd, &rc);
+            double dur = g_videoPlayer->GetDuration();
+            if (dur > 0.0 && g_contextMovingKeyframeTime >= 0.0)
+            {
+                int x = GET_X_LPARAM(lParam);
+                double targetTime = ClampTimelineTimeFromMouseX(x, rc, dur);
+                if (std::fabs(targetTime - g_contextMovingKeyframeTime) >= 0.001 &&
+                    g_videoPlayer->MoveCropKeyframe(g_contextMovingKeyframeTime, targetTime))
+                {
+                    g_contextMovingKeyframeTime = targetTime;
+                    g_videoPlayer->UpdateCropForTime(g_videoPlayer->GetCurrentTime());
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    UpdateControls();
+                }
+            }
+            return 0;
+        }
+
         if (g_isTimelineDragging && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             RECT rc; GetClientRect(hwnd, &rc);
@@ -321,6 +392,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     HMENU menu = CreatePopupMenu();
                     AppendMenu(menu, MF_STRING, 1, L"Edit Keyframe");
                     AppendMenu(menu, MF_STRING, 2, L"Delete Keyframe");
+                    AppendMenu(menu, MF_STRING, 3, L"Move Keyframe");
                     int cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, nullptr);
                     DestroyMenu(menu);
                     if (cmd == 1)
@@ -341,9 +413,24 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                             UpdateTimeline();
                         }
                     }
+                    else if (cmd == 3)
+                    {
+                        g_isContextKeyframeMoveMode = true;
+                        g_contextMovingKeyframeTime = selectedTime;
+                        SetCapture(hwnd);
+                    }
                     return 0;
                 }
             }
+        }
+        break;
+    case WM_CAPTURECHANGED:
+        if (g_isContextKeyframeMoveMode && (HWND)lParam != hwnd)
+        {
+            g_isContextKeyframeMoveMode = false;
+            g_contextMovingKeyframeTime = -1.0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateControls();
         }
         break;
     case WM_MOUSEWHEEL:
