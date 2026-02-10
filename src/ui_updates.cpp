@@ -163,32 +163,36 @@ void OnAudioTrackSelectionChanged()
         // Update track volume slider
         float volume = g_videoPlayer->GetAudioTrackVolume(selectedIndex);
         
-        // Convert map volume to dB and then to slider position
-        // Range 0-400, Center 200 (0dB)
-        // 0dB = 20 * log10(1.0)
-        // dB range -20 to +20
-        int sliderPos = 200;
-        if (volume > 0.0001f) {
-             float db = 20.0f * log10f(volume);
-             sliderPos = (int)(200.0f + (db * 10.0f));
+        // Slider layout:
+        // 0 => hard mute (absolute 0 amplitude)
+        // 1..601 => -30.0dB..+30.0dB in 0.1dB steps, with 301 = 0.0dB
+        int sliderPos = 301;
+        if (volume <= 0.0f) {
+            sliderPos = 0;
         } else {
-             sliderPos = 0;
+            float db = 20.0f * log10f(volume);
+            if (db < -30.0f) db = -30.0f;
+            if (db > 30.0f) db = 30.0f;
+            sliderPos = static_cast<int>(301.0f + (db * 10.0f));
+            if (sliderPos < 1) sliderPos = 1;
+            if (sliderPos > 601) sliderPos = 601;
         }
-        
-        if (sliderPos < 0) sliderPos = 0;
-        if (sliderPos > 400) sliderPos = 400;
 
         SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, sliderPos);
         
         // Update label with dB value
-        float dbDisplay = (sliderPos - 200.0f) / 10.0f;
         wchar_t buf[64];
-        if (dbDisplay > 0.05f)
-            swprintf_s(buf, L"Track Volume: +%.1f dB", dbDisplay);
-        else if (dbDisplay < -0.05f)
-            swprintf_s(buf, L"Track Volume: %.1f dB", dbDisplay);
-        else
-            swprintf_s(buf, L"Track Volume: 0.0 dB");
+        if (sliderPos == 0) {
+            swprintf_s(buf, L"Track Volume: Mute");
+        } else {
+            float dbDisplay = (sliderPos - 301.0f) / 10.0f;
+            if (dbDisplay > 0.05f)
+                swprintf_s(buf, L"Track Volume: +%.1f dB", dbDisplay);
+            else if (dbDisplay < -0.05f)
+                swprintf_s(buf, L"Track Volume: %.1f dB", dbDisplay);
+            else
+                swprintf_s(buf, L"Track Volume: 0.0 dB");
+        }
         SetWindowTextW(g_hLabelTrackVolume, buf);
 
         // Update mute button text
@@ -225,24 +229,30 @@ void OnTrackVolumeChanged()
     {
         int sliderPos = (int)SendMessage(g_hSliderTrackVolume, TBM_GETPOS, 0, 0);
         
-        // Magnetic snap to center (0dB)
-        if (sliderPos > 198 && sliderPos < 202) {
-            sliderPos = 200;
+        // Magnetic snap to center (0dB, slider 301)
+        if (sliderPos > 299 && sliderPos < 303) {
+            sliderPos = 301;
             SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, sliderPos);
         }
 
         // Convert slider position to dB then to volume (amplitude)
-        // dB = (sliderPos - 200) / 10
-        // volume = 10 ^ (dB / 20)
-        
-        float db = (sliderPos - 200.0f) / 10.0f;
-        float volume = powf(10.0f, db / 20.0f);
+        // 0 => hard mute
+        // 1..601 => -30dB..+30dB
+        float db = 0.0f;
+        float volume = 0.0f;
+        if (sliderPos > 0)
+        {
+            db = (sliderPos - 301.0f) / 10.0f;
+            volume = powf(10.0f, db / 20.0f);
+        }
 
         g_videoPlayer->SetAudioTrackVolume(selectedIndex, volume);
 
         // Update label with dB value
         wchar_t buf[64];
-        if (db > 0.05f)
+        if (sliderPos == 0)
+            swprintf_s(buf, L"Track Volume: Mute");
+        else if (db > 0.05f)
             swprintf_s(buf, L"Track Volume: +%.1f dB", db);
         else if (db < -0.05f)
             swprintf_s(buf, L"Track Volume: %.1f dB", db);
@@ -259,24 +269,30 @@ void OnMasterVolumeChanged()
     
     int sliderPos = (int)SendMessage(g_hSliderMasterVolume, TBM_GETPOS, 0, 0);
     
-    // Magnetic snap to center (0dB)
-    if (sliderPos > 198 && sliderPos < 202) {
-        sliderPos = 200;
+    // Magnetic snap to center (0dB, slider 301)
+    if (sliderPos > 299 && sliderPos < 303) {
+        sliderPos = 301;
         SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, sliderPos);
     }
 
     // Convert slider position to dB then to volume (amplitude)
-    // dB = (sliderPos - 200) / 10
-    // volume = 10 ^ (dB / 20)
-    
-    float db = (sliderPos - 200.0f) / 10.0f;
-    float volume = powf(10.0f, db / 20.0f);
+    // 0 => hard mute
+    // 1..601 => -30dB..+30dB
+    float db = 0.0f;
+    float volume = 0.0f;
+    if (sliderPos > 0)
+    {
+        db = (sliderPos - 301.0f) / 10.0f;
+        volume = powf(10.0f, db / 20.0f);
+    }
 
     g_videoPlayer->SetMasterVolume(volume);
     
     // Update label with dB value
     wchar_t buf[64];
-    if (db > 0.05f)
+    if (sliderPos == 0)
+        swprintf_s(buf, L"Master Volume: Mute");
+    else if (db > 0.05f)
         swprintf_s(buf, L"Master Volume: +%.1f dB", db);
     else if (db < -0.05f)
         swprintf_s(buf, L"Master Volume: %.1f dB", db);

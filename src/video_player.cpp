@@ -1045,7 +1045,10 @@ void VideoPlayer::SetAudioTrackVolume(int trackIndex, float volume)
 {
     if (trackIndex < 0 || trackIndex >= static_cast<int>(audioTracks.size()))
         return;
+    constexpr float kMinAudibleAtMinus30Db = 0.03162278f; // 10^(-30/20)
     float clampedVolume = volume < 0.0f ? 0.0f : volume;
+    if (clampedVolume > 0.0f && clampedVolume < kMinAudibleAtMinus30Db)
+        clampedVolume = 0.0f;
     audioTracks[trackIndex]->volume = clampedVolume;
 }
 

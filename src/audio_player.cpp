@@ -421,7 +421,10 @@ void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
 }
 
 void AudioPlayer::SetMasterVolume(float volume) {
+    constexpr float kMinAudibleAtMinus30Db = 0.03162278f; // 10^(-30/20)
     m_masterVolume = volume < 0.0f ? 0.0f : volume;
+    if (m_masterVolume > 0.0f && m_masterVolume < kMinAudibleAtMinus30Db)
+        m_masterVolume = 0.0f;
 }
 
 void AudioPlayer::AudioThreadFunction() {

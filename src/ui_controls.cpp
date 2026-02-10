@@ -160,8 +160,8 @@ void CreateControls(HWND hwnd)
         340, 245, 200, 30, // Placeholder position
         hwnd, (HMENU)ID_SLIDER_TRACK_VOLUME,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderTrackVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 400)); // -20dB to +20dB
-    SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, 200); // Default 0dB
+    SendMessage(g_hSliderTrackVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 601)); // 0=mute, 1..601 => -30dB..+30dB
+    SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, 301); // Default 0dB
     ApplyDarkTheme(g_hSliderTrackVolume);
 
     // Master volume label
@@ -180,8 +180,8 @@ void CreateControls(HWND hwnd)
         340, 310, 200, 30, // Placeholder position
         hwnd, (HMENU)ID_SLIDER_MASTER_VOLUME,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 400)); // -20dB to +20dB
-    SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, 200); // Default 0dB
+    SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 601)); // 0=mute, 1..601 => -30dB..+30dB
+    SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, 301); // Default 0dB
     ApplyDarkTheme(g_hSliderMasterVolume);
 
     // Editing controls section
