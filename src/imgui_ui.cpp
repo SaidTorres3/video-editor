@@ -969,7 +969,7 @@ static void StartExport(HWND hwnd, bool isCut)
         // Use a dummy HWND progress bar - we'll poll from the ImGui side
         bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
             mergeAudio, convertH264, g_encoderSelection, g_qualityPreset,
-            bitrate, nullptr, &g_cancelExport);
+            bitrate, &g_exportProgress, &g_cancelExport);
 
         g_lastOutputFile = ok ? outFile : L"";
 
@@ -979,7 +979,7 @@ static void StartExport(HWND hwnd, bool isCut)
             if (g_useCatbox)
             {
                 std::string url;
-                if (UploadToCatbox(outFile, url, nullptr))
+                if (UploadToCatbox(outFile, url, &g_exportProgress))
                 {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
                     g_catboxUploadedUrl.assign(sz - 1, 0);
@@ -990,7 +990,7 @@ static void StartExport(HWND hwnd, bool isCut)
             if (g_useB2)
             {
                 std::string url;
-                if (UploadToB2(outFile, url, nullptr))
+                if (UploadToB2(outFile, url, &g_exportProgress))
                 {
                     int sz = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
                     g_b2UploadedUrl.assign(sz - 1, 0);

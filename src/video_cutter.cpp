@@ -59,7 +59,7 @@ void VideoCutter::ResetProgressTracking() {
 
 bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
-                           EncoderSelection encoder, const std::wstring& qualityPreset, int maxBitrate, HWND progressBar,
+                           EncoderSelection encoder, const std::wstring& qualityPreset, int maxBitrate, float* progressPtr,
                            std::atomic<bool>* cancelFlag)
 {
     ResetProgressTracking();
@@ -962,34 +962,9 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
 
         double progress = (pktPtsUs - startPts) / double(endPts - startPts);
         progress = std::max(0.0, std::min(1.0, progress));
-        int progressPercent = (int)(progress * 100.0);
         
-        if (progressBar && IsWindow(progressBar)) {
-            // Only update if progress changed and throttle updates
-            auto now = std::chrono::high_resolution_clock::now();
-            auto timeSinceLastUpdate = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastUpdateTime).count();
-            
-            // Update if: progress increased significantly OR 100ms has passed
-            if (progressPercent > m_lastDisplayedPercent || timeSinceLastUpdate > 100) {
-                // Apply smoothing: only allow incremental increases
-                if (progressPercent > m_lastDisplayedPercent) {
-                    m_lastDisplayedPercent = progressPercent;
-                    m_lastUpdateTime = now;
-                    
-                    SendMessage(progressBar, PBM_SETPOS, progressPercent, 0);
-                    
-                    // Update percentage text
-                    if (g_hProgressPercentage && IsWindow(g_hProgressPercentage)) {
-                        wchar_t percentText[32];
-                        swprintf_s(percentText, L"%d%%", progressPercent);
-                        SetWindowTextW(g_hProgressPercentage, percentText);
-                    }
-                } else if (timeSinceLastUpdate > 100) {
-                    // Force update after timeout to keep UI responsive
-                    m_lastUpdateTime = now;
-                    SendMessage(progressBar, PBM_SETPOS, progressPercent, 0);
-                }
-            }
+        if (progressPtr) {
+            *progressPtr = (float)progress;
         }
     }
 
@@ -1207,8 +1182,8 @@ cleanup:
     avformat_free_context(outputCtx);
     avformat_close_input(&inputCtx);
 
-    if (progressBar && IsWindow(progressBar))
-        SendMessage(progressBar, PBM_SETPOS, 100, 0);
+    if (progressPtr)
+        *progressPtr = 1.0f;
 
     DebugLog("CutVideo finished");
 

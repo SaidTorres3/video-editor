@@ -1155,10 +1155,10 @@ void VideoPlayer::PlaybackThreadFunction()
 
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            double endTime, bool mergeAudio, bool convertH264,
-                           EncoderSelection encoder, const std::wstring& qualityPreset, int maxBitrate, HWND progressBar,
+                           EncoderSelection encoder, const std::wstring& qualityPreset, int maxBitrate, float* progressPtr,
                            std::atomic<bool>* cancelFlag)
 {
-    return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, encoder, qualityPreset, maxBitrate, progressBar, cancelFlag);
+    return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, encoder, qualityPreset, maxBitrate, progressPtr, cancelFlag);
 }
 
 // VideoWindowProc removed - crop selection now handled by ImGui UI

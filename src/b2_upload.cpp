@@ -12,10 +12,9 @@ static size_t WriteCB(char* ptr, size_t size, size_t nmemb, void* userdata) {
 
 static int ProgressCB(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
                       curl_off_t ultotal, curl_off_t ulnow) {
-    HWND bar = reinterpret_cast<HWND>(clientp);
-    if (bar && ultotal > 0) {
-        int pct = static_cast<int>((double)ulnow / ultotal * 100.0);
-        SendMessage(bar, PBM_SETPOS, pct, 0);
+    float* pProgress = reinterpret_cast<float*>(clientp);
+    if (pProgress && ultotal > 0) {
+        *pProgress = (float)((double)ulnow / ultotal);
     }
     return 0;
 }
@@ -40,7 +39,7 @@ static bool ExtractJson(const std::string& json, const std::string& key, std::st
     return true;
 }
 
-bool UploadToB2(const std::wstring& filePath, std::string& outUrl, HWND progressBar) {
+bool UploadToB2(const std::wstring& filePath, std::string& outUrl, float* progressPtr) {
     if (g_b2KeyId.empty() || g_b2AppKey.empty() || g_b2BucketId.empty() || g_b2BucketName.empty())
         return false;
 
@@ -115,10 +114,10 @@ bool UploadToB2(const std::wstring& filePath, std::string& outUrl, HWND progress
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)fsz);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-    if (progressBar) {
-        SendMessage(progressBar, PBM_SETPOS, 0, 0);
+    if (progressPtr) {
+        *progressPtr = 0.0f;
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCB);
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, progressBar);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, progressPtr);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     }
     response.clear();

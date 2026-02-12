@@ -14,10 +14,9 @@ static size_t WriteCB(char* ptr, size_t size, size_t nmemb, void* userdata) {
 
 static int ProgressCB(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
                       curl_off_t ultotal, curl_off_t ulnow) {
-    HWND bar = reinterpret_cast<HWND>(clientp);
-    if (bar && ultotal > 0) {
-        int pct = static_cast<int>((double)ulnow / ultotal * 100.0);
-        SendMessage(bar, PBM_SETPOS, pct, 0);
+    float* pProgress = reinterpret_cast<float*>(clientp);
+    if (pProgress && ultotal > 0) {
+        *pProgress = (float)((double)ulnow / ultotal);
     }
     return 0;
 }
@@ -41,7 +40,7 @@ static std::string Narrow(const std::wstring& w) {
     return s;
 }
 
-bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND progressBar) {
+bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, float* progressPtr) {
     std::string path = Narrow(filePath);
     std::wstring trimmedHash = Trim(g_catboxUserHash);
 
@@ -91,10 +90,10 @@ bool UploadToCatbox(const std::wstring& filePath, std::string& outUrl, HWND prog
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-    if (progressBar) {
-        SendMessage(progressBar, PBM_SETPOS, 0, 0);
+    if (progressPtr) {
+        *progressPtr = 0.0f;
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCB);
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, progressBar);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, progressPtr);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     }
 
