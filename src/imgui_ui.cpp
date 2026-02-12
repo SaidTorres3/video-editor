@@ -363,7 +363,7 @@ static void DrawTimeline(float width, float height)
     if (!g_videoPlayer || !g_videoPlayer->IsLoaded())
     {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Colors::TimelineBg);
-        ImGui::BeginChild("TimelineEmpty", ImVec2(width, height), ImGuiChildFlags_Borders);
+        ImGui::BeginChild("TimelineEmpty", ImVec2(width, height), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         ImVec2 center = ImVec2(
             ImGui::GetWindowPos().x + width * 0.5f,
             ImGui::GetWindowPos().y + height * 0.5f
@@ -380,7 +380,7 @@ static void DrawTimeline(float width, float height)
     double currentTime = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Colors::TimelineBg);
-    ImGui::BeginChild("Timeline", ImVec2(width, height), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("Timeline", ImVec2(width, height), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     ImVec2 pos = ImGui::GetCursorScreenPos();
     ImVec2 size = ImGui::GetContentRegionAvail();
@@ -1084,7 +1084,7 @@ void RenderUI(HWND hwnd)
     ImGui::Begin("##MainWindow", nullptr,
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus |
-        ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_MenuBar);
+        ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(2);
 
     // ---- Menu Bar ----
@@ -1119,14 +1119,17 @@ void RenderUI(HWND hwnd)
     float toolbarHeight = 50.0f;
     float statusBarHeight = 28.0f;
     float rightPanelWidth = 300.0f;
+    float spacingY = ImGui::GetStyle().ItemSpacing.y;
     ImVec2 contentSize = ImGui::GetContentRegionAvail();
-    float videoAreaHeight = contentSize.y - timelineHeight - toolbarHeight - statusBarHeight;
+    
+    // Account for spacing between items (Toolbar, VideoArea, Timeline, StatusBar)
+    float videoAreaHeight = contentSize.y - timelineHeight - toolbarHeight - statusBarHeight - (spacingY * 3);
 
     // ---- Toolbar ----
     {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 8));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Colors::BgPanel);
-        ImGui::BeginChild("Toolbar", ImVec2(0, toolbarHeight), ImGuiChildFlags_None);
+        ImGui::BeginChild("Toolbar", ImVec2(0, toolbarHeight), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
         // Open button
         if (ImGui::Button("  Open  ", ImVec2(80, 32)))
@@ -1222,7 +1225,7 @@ void RenderUI(HWND hwnd)
 
         // Video Preview
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::BeginChild("VideoArea", ImVec2(videoWidth, videoAreaHeight), ImGuiChildFlags_None);
+        ImGui::BeginChild("VideoArea", ImVec2(videoWidth, videoAreaHeight), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         {
             ImVec2 avail = ImGui::GetContentRegionAvail();
 
@@ -1666,7 +1669,7 @@ void RenderUI(HWND hwnd)
     // ---- Status Bar ----
     {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Colors::BgPanel);
-        ImGui::BeginChild("StatusBar", ImVec2(0, statusBarHeight), ImGuiChildFlags_None);
+        ImGui::BeginChild("StatusBar", ImVec2(0, statusBarHeight), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         ImGui::SetCursorPosY(4);
         ImGui::SetCursorPosX(8);
 
