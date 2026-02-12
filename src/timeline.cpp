@@ -204,12 +204,11 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             // Immediate UI update
             g_previewSeekTime = seekTime;
             InvalidateRect(hwnd, NULL, FALSE);
-            UpdateWindow(hwnd); // Force restart of paint cycle to draw line immediately
+            UpdateWindow(hwnd); // Force immediate redraw of cursor
             
-            g_videoPlayer->SeekToTime(seekTime, 0);
+            // Asynchronous seek for responsive interaction
+            g_videoPlayer->RequestSeek(seekTime);
             
-            g_previewSeekTime = -1.0; // Reset after seek
-
             g_isTimelineDragging = true;
             SetCapture(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
@@ -257,14 +256,13 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             if (g_timelineDragMode == DragMode::Cursor)
             {
-                // Immediate UI update
+                // Immediate UI update - the line will stay at mouse pos even if seek is asynchronous
                 g_previewSeekTime = seekTime;
                 InvalidateRect(hwnd, NULL, FALSE);
-                UpdateWindow(hwnd);
-                
-                g_videoPlayer->SeekToTime(seekTime, 0);
-                
-                g_previewSeekTime = -1.0;
+                UpdateWindow(hwnd); // Force immediate redraw for zero-latency cursor
+
+                // Use asynchronous seek to decouple UI from decoder performance
+                g_videoPlayer->RequestSeek(seekTime);
             }
             else if (g_timelineDragMode == DragMode::Keyframe)
             {
@@ -329,6 +327,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             if (g_timelineDragMode == DragMode::Cursor)
             {
+                g_previewSeekTime = -1.0;
                 g_videoPlayer->SeekToTime(seekTime, 0);
                 if (g_wasPlayingBeforeDrag)
                     g_videoPlayer->Play();

@@ -147,6 +147,14 @@ public:
     std::mutex audioMutex;
     std::condition_variable audioCondition;
     std::mutex decodeMutex; // protects decoder during seek
+
+    // Async seek threading
+    std::thread seekThread;
+    std::atomic<bool> seekThreadRunning;
+    std::atomic<double> requestedSeekTime;
+    std::atomic<bool> hasRequestedSeek;
+    std::condition_variable seekCV;
+    std::mutex seekMutex;
     
     // Audio settings
     int audioSampleRate;
@@ -194,6 +202,7 @@ public:
 
     void SeekToFrame(int64_t frameNumber);
     void SeekToTime(double seconds, int decodeCount = 3);
+    void RequestSeek(double seconds); // Asynchronous seek for smooth UI
     void SeekToTimeExact(double seconds);  // Seek to exact timestamp for keyframe editing
 
     double GetDuration() const;
@@ -237,5 +246,6 @@ public:
 
 private:
     void PlaybackThreadFunction();
+    void SeekThreadFunction(); // Background thread for seeking
     void RecomputeCropOutputDimensionsLocked();
 };

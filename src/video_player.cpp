@@ -33,7 +33,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioInitialized(false), audioOutputIsFloat(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
-      dropAudioDuringStepping(false), frameCacheLimit(20)
+      dropAudioDuringStepping(false), frameCacheLimit(60)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
@@ -42,6 +42,12 @@ VideoPlayer::VideoPlayer(HWND parent)
 
     m_renderer->Initialize();
     m_audioPlayer->Initialize();
+
+    // Start seeking thread
+    seekThreadRunning = true;
+    hasRequestedSeek = false;
+    requestedSeekTime = 0.0;
+    seekThread = std::thread(&VideoPlayer::SeekThreadFunction, this);
 }
 
 VideoPlayer::~VideoPlayer()
@@ -49,6 +55,15 @@ VideoPlayer::~VideoPlayer()
     UnloadVideo();
     m_audioPlayer->Cleanup();
     m_renderer->Cleanup();
+
+    if (seekThreadRunning)
+    {
+        seekThreadRunning = false;
+        seekCV.notify_all();
+        if (seekThread.joinable())
+            seekThread.join();
+    }
+
     if (playbackThreadRunning)
     {
         playbackThreadRunning = false;
@@ -447,6 +462,9 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
     if (!isLoaded)
         return;
 
+    // Clear any pending async seeks to prevent "jumping back" after a manual seek
+    hasRequestedSeek = false;
+
     // Clamp seconds to valid range
     if (seconds < 0.0) seconds = 0.0;
     if (duration > 0.0 && seconds >= duration) {
@@ -458,12 +476,29 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
     double frameDuration = (frameRate > 0) ? (1.0 / frameRate) : 0.033;
     bool smartSeek = false;
 
-    // Check if we can just decode forward without seeking
-    // This optimization is crucial for smooth timeline dragging
+    // Check if we can use cache or smart seek to avoid full FFmpeg seek
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
         
-        // If target is ahead of current position but within a reasonable range (e.g. 100 frames)
+        // 1. Check if the frame is already in our cache (instant)
+        if (!frameCache.empty())
+        {
+            for (const auto& cached : frameCache)
+            {
+                if (std::abs(cached.pts - seconds) < (frameDuration * 0.5))
+                {
+                    std::copy(cached.pixels.begin(), cached.pixels.end(), buffer);
+                    currentPts = cached.pts;
+                    currentFrame = cached.number;
+                    UpdateCropForTime(currentPts);
+                    m_renderer->UpdateDisplay();
+                    UpdateTimeline();
+                    return;
+                }
+            }
+        }
+
+        // 2. If target is ahead of current position but within a reasonable range (e.g. 100 frames)
         // we can just decode forward instead of seeking back to the previous keyframe.
         double threshold = frameDuration * 100.0; 
         if (seconds >= currentPts && seconds <= currentPts + threshold)
@@ -475,6 +510,8 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
     if (!smartSeek)
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
+        // PERFORMANCE: Don't clear cache immediately if the target might be close to what we have
+        // But for now, FFmpeg seek requires flushing buffers, so we'll keep it simple
         frameCache.clear();
 
         AVStream *vs = formatContext->streams[videoStreamIndex];
@@ -559,6 +596,32 @@ void VideoPlayer::SeekToTimeExact(double seconds)
         currentPts = seconds;
         currentFrame = frameRate > 0 ? static_cast<int64_t>(seconds * frameRate) : 0;
         UpdateCropForTime(currentPts);
+    }
+}
+
+void VideoPlayer::RequestSeek(double seconds)
+{
+    requestedSeekTime = seconds;
+    hasRequestedSeek = true;
+    seekCV.notify_all();
+}
+
+void VideoPlayer::SeekThreadFunction()
+{
+    while (seekThreadRunning)
+    {
+        std::unique_lock<std::mutex> lock(seekMutex);
+        seekCV.wait(lock, [this] { return !seekThreadRunning || hasRequestedSeek; });
+
+        if (!seekThreadRunning)
+            break;
+
+        double target = requestedSeekTime;
+        hasRequestedSeek = false;
+        lock.unlock();
+
+        // Perform the actual seek on this background thread
+        SeekToTime(target, 0);
     }
 }
 

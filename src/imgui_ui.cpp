@@ -634,13 +634,22 @@ static void DrawTimeline(float width, float height)
             if (g_videoPlayer->IsPlaying())
                 g_videoPlayer->Pause();
         }
+        
+        // Immediate UI feedback
         g_previewSeekTime = seekTime;
-        g_videoPlayer->SeekToTime(seekTime);
-        g_previewSeekTime = -1.0;
+
+        // Asynchronous seek to keep UI perfectly smooth
+        g_videoPlayer->RequestSeek(seekTime);
     }
     else if (g_timelineDragging && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
     {
         g_timelineDragging = false;
+        g_previewSeekTime = -1.0;
+        
+        // Final seek ensures we land exactly where we released
+        double mouseX = ImGui::GetIO().MousePos.x;
+        double seekTime = xToTime(mouseX);
+        g_videoPlayer->SeekToTime(std::clamp(seekTime, 0.0, duration));
     }
 
     ImGui::EndChild();
