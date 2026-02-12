@@ -2,8 +2,11 @@
 #include "video_player.h"
 #include "audio_player.h"
 #include "video_renderer.h"
-#include "ui_updates.h"
 #include <algorithm> // For std::lower_bound
+
+// No-op stubs - UI updates are handled by ImGui render loop
+static inline void UpdateTimeline() {}
+static inline void UpdateControls() {}
 
 VideoDecoder::VideoDecoder(VideoPlayer* player) : m_player(player) {}
 
@@ -281,14 +284,11 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
 
                 if (presentFrame)
                     m_player->m_renderer->UpdateDisplay();
-                else if (scheduleDisplay)
-                    InvalidateRect(m_player->videoWindow, nullptr, FALSE);
 
                 if (presentFrame || scheduleDisplay)
                     UpdateTimeline();
 
-                if (cropChanged && !presentFrame && !scheduleDisplay)
-                    InvalidateRect(m_player->videoWindow, nullptr, FALSE);
+                // Crop changed - ImGui will pick up the new frame automatically
 
                 return true;
             }

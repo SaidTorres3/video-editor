@@ -4,21 +4,18 @@
 #include "video_renderer.h"
 #include "video_cutter.h"
 #include "options_window.h"
-#include "ui_updates.h"
 #include <iostream>
 #include <windows.h>
 #include <windowsx.h>
-#include <d2d1.h>
-#pragma comment(lib, "d2d1.lib")
-#include <uxtheme.h>
 #include <algorithm>
 #include <cmath>
 #include <iterator>
 #include <cstring>
 #include <chrono>
 
-void UpdateControls();
-void UpdateTimeline();
+// No-op stubs: ImGui immediate-mode UI refreshes automatically
+static inline void UpdateControls() {}
+static inline void UpdateTimeline() {}
 
 VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
@@ -30,14 +27,12 @@ VideoPlayer::VideoPlayer(HWND parent)
       clipPreviewActive(false), clipPreviewEndTime(0.0),
       cropRect{0,0,0,0}, cropTimeline(), hasCrop(false), cropOutputWidth(0), cropOutputHeight(0),
       selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
-      videoWindow(nullptr),
-      d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
+      playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioOutputIsFloat(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
-    originalVideoWndProc(nullptr),
       dropAudioDuringStepping(false), frameCacheLimit(20)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
@@ -46,7 +41,6 @@ VideoPlayer::VideoPlayer(HWND parent)
     m_cutter = std::make_unique<VideoCutter>(this);
 
     m_renderer->Initialize();
-    CreateVideoWindow();
     m_audioPlayer->Initialize();
 }
 
@@ -60,32 +54,6 @@ VideoPlayer::~VideoPlayer()
         playbackThreadRunning = false;
         if (playbackThread.joinable())
             playbackThread.join();
-    }
-    if (videoWindow)
-    {
-        SetWindowLongPtr(videoWindow, GWLP_WNDPROC, (LONG_PTR)originalVideoWndProc);
-        SetWindowLongPtr(videoWindow, GWLP_USERDATA, 0);
-        DestroyWindow(videoWindow);
-        originalVideoWndProc = nullptr;
-    }
-}
-
-void VideoPlayer::CreateVideoWindow()
-{
-    // Use SS_NOTIFY to ensure mouse messages are delivered to our window procedure
-    videoWindow = CreateWindow(
-        L"STATIC", nullptr,
-        WS_CHILD | WS_VISIBLE | SS_BLACKRECT | SS_NOTIFY,
-        10, 10, 640, 480,
-        parentWindow, nullptr,
-        (HINSTANCE)GetWindowLongPtr(parentWindow, GWLP_HINSTANCE),
-        nullptr);
-    if (videoWindow)
-    {
-        SetWindowLongPtr(videoWindow, GWLP_USERDATA, (LONG_PTR)this);
-        originalVideoWndProc = (WNDPROC)SetWindowLongPtr(videoWindow, GWLP_WNDPROC, (LONG_PTR)VideoWindowProc);
-        SetWindowTheme(videoWindow, L"DarkMode_Explorer", nullptr);
-        m_renderer->CreateRenderTarget();
     }
 }
 
@@ -187,17 +155,6 @@ void VideoPlayer::UnloadVideo()
     Stop();
     m_audioPlayer->CleanupTracks();
     m_decoder->Cleanup();
-    if (d2dBitmap)
-    {
-        d2dBitmap->Release();
-        d2dBitmap = nullptr;
-    }
-    if (d2dRenderTarget)
-    {
-        d2dRenderTarget->BeginDraw();
-        d2dRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::Black));
-        d2dRenderTarget->EndDraw();
-    }
     if (formatContext)
     {
         avformat_close_input(&formatContext);
@@ -615,14 +572,9 @@ double VideoPlayer::GetCurrentTime() const
     return currentPts;
 }
 
-void VideoPlayer::SetPosition(int x, int y, int width, int height)
+void VideoPlayer::SetPosition(int, int, int, int)
 {
-    m_renderer->SetPosition(x, y, width, height);
-}
-
-void VideoPlayer::Render()
-{
-    m_renderer->Render();
+    // No-op: ImGui handles layout
 }
 
 namespace
@@ -1209,188 +1161,4 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
     return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, encoder, qualityPreset, maxBitrate, progressBar, cancelFlag);
 }
 
-LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    VideoPlayer* player = reinterpret_cast<VideoPlayer*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-    if (player)
-    {
-        if (msg == WM_PAINT)
-        {
-            player->m_renderer->OnVideoWindowPaint();
-            return 0;
-        }
-        else if (msg == WM_ERASEBKGND)
-        {
-            return 1;
-        }
-        else if (msg == WM_LBUTTONDOWN)
-        {
-            SetFocus(hwnd);
-            if (player->isLoaded)
-            {
-                player->selectingCrop = true;
-                player->cropStart = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                player->cropCurrent = player->cropStart;
-                SetCapture(hwnd);
-            }
-            return 0;
-        }
-        else if (msg == WM_MOUSEMOVE && player->selectingCrop)
-        {
-            player->cropCurrent = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            InvalidateRect(hwnd, nullptr, FALSE);
-            return 0;
-        }
-        else if (msg == WM_LBUTTONUP && player->selectingCrop)
-        {
-            player->selectingCrop = false;
-            ReleaseCapture();
-            player->cropCurrent = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            RECT winRect = { std::min(player->cropStart.x, player->cropCurrent.x),
-                             std::min(player->cropStart.y, player->cropCurrent.y),
-                             std::max(player->cropStart.x, player->cropCurrent.x),
-                             std::max(player->cropStart.y, player->cropCurrent.y) };
-            RECT client; GetClientRect(hwnd, &client);
-            float wndW = (float)(client.right - client.left);
-            float wndH = (float)(client.bottom - client.top);
-
-            RECT base;
-            if (player->hasCrop)
-                base = player->cropRect;
-            else
-            {
-                base.left = 0;
-                base.top = 0;
-                base.right = player->frameWidth;
-                base.bottom = player->frameHeight;
-            }
-            float baseW = (float)(base.right - base.left);
-            float baseH = (float)(base.bottom - base.top);
-
-            if (baseW <= 0.0f || baseH <= 0.0f)
-            {
-                InvalidateRect(hwnd, nullptr, FALSE);
-                UpdateControls();
-                player->UpdateCropForTime(player->GetCurrentTime());
-                UpdateTimeline();
-                return 0;
-            }
-
-            float videoAspect = baseW / baseH;
-            float targetAspect = wndW / wndH;
-            float drawW, drawH, offsetX, offsetY;
-            if (targetAspect > videoAspect) {
-                drawH = wndH;
-                drawW = drawH * videoAspect;
-                offsetX = (wndW - drawW) / 2.0f;
-                offsetY = 0.0f;
-            } else {
-                drawW = wndW;
-                drawH = drawW / videoAspect;
-                offsetX = 0.0f;
-                offsetY = (wndH - drawH) / 2.0f;
-            }
-            float x1 = std::clamp((float)winRect.left - offsetX, 0.0f, drawW);
-            float y1 = std::clamp((float)winRect.top - offsetY, 0.0f, drawH);
-            float x2 = std::clamp((float)winRect.right - offsetX, 0.0f, drawW);
-            float y2 = std::clamp((float)winRect.bottom - offsetY, 0.0f, drawH);
-            if (x2 > x1 && y2 > y1) {
-                RECT newRect;
-                newRect.left = base.left + (LONG)(x1 / drawW * baseW);
-                newRect.top = base.top + (LONG)(y1 / drawH * baseH);
-                newRect.right = base.left + (LONG)(x2 / drawW * baseW);
-                newRect.bottom = base.top + (LONG)(y2 / drawH * baseH);
-
-                if (newRect.right > newRect.left &&
-                    newRect.bottom > newRect.top) {
-                    double selectionTime = player->GetCurrentTime();
-                    if (player->duration > 0.0)
-                        selectionTime = std::clamp(selectionTime, 0.0, player->duration);
-                    double appliedTime = selectionTime;
-                    bool inserted = player->AddCropKeyframe(selectionTime, newRect, &appliedTime);
-                    player->UpdateCropForTime(inserted ? appliedTime : selectionTime);
-                }
-            }
-            InvalidateRect(hwnd, nullptr, FALSE);
-            UpdateControls();
-            UpdateTimeline();
-            return 0;
-        }
-        else if (msg == WM_RBUTTONUP)
-        {
-            if (!player->isLoaded)
-                return 0;
-
-            double currentTime = player->GetCurrentTime();
-            double clampedTime = currentTime;
-            if (player->duration > 0.0)
-                clampedTime = std::clamp(clampedTime, 0.0, player->duration);
-
-            auto keyframes = player->GetCropKeyframes();
-            bool hasCurrent = false;
-            int currentKeyframeIndex = -1;
-
-            // Find the keyframe that's currently applying at this playback time
-            // (the one at or before the current time)
-            for (int i = static_cast<int>(keyframes.size()) - 1; i >= 0; --i)
-            {
-                if (keyframes[i].time <= clampedTime)
-                {
-                    hasCurrent = true;
-                    currentKeyframeIndex = i;
-                    break;
-                }
-            }
-
-            if (!hasCurrent)
-            {
-                MessageBox(hwnd, L"Drag with the left mouse button to select a crop region. Right-click steps back one crop.", L"Crop", MB_OK);
-                return 0;
-            }
-
-            // If there's a keyframe at the current time, we can do hierarchical undo
-            // Otherwise, just add a disabled keyframe at the current location
-            bool foundPreviousEnabled = false;
-            if (currentKeyframeIndex >= 0 && std::fabs(keyframes[currentKeyframeIndex].time - clampedTime) < 0.001)
-            {
-                // Only do hierarchical undo if the current keyframe is AT this location
-                if (currentKeyframeIndex > 0)
-                {
-                    // Check if there's a previous enabled keyframe
-                    for (int i = currentKeyframeIndex - 1; i >= 0; --i)
-                    {
-                        if (keyframes[i].enabled)
-                        {
-                            // Found a previous enabled keyframe, remove the current one to restore to that state
-                            player->RemoveCropKeyframe(keyframes[currentKeyframeIndex].time);
-                            foundPreviousEnabled = true;
-                            break;
-                        }
-                    }
-                }
-                
-                // If no previous enabled keyframe but we're on a keyframe, remove it to go to full frame
-                if (!foundPreviousEnabled)
-                {
-                    player->RemoveCropKeyframe(keyframes[currentKeyframeIndex].time);
-                    foundPreviousEnabled = true;
-                }
-            }
-
-            // If we didn't find a keyframe at current location, or undo didn't happen, add disabled keyframe
-            if (!foundPreviousEnabled)
-            {
-                double appliedTime = clampedTime;
-                player->AddCropDisabledKeyframe(clampedTime, &appliedTime);
-            }
-
-            player->UpdateCropForTime(clampedTime);
-            InvalidateRect(hwnd, nullptr, FALSE);
-            UpdateControls();
-            UpdateTimeline();
-            return 0;
-        }
-        return CallWindowProc(player->originalVideoWndProc, hwnd, msg, wParam, lParam);
-    }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
+// VideoWindowProc removed - crop selection now handled by ImGui UI

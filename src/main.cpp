@@ -1,367 +1,290 @@
-// main.cpp
+// main.cpp - ImGui + DirectX 11 based Video Editor
 #include <windows.h>
 #include <windowsx.h>
-#include <commdlg.h>  // For file dialog
-#include <commctrl.h> // For common controls
-#include <shellapi.h> // For drag-and-drop
+#include <shellapi.h>
 #include <dwmapi.h>
-#include <uxtheme.h>
 #pragma comment(lib, "dwmapi.lib")
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 
+#include <d3d11.h>
+#include <dxgi.h>
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
+
+#include <imgui.h>
+#include <imgui_impl_win32.h>
+#include <imgui_impl_dx11.h>
+
 #include "video_player.h"
 #include "options_window.h"
-#include "progress_window.h"
-#include "upload_dialog.h"
-#include <curl/curl.h>
-#include "window_proc.h"
-#include "timeline.h"
-#include "utils.h"
+#include "imgui_ui.h"
 #include "file_handling.h"
-#include "ui_updates.h"
+#include <curl/curl.h>
 
 #include <string>
 #include <cstdlib>
-#include <cstdio> // For swprintf_s
-#include <thread>
-
-// Control IDs
-#define ID_TIMER_UPDATE 1006
 
 // Global variables
-VideoPlayer *g_videoPlayer = nullptr;
-HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
-HWND g_hTimeline;
-HWND g_hStatusText;
-HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
-HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
-HWND g_hLabelAudioTracks, g_hLabelTrackVolume, g_hLabelMasterVolume, g_hLabelEditing;
-HWND g_hButtonSetStart, g_hButtonSetEnd, g_hButtonCut, g_hCheckboxMergeAudio;
-HWND g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate;
-HWND g_hRadioUseBitrate, g_hRadioUseSize;
-HWND g_hLabelBitrate;
-HWND g_hEditTargetSize;
-HWND g_hLabelTargetSize;
-HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd;
-HWND g_hLabelCutInfo;
-HWND g_hButtonOptions;
+VideoPlayer* g_videoPlayer = nullptr;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
-bool g_isTimelineDragging = false;
-bool g_wasPlayingBeforeDrag = false;
-enum class DragMode { None, Cursor, StartMarker, EndMarker, Keyframe };
-DragMode g_timelineDragMode = DragMode::None;
-double g_draggedKeyframeTime = -1.0;  // Time of the keyframe being dragged
-extern double g_previewSeekTime;
+double g_previewSeekTime = -1.0;
 
-// Key hold state for acceleration
-ULONGLONG g_keyHoldStart = 0;
-WPARAM g_keyHoldCode = 0;
-
-// Dark mode UI resources
+// Dark mode UI resources (kept for compatibility with existing code)
 HFONT g_hFont = nullptr;
 HBRUSH g_hbrBackground = nullptr;
 COLORREF g_textColor = RGB(240, 240, 240);
 
-// Entry point
+// DX11 globals
+ID3D11Device*            g_pd3dDevice = nullptr;
+ID3D11DeviceContext*     g_pd3dDeviceContext = nullptr;
+IDXGISwapChain*          g_pSwapChain = nullptr;
+ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
+bool                     g_SwapChainOccluded = false;
+UINT                     g_ResizeWidth = 0;
+UINT                     g_ResizeHeight = 0;
+
+// Forward declarations
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+bool CreateDeviceD3D(HWND hWnd)
+{
+    DXGI_SWAP_CHAIN_DESC sd = {};
+    sd.BufferCount = 2;
+    sd.BufferDesc.Width = 0;
+    sd.BufferDesc.Height = 0;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = hWnd;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+    UINT createDeviceFlags = 0;
+    D3D_FEATURE_LEVEL featureLevel;
+    const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
+    HRESULT res = D3D11CreateDeviceAndSwapChain(
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags,
+        featureLevelArray, 2, D3D11_SDK_VERSION, &sd,
+        &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+    if (res == DXGI_ERROR_UNSUPPORTED)
+        res = D3D11CreateDeviceAndSwapChain(
+            nullptr, D3D_DRIVER_TYPE_WARP, nullptr, createDeviceFlags,
+            featureLevelArray, 2, D3D11_SDK_VERSION, &sd,
+            &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+    if (res != S_OK)
+        return false;
+    CreateRenderTarget();
+    return true;
+}
+
+void CleanupDeviceD3D()
+{
+    CleanupRenderTarget();
+    if (g_pSwapChain)    { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
+    if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = nullptr; }
+    if (g_pd3dDevice)    { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
+}
+
+void CreateRenderTarget()
+{
+    ID3D11Texture2D* pBackBuffer = nullptr;
+    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    if (pBackBuffer)
+    {
+        g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
+        pBackBuffer->Release();
+    }
+}
+
+void CleanupRenderTarget()
+{
+    if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = nullptr; }
+}
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return true;
+
+    switch (msg)
+    {
+    case WM_SIZE:
+        if (wParam == SIZE_MINIMIZED)
+            return 0;
+        g_ResizeWidth = (UINT)LOWORD(lParam);
+        g_ResizeHeight = (UINT)HIWORD(lParam);
+        return 0;
+
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU)
+            return 0;
+        break;
+
+    case WM_DROPFILES:
+    {
+        HDROP hDrop = (HDROP)wParam;
+        wchar_t filePath[MAX_PATH];
+        if (DragQueryFileW(hDrop, 0, filePath, MAX_PATH))
+            LoadVideoFile(hWnd, std::wstring(filePath));
+        DragFinish(hDrop);
+        return 0;
+    }
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
     LoadSettings();
     curl_global_init(CURL_GLOBAL_DEFAULT);
-    const wchar_t CLASS_NAME[] = L"VideoEditorClass";
-    WNDCLASS wc = {};
-    wc.lpfnWndProc = WindowProc;
+
+    // Register window class
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(WNDCLASSEXW);
+    wc.style = CS_CLASSDC;
+    wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
-    wc.lpszClassName = CLASS_NAME;
+    wc.lpszClassName = L"VideoEditorImGuiClass";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RegisterClassExW(&wc);
 
-    RegisterClass(&wc);
-
-    WNDCLASS twc = {};
-    twc.lpfnWndProc = TimelineProc;
-    twc.hInstance = hInstance;
-    twc.lpszClassName = L"TimelineClass";
-    twc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    twc.hbrBackground = nullptr; // custom paint
-    RegisterClass(&twc);
-
-    WNDCLASS owc = {};
-    owc.lpfnWndProc = OptionsProc;
-    owc.hInstance = hInstance;
-    owc.lpszClassName = L"OptionsClass";
-    owc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    owc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClass(&owc);
-
-    WNDCLASS b2c = {};
-    b2c.lpfnWndProc = B2ConfigProc;
-    b2c.hInstance = hInstance;
-    b2c.lpszClassName = L"B2ConfigClass";
-    b2c.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    b2c.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClass(&b2c);
-
-    WNDCLASS upc = {};
-    upc.lpfnWndProc = UploadProc;
-    upc.hInstance = hInstance;
-    upc.lpszClassName = L"UploadConfigClass";
-    upc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    upc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClass(&upc);
-
-    WNDCLASS catc = {};
-    catc.lpfnWndProc = CatboxConfigProc;
-    catc.hInstance = hInstance;
-    catc.lpszClassName = L"CatboxConfigClass";
-    catc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    catc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClass(&catc);
-
-    WNDCLASS pwc = {};
-    pwc.lpfnWndProc = ProgressProc;
-    pwc.hInstance = hInstance;
-    pwc.lpszClassName = L"ProgressClass";
-    pwc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    pwc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClass(&pwc);
-
-    WNDCLASS ucw = {};
-    ucw.lpfnWndProc = UrlCopyProc;
-    ucw.hInstance = hInstance;
-    ucw.lpszClassName = L"UrlCopyClass";
-    ucw.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    ucw.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClass(&ucw);
-
-    WNDCLASS muc = {};
-    muc.lpfnWndProc = ManualUploadProc;
-    muc.hInstance = hInstance;
-    muc.lpszClassName = L"ManualUploadClass";
-    muc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    muc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClass(&muc);
-
-    HWND hwnd = CreateWindowEx(
-        0, CLASS_NAME, L"Video Editor - Preview",
+    // Create main window
+    HWND hwnd = CreateWindowExW(
+        WS_EX_ACCEPTFILES,
+        wc.lpszClassName, L"Video Editor",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1000, 700,
+        100, 100, 1400, 900,
         nullptr, nullptr, hInstance, nullptr);
 
-    if (!hwnd)
-        return 0;
+    // Apply dark title bar
+    BOOL useDark = TRUE;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(useDark));
 
-    ApplyDarkTheme(hwnd);
+    // Initialize Direct3D
+    if (!CreateDeviceD3D(hwnd))
+    {
+        CleanupDeviceD3D();
+        UnregisterClassW(wc.lpszClassName, hInstance);
+        return 1;
+    }
+
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
+    DragAcceptFiles(hwnd, TRUE);
 
+    // Setup ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr; // Don't save layout
+
+    // Setup style
+    InitImGuiStyle();
+
+    // Setup backends
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+
+    // Create video player (pass nullptr since we don't use the old HWND-based video window)
+    g_videoPlayer = new VideoPlayer(hwnd);
+
+    // Handle command-line arguments
     int argc;
-    LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argv && argc > 1)
-    {
         LoadVideoFile(hwnd, std::wstring(argv[1]));
-    }
     if (argv)
         LocalFree(argv);
 
-    MSG msg = {};
-    while (GetMessage(&msg, nullptr, 0, 0) > 0)
+    // Main loop
+    ImVec4 clearColor = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+    bool done = false;
+    while (!done)
     {
-        if (msg.message == WM_KEYUP)
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0U, 0U, PM_REMOVE))
         {
-            if (msg.wParam == g_keyHoldCode)
-            {
-                g_keyHoldCode = 0;
-                g_keyHoldStart = 0;
-            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            if (msg.message == WM_QUIT)
+                done = true;
         }
-        else if (msg.message == WM_KEYDOWN && g_videoPlayer && g_videoPlayer->IsLoaded())
+        if (done)
+            break;
+
+        // Handle swap chain being occluded
+        if (g_SwapChainOccluded && g_pSwapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED)
         {
-            HWND focused = GetFocus();
-            bool isEdit = false;
-            if (focused)
-            {
-                wchar_t className[32];
-                GetClassNameW(focused, className, sizeof(className) / sizeof(wchar_t));
-                if (lstrcmpW(className, L"Edit") == 0)
-                    isEdit = true;
-            }
-            if (!isEdit)
-            {
-                // Track key hold time for acceleration
-                if (g_keyHoldCode != msg.wParam)
-                {
-                    g_keyHoldCode = msg.wParam;
-                    g_keyHoldStart = GetTickCount64();
-                }
-
-                double speedMultiplier = 1.0;
-                if (g_keyHoldStart > 0)
-                {
-                    ULONGLONG elapsed = GetTickCount64() - g_keyHoldStart;
-                    if (elapsed > 5000) // 5 seconds threshold
-                        speedMultiplier = 10.0;
-                }
-
-                bool handled = true;
-                switch (msg.wParam)
-                {
-                case VK_SPACE:
-                    if (g_videoPlayer->IsPlaying())
-                        g_videoPlayer->Pause();
-                    else
-                        g_videoPlayer->Play();
-                    break;
-                case VK_LEFT:
-                case 'J':
-                case 'j':
-                {
-                    // Use preview time as base if we are currently dragging/throttling
-                    double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
-                    double offset = ((msg.wParam == VK_LEFT) ? 5.0 : 10.0) * speedMultiplier;
-                    double t = currentBase - offset;
-                    if (t < 0.0) t = 0.0;
-
-                    g_previewSeekTime = t;
-                    if (g_hTimeline) {
-                        InvalidateRect(g_hTimeline, NULL, FALSE);
-                        UpdateWindow(g_hTimeline);
-                    }
-                    UpdateControls(); // Force immediate update of time label
-
-                    // Throttle: If another keydown for the same key is pending, skip the seek
-                    MSG nextMsg;
-                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                        if (nextMsg.wParam == msg.wParam) {
-                            continue; // Skip the heavy operation
-                        }
-                    }
-
-                    bool wasPlaying = g_videoPlayer->IsPlaying();
-                    if (wasPlaying)
-                        g_videoPlayer->Pause();
-                    g_videoPlayer->SeekToTime(t);
-                    if (wasPlaying)
-                        g_videoPlayer->Play();
-                    
-                    g_previewSeekTime = -1.0;
-                    break;
-                }
-                case VK_RIGHT:
-                case 'L':
-                case 'l':
-                {
-                    double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
-                    double offset = ((msg.wParam == VK_RIGHT) ? 5.0 : 10.0) * speedMultiplier;
-                    double t = currentBase + offset;
-                    double dur = g_videoPlayer->GetDuration();
-                    if (t > dur) t = dur;
-
-                    g_previewSeekTime = t;
-                    if (g_hTimeline) {
-                        InvalidateRect(g_hTimeline, NULL, FALSE);
-                        UpdateWindow(g_hTimeline);
-                    }
-                    UpdateControls(); // Force immediate update of time label
-
-                    MSG nextMsg;
-                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                        if (nextMsg.wParam == msg.wParam) {
-                            continue;
-                        }
-                    }
-
-                    bool wasPlaying = g_videoPlayer->IsPlaying();
-                    if (wasPlaying)
-                        g_videoPlayer->Pause();
-                    g_videoPlayer->SeekToTime(t);
-                    if (wasPlaying)
-                        g_videoPlayer->Play();
-                    
-                    g_previewSeekTime = -1.0;
-                    break;
-                }
-                case 'K':
-                case 'k':
-                    if (g_videoPlayer->IsPlaying())
-                        g_videoPlayer->Pause();
-                    else
-                        g_videoPlayer->Play();
-                    break;
-                case VK_OEM_COMMA:
-                {
-                    // Frame step should pause playback
-                    if (g_videoPlayer->IsPlaying())
-                        g_videoPlayer->Pause();
-
-                    int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
-                    if (frame < 0) frame = 0;
-
-                    // Throttle: if subsequent keys are waiting, skip this update to remain responsive
-                    MSG nextMsg;
-                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                        if (nextMsg.wParam == msg.wParam) {
-                            continue;
-                        }
-                    }
-
-                    g_videoPlayer->SeekToFrame(frame);
-                    
-                    if (g_hTimeline) {
-                        InvalidateRect(g_hTimeline, NULL, FALSE);
-                    }
-                    UpdateControls();
-                    break;
-                }
-                case VK_OEM_PERIOD:
-                {
-                    // Frame step should pause playback
-                    if (g_videoPlayer->IsPlaying())
-                        g_videoPlayer->Pause();
-
-                    int64_t frame = g_videoPlayer->GetCurrentFrame() + 1;
-                    int64_t total = g_videoPlayer->GetTotalFrames();
-                    if (total > 0)
-                    {
-                        int64_t maxf = total - 1;
-                        if (frame > maxf)
-                            frame = maxf;
-                    }
-
-                    // Throttle: if subsequent keys are waiting, skip this update to remain responsive
-                    MSG nextMsg;
-                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                        if (nextMsg.wParam == msg.wParam) {
-                            continue;
-                        }
-                    }
-
-                    g_videoPlayer->SeekToFrame(frame);
-                    
-                    if (g_hTimeline) {
-                        InvalidateRect(g_hTimeline, NULL, FALSE);
-                    }
-                    UpdateControls();
-                    break;
-                }
-                default:
-                    handled = false;
-                    break;
-                }
-                if (handled)
-                {
-                    // UpdateControls();
-                    // UpdateTimeline();
-                    continue;
-                }
-            }
+            Sleep(10);
+            continue;
         }
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        g_SwapChainOccluded = false;
+
+        // Handle resize
+        if (g_ResizeWidth != 0 && g_ResizeHeight != 0)
+        {
+            CleanupRenderTarget();
+            g_pSwapChain->ResizeBuffers(0, g_ResizeWidth, g_ResizeHeight, DXGI_FORMAT_UNKNOWN, 0);
+            g_ResizeWidth = g_ResizeHeight = 0;
+            CreateRenderTarget();
+        }
+
+        // Start ImGui frame
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        // Update video texture from decoded frame
+        UpdateVideoTexture();
+
+        // Render the entire UI
+        RenderUI(hwnd);
+
+        // Rendering
+        ImGui::Render();
+        const float clearColorWithAlpha[4] = {
+            clearColor.x * clearColor.w,
+            clearColor.y * clearColor.w,
+            clearColor.z * clearColor.w,
+            clearColor.w
+        };
+        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clearColorWithAlpha);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+        HRESULT hr = g_pSwapChain->Present(1, 0); // VSync
+        g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
     }
+
+    // Cleanup
+    if (g_videoPlayer)
+    {
+        delete g_videoPlayer;
+        g_videoPlayer = nullptr;
+    }
+    CleanupVideoTexture();
+
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+
+    CleanupDeviceD3D();
+    DestroyWindow(hwnd);
+    UnregisterClassW(wc.lpszClassName, hInstance);
+
     curl_global_cleanup();
     return 0;
 }

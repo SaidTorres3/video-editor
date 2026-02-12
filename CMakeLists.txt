@@ -13,21 +13,17 @@ endif()
 project(VideoEditor CXX)
 
 if(USE_STATIC_FFMPEG)
-    message(STATUS "🔗 Linking FFmpeg statically")
+    message(STATUS "Linking FFmpeg statically")
 else()
-    message(STATUS "🔗 Linking FFmpeg dynamically")
+    message(STATUS "Linking FFmpeg dynamically")
 endif()
 
 # If using MSVC and static FFmpeg, force static runtime and enable LTO
 if(MSVC AND USE_STATIC_FFMPEG)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
-    # Define CURL_STATICLIB for static libcurl
     add_compile_definitions(CURL_STATICLIB)
 elseif(MSVC)
-    # For dynamic builds, use dynamic runtime library to avoid conflicts
-    # Let CMake use the default dynamic runtime library
-    # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")  # Commented out to use default
 endif()
 
 # Require C++17
@@ -37,10 +33,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Enable UNICODE on Win32
 add_compile_definitions(UNICODE _UNICODE)
 
-# Default paths (can override with -DFFMPEG_ROOT=... or -DCURL_ROOT=...)
+# Default paths
 set(FFMPEG_ROOT "${CMAKE_SOURCE_DIR}/third_party/ffmpeg" CACHE PATH "Path to FFmpeg installation")
 set(CURL_ROOT   "${CMAKE_SOURCE_DIR}/vendor/libcurl" CACHE PATH "Path to libcurl installation")
 set(RNNOISE_ROOT "${CMAKE_SOURCE_DIR}/vendor/rnnoise" CACHE PATH "Path to RNNoise installation")
+
+# ==== FIND ImGui via vcpkg ====
+find_package(imgui CONFIG REQUIRED)
 
 # ==== FIND FFmpeg ====
 find_path(FFMPEG_INCLUDE_DIR
@@ -78,7 +77,7 @@ set_target_properties(VENDOR_LIBCURL PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${CURL_ROOT}/include"
 )
 if(NOT EXISTS "${CURL_ROOT}/lib/libcurl.lib")
-    message(FATAL_ERROR "❌ libcurl.lib does not exist in ${CURL_ROOT}/lib")
+    message(FATAL_ERROR "libcurl.lib does not exist in ${CURL_ROOT}/lib")
 endif()
 message(STATUS ">> Using vendored libcurl: ${CURL_ROOT}/lib/libcurl.lib")
 
@@ -93,10 +92,9 @@ if(NOT USE_STATIC_FFMPEG)
         IMPORTED_LOCATION_RELWITHDEBINFO "${CURL_ROOT}/lib/zlib.lib"
     )
     if(NOT EXISTS "${CURL_ROOT}/lib/zlib.lib")
-        message(FATAL_ERROR "❌ zlib.lib does not exist in ${CURL_ROOT}/lib")
+        message(FATAL_ERROR "zlib.lib does not exist in ${CURL_ROOT}/lib")
     endif()
 else()
-    # If static, use zlib from FFmpeg
     set(VENDOR_ZLIB_INCLUDE_DIR "${FFMPEG_ROOT}/include")
     set(VENDOR_ZLIB_LIBRARIES "${FFMPEG_ROOT}/lib/zlib.lib")
     add_library(VENDOR_ZLIB INTERFACE)
@@ -108,12 +106,9 @@ endif()
 # ==== EXECUTABLE AND SOURCE FILES ====
 add_executable(VideoEditor WIN32
     src/main.cpp
-    src/window_proc.cpp
-    src/ui_controls.cpp
-    src/file_handling.cpp
-    src/ui_updates.cpp
-    src/timeline.cpp
+    src/imgui_ui.cpp
     src/editing.cpp
+    src/file_handling.cpp
     src/utils.cpp
     src/video_decoder.cpp
     src/audio_player.cpp
@@ -137,31 +132,25 @@ target_include_directories(VideoEditor PRIVATE
 
 # ==== TARGET-SPECIFIC OPTIONS ====
 if(MSVC AND USE_STATIC_FFMPEG)
-    # Disable specific warnings for static build
     target_compile_options(VideoEditor PRIVATE /wd4996)
     
-    # Fix runtime library conflicts with RNNoise and other static libraries
     target_link_options(VideoEditor PRIVATE
-        /NODEFAULTLIB:MSVCRTD    # Exclude debug runtime library
-        /NODEFAULTLIB:MSVCRT     # Exclude release runtime library
-        /NODEFAULTLIB:libcmtd    # Exclude debug static runtime library (if not needed)
+        /NODEFAULTLIB:MSVCRTD
+        /NODEFAULTLIB:MSVCRT
+        /NODEFAULTLIB:libcmtd
     )
     
-    # Suppress specific linker warnings for symbol conflicts
     target_link_options(VideoEditor PRIVATE
-        /IGNORE:4286  # Ignore duplicate symbol warnings for C runtime functions
-        /IGNORE:4098  # Ignore default library conflicts
+        /IGNORE:4286
+        /IGNORE:4098
     )
 
-    # Force load avcodec to ensure hardware encoders (NVENC, AMF) are registered
-    # This prevents the linker from stripping "unused" encoder symbols in static builds
     target_link_options(VideoEditor PRIVATE "/WHOLEARCHIVE:${AVCODEC_LIBRARY}")
 elseif(MSVC)
-    # For dynamic builds, resolve runtime library conflicts
     target_link_options(VideoEditor PRIVATE
-        /NODEFAULTLIB:LIBCMT     # Exclude static runtime library
-        /NODEFAULTLIB:LIBCMTD    # Exclude static debug runtime library
-        /NODEFAULTLIB:MSVCRTD    # Exclude dynamic debug runtime library (from vendor libs)
+        /NODEFAULTLIB:LIBCMT
+        /NODEFAULTLIB:LIBCMTD
+        /NODEFAULTLIB:MSVCRTD
     )
 endif()
 
@@ -170,7 +159,7 @@ set(PLATFORM_LIBS
     user32 gdi32 d2d1 comctl32 comdlg32 ole32 winmm
     dwmapi uxtheme shell32 ws2_32 bcrypt secur32 mfplat
     mf mfuuid strmiids crypt32 advapi32 iphlpapi wldap32
-    normaliz
+    normaliz d3d11 dxgi d3dcompiler
 )
 
 # ==== FFMPEG LIBRARIES ====
@@ -182,7 +171,6 @@ set(FFMPEG_LIBS
     ${SWRESAMPLE_LIBRARY}
 )
 if(USE_STATIC_FFMPEG)
-    # Also link all extra .lib files for static build
     file(GLOB _all_ffmpeg_libs "${FFMPEG_ROOT}/lib/*.lib")
     list(FILTER _all_ffmpeg_libs EXCLUDE REGEX "avcodec|avformat|avutil|swscale|swresample")
     list(APPEND FFMPEG_LIBS ${_all_ffmpeg_libs})
@@ -195,13 +183,14 @@ target_link_libraries(VideoEditor PRIVATE
     ${RNNOISE_LIBRARY}
     VENDOR_LIBCURL
     VENDOR_ZLIB
+    imgui::imgui
 )
 
 # Force static runtime library linking for static builds
 if(MSVC AND USE_STATIC_FFMPEG)
     target_link_libraries(VideoEditor PRIVATE
-        libcmt      # Static release runtime
-        libucrt     # Universal C runtime (static)
+        libcmt
+        libucrt
     )
 endif()
 

@@ -6,8 +6,6 @@
 #include <windows.h>
 
 #include <string>
-#include <d2d1.h>
-#pragma comment(lib, "d2d1.lib")
 
 extern "C"
 {
@@ -125,13 +123,6 @@ public:
     POINT cropCurrent;
 
     HWND parentWindow;
-    HWND videoWindow;
-    WNDPROC originalVideoWndProc;
-
-    // Direct2D rendering components
-    ID2D1Factory* d2dFactory;
-    ID2D1HwndRenderTarget* d2dRenderTarget;
-    ID2D1Bitmap* d2dBitmap;
 
     // Timer for playback
     UINT_PTR playbackTimer;
@@ -225,7 +216,6 @@ public:
     int GetCropOutputHeight() const { return cropOutputHeight; }
 
     void SetPosition(int x, int y, int width, int height);
-    void Render();
 
     // Audio track management
     int GetAudioTrackCount() const { return static_cast<int>(audioTracks.size()); }
@@ -246,8 +236,6 @@ public:
     void OnTimer();
 
 private:
-    void CreateVideoWindow();
     void PlaybackThreadFunction();
-    static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     void RecomputeCropOutputDimensionsLocked();
 };
