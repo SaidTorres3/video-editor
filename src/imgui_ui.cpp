@@ -91,6 +91,18 @@ static std::string g_b2ResultUrl;
 static bool g_catboxDone = false;
 static bool g_b2Done = false;
 
+// Crop selection state
+static bool g_cropSelecting = false;
+static ImVec2 g_cropSelStart = ImVec2(0, 0); // screen-space start of drag
+static ImVec2 g_cropSelCurrent = ImVec2(0, 0); // screen-space current drag pos
+
+// Keyframe context menu state
+static bool g_keyframeContextMenuOpen = false;
+static double g_keyframeContextMenuTime = -1.0; // which keyframe was clicked
+static bool g_keyframeMoveMode = false; // active keyframe move mode
+static double g_keyframeMovingTime = -1.0; // keyframe being moved
+static bool g_blockTimelineUntilMouseRelease = false;
+
 // ---- Color Palette ----
 namespace Colors {
     static const ImVec4 BgDark       = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
@@ -441,6 +453,111 @@ static void DrawTimeline(float width, float height)
             IM_COL32(240, 200, 50, 255));
     }
 
+    bool blockTimelineInputThisFrame = false;
+
+    // Keyframe move mode - track mouse and move keyframe without seeking playhead
+    // Handle this BEFORE the invisible button and block normal timeline interactions
+    if (g_keyframeMoveMode)
+    {
+        blockTimelineInputThisFrame = true;
+
+        // Show instruction
+        ImVec2 mousePos = ImGui::GetIO().MousePos;
+        dl->AddText(ImVec2(mousePos.x + 10, mousePos.y - 20), IM_COL32(255, 255, 100, 255),
+            "Click timeline to place keyframe");
+
+        // Draw the moving keyframe at mouse position
+        float kx = mousePos.x;
+        if (kx >= pos.x && kx <= pos.x + barW)
+        {
+            dl->AddTriangleFilled(
+                ImVec2(kx, barY), ImVec2(kx - 5, barY - 8), ImVec2(kx + 5, barY - 8),
+                IM_COL32(255, 220, 100, 200)); // Semi-transparent preview
+        }
+
+        // Check for mouse position over timeline area
+        ImVec2 mousePos2 = ImGui::GetIO().MousePos;
+        bool mouseOverTimeline = (mousePos2.x >= pos.x && mousePos2.x <= pos.x + barW &&
+                                  mousePos2.y >= pos.y && mousePos2.y <= pos.y + height);
+
+        // Left-click to place keyframe at new position
+        if (mouseOverTimeline && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            float mouseX = ImGui::GetIO().MousePos.x;
+            double targetTime = xToTime(mouseX);
+            targetTime = std::clamp(targetTime, 0.0, duration);
+            
+            // Clamp to last frame
+            double frameTime = g_videoPlayer->frameRate > 0 ? (1.0 / g_videoPlayer->frameRate) : 0.033;
+            if (targetTime >= duration - frameTime)
+                targetTime = duration - frameTime;
+            if (targetTime < 0.0)
+                targetTime = 0.0;
+
+            if (g_videoPlayer->MoveCropKeyframe(g_keyframeMovingTime, targetTime))
+            {
+                g_videoPlayer->UpdateCropForTime(g_videoPlayer->GetCurrentTime());
+            }
+
+            g_keyframeMoveMode = false;
+            g_keyframeMovingTime = -1.0;
+            g_timelineDragging = false;
+            g_blockTimelineUntilMouseRelease = true;
+        }
+
+        // Escape or right-click to cancel
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+        {
+            g_keyframeMoveMode = false;
+            g_keyframeMovingTime = -1.0;
+        }
+    }
+
+    // Interaction - invisible button over timeline
+    ImGui::SetCursorScreenPos(pos);
+    ImGui::InvisibleButton("timeline_area", ImVec2(barW, height));
+
+    // Right-click on keyframe markers for context menu
+    if (!g_keyframeMoveMode && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+    {
+        float mouseX = ImGui::GetIO().MousePos.x;
+        for (double kt : keyframes)
+        {
+            float kx = timeToX(kt);
+            if (std::fabs(mouseX - kx) <= 8.0f) // 8px hit area
+            {
+                g_keyframeContextMenuTime = kt;
+                g_keyframeContextMenuOpen = true;
+                ImGui::OpenPopup("KeyframeContextMenu");
+                break;
+            }
+        }
+    }
+
+    // Keyframe context menu popup
+    if (ImGui::BeginPopup("KeyframeContextMenu"))
+    {
+        if (ImGui::MenuItem("Edit Keyframe"))
+        {
+            g_videoPlayer->SeekToTimeExact(g_keyframeContextMenuTime);
+            g_keyframeContextMenuOpen = false;
+        }
+        if (ImGui::MenuItem("Delete Keyframe"))
+        {
+            if (g_videoPlayer->RemoveCropKeyframe(g_keyframeContextMenuTime))
+                g_videoPlayer->UpdateCropForTime(g_videoPlayer->GetCurrentTime());
+            g_keyframeContextMenuOpen = false;
+        }
+        if (ImGui::MenuItem("Move Keyframe"))
+        {
+            g_keyframeMoveMode = true;
+            g_keyframeMovingTime = g_keyframeContextMenuTime;
+            g_timelineDragging = false;
+            g_keyframeContextMenuOpen = false;
+        }
+        ImGui::EndPopup();
+    }
+
     // Start marker
     if (g_cutStartTime >= 0)
     {
@@ -478,11 +595,11 @@ static void DrawTimeline(float width, float height)
             IM_COL32(200, 200, 210, 255), timeLabel.c_str());
     }
 
-    // Interaction - click to seek
-    ImGui::SetCursorScreenPos(pos);
-    ImGui::InvisibleButton("timeline_area", ImVec2(barW, height));
+    // Timeline scrubbing interaction
+    if (g_blockTimelineUntilMouseRelease && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        g_blockTimelineUntilMouseRelease = false;
 
-    if (ImGui::IsItemHovered())
+    if (!blockTimelineInputThisFrame && !g_blockTimelineUntilMouseRelease && ImGui::IsItemHovered())
     {
         // Zoom with scroll wheel
         float wheel = ImGui::GetIO().MouseWheel;
@@ -505,7 +622,7 @@ static void DrawTimeline(float width, float height)
         }
     }
 
-    if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    if (!blockTimelineInputThisFrame && !g_blockTimelineUntilMouseRelease && ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left))
     {
         float mouseX = ImGui::GetIO().MousePos.x;
         double seekTime = xToTime(mouseX);
@@ -1146,25 +1263,166 @@ void RenderUI(HWND hwnd)
 
                 ImGui::Image((ImTextureID)g_pVideoSRV, ImVec2(dispW, dispH), uv0, uv1);
 
-                // Handle crop selection on the video
-                if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                // Remember image rect in screen space for crop interaction
+                ImVec2 imgMin = ImGui::GetItemRectMin();
+                ImVec2 imgMax = ImGui::GetItemRectMax();
+                bool imgHovered = ImGui::IsItemHovered();
+
+                // ---- Left-click drag: crop selection ----
+                if (imgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 {
-                    // Right click - undo crop at current time
+                    g_cropSelecting = true;
+                    g_cropSelStart = ImGui::GetMousePos();
+                    g_cropSelCurrent = g_cropSelStart;
+                }
+                if (g_cropSelecting)
+                {
+                    g_cropSelCurrent = ImGui::GetMousePos();
+
+                    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+                    {
+                        g_cropSelecting = false;
+
+                        // Compute selection rect clamped to image bounds
+                        float sx1 = std::clamp(std::min(g_cropSelStart.x, g_cropSelCurrent.x), imgMin.x, imgMax.x);
+                        float sy1 = std::clamp(std::min(g_cropSelStart.y, g_cropSelCurrent.y), imgMin.y, imgMax.y);
+                        float sx2 = std::clamp(std::max(g_cropSelStart.x, g_cropSelCurrent.x), imgMin.x, imgMax.x);
+                        float sy2 = std::clamp(std::max(g_cropSelStart.y, g_cropSelCurrent.y), imgMin.y, imgMax.y);
+
+                        float selW = sx2 - sx1;
+                        float selH = sy2 - sy1;
+
+                        // Only create keyframe if the selection is large enough (> 4px each axis)
+                        if (selW > 4.0f && selH > 4.0f)
+                        {
+                            // Convert screen selection to coordinates relative to the displayed image
+                            float relX1 = (sx1 - imgMin.x) / dispW;
+                            float relY1 = (sy1 - imgMin.y) / dispH;
+                            float relX2 = (sx2 - imgMin.x) / dispW;
+                            float relY2 = (sy2 - imgMin.y) / dispH;
+
+                            // Map to the current crop region (base) in video pixel coords
+                            RECT base;
+                            if (g_videoPlayer->hasCrop)
+                                base = g_videoPlayer->cropRect;
+                            else
+                            {
+                                base.left = 0;
+                                base.top = 0;
+                                base.right = g_videoPlayer->frameWidth;
+                                base.bottom = g_videoPlayer->frameHeight;
+                            }
+                            float baseW = (float)(base.right - base.left);
+                            float baseH = (float)(base.bottom - base.top);
+
+                            if (baseW > 0.0f && baseH > 0.0f)
+                            {
+                                RECT newRect;
+                                newRect.left   = base.left + (LONG)(relX1 * baseW);
+                                newRect.top    = base.top  + (LONG)(relY1 * baseH);
+                                newRect.right  = base.left + (LONG)(relX2 * baseW);
+                                newRect.bottom = base.top  + (LONG)(relY2 * baseH);
+
+                                if (newRect.right > newRect.left && newRect.bottom > newRect.top)
+                                {
+                                    double selectionTime = g_videoPlayer->GetCurrentTime();
+                                    if (g_videoPlayer->duration > 0.0)
+                                        selectionTime = std::clamp(selectionTime, 0.0, g_videoPlayer->duration);
+                                    double appliedTime = selectionTime;
+                                    bool inserted = g_videoPlayer->AddCropKeyframe(selectionTime, newRect, &appliedTime);
+                                    g_videoPlayer->UpdateCropForTime(inserted ? appliedTime : selectionTime);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Draw selection rectangle overlay while dragging
+                if (g_cropSelecting)
+                {
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    ImVec2 rMin(
+                        std::clamp(std::min(g_cropSelStart.x, g_cropSelCurrent.x), imgMin.x, imgMax.x),
+                        std::clamp(std::min(g_cropSelStart.y, g_cropSelCurrent.y), imgMin.y, imgMax.y));
+                    ImVec2 rMax(
+                        std::clamp(std::max(g_cropSelStart.x, g_cropSelCurrent.x), imgMin.x, imgMax.x),
+                        std::clamp(std::max(g_cropSelStart.y, g_cropSelCurrent.y), imgMin.y, imgMax.y));
+
+                    // Dim the area outside the selection
+                    ImU32 dimColor = IM_COL32(0, 0, 0, 120);
+                    // Top strip
+                    dl->AddRectFilled(imgMin, ImVec2(imgMax.x, rMin.y), dimColor);
+                    // Bottom strip
+                    dl->AddRectFilled(ImVec2(imgMin.x, rMax.y), imgMax, dimColor);
+                    // Left strip  
+                    dl->AddRectFilled(ImVec2(imgMin.x, rMin.y), ImVec2(rMin.x, rMax.y), dimColor);
+                    // Right strip
+                    dl->AddRectFilled(ImVec2(rMax.x, rMin.y), ImVec2(imgMax.x, rMax.y), dimColor);
+
+                    // Selection border
+                    dl->AddRect(rMin, rMax, IM_COL32(255, 220, 50, 255), 0.0f, 0, 2.0f);
+                    // Corner handles
+                    float hs = 4.0f;
+                    ImU32 handleCol = IM_COL32(255, 220, 50, 255);
+                    dl->AddRectFilled(ImVec2(rMin.x - hs, rMin.y - hs), ImVec2(rMin.x + hs, rMin.y + hs), handleCol);
+                    dl->AddRectFilled(ImVec2(rMax.x - hs, rMin.y - hs), ImVec2(rMax.x + hs, rMin.y + hs), handleCol);
+                    dl->AddRectFilled(ImVec2(rMin.x - hs, rMax.y - hs), ImVec2(rMin.x + hs, rMax.y + hs), handleCol);
+                    dl->AddRectFilled(ImVec2(rMax.x - hs, rMax.y - hs), ImVec2(rMax.x + hs, rMax.y + hs), handleCol);
+                }
+
+                // ---- Right-click: hierarchical crop undo ----
+                if (imgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                {
                     double currentTime = g_videoPlayer->GetCurrentTime();
+                    double clampedTime = currentTime;
+                    if (g_videoPlayer->duration > 0.0)
+                        clampedTime = std::clamp(clampedTime, 0.0, g_videoPlayer->duration);
+
                     auto keyframes = g_videoPlayer->GetCropKeyframes();
-                    bool found = false;
+                    bool hasCurrent = false;
+                    int currentKeyframeIndex = -1;
+
                     for (int i = (int)keyframes.size() - 1; i >= 0; --i)
                     {
-                        if (keyframes[i].time <= currentTime)
+                        if (keyframes[i].time <= clampedTime)
                         {
-                            g_videoPlayer->RemoveCropKeyframe(keyframes[i].time);
-                            found = true;
+                            hasCurrent = true;
+                            currentKeyframeIndex = i;
                             break;
                         }
                     }
-                    if (!found)
-                        g_videoPlayer->AddCropDisabledKeyframe(currentTime, nullptr);
-                    g_videoPlayer->UpdateCropForTime(currentTime);
+
+                    if (hasCurrent)
+                    {
+                        bool foundPreviousEnabled = false;
+                        if (currentKeyframeIndex >= 0 &&
+                            std::fabs(keyframes[currentKeyframeIndex].time - clampedTime) < 0.001)
+                        {
+                            if (currentKeyframeIndex > 0)
+                            {
+                                for (int i = currentKeyframeIndex - 1; i >= 0; --i)
+                                {
+                                    if (keyframes[i].enabled)
+                                    {
+                                        g_videoPlayer->RemoveCropKeyframe(keyframes[currentKeyframeIndex].time);
+                                        foundPreviousEnabled = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!foundPreviousEnabled)
+                            {
+                                g_videoPlayer->RemoveCropKeyframe(keyframes[currentKeyframeIndex].time);
+                                foundPreviousEnabled = true;
+                            }
+                        }
+                        if (!foundPreviousEnabled)
+                        {
+                            double appliedTime = clampedTime;
+                            g_videoPlayer->AddCropDisabledKeyframe(clampedTime, &appliedTime);
+                        }
+                    }
+                    g_videoPlayer->UpdateCropForTime(clampedTime);
                 }
             }
             else
