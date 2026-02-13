@@ -3,6 +3,7 @@
 #include "ui_updates.h"
 #include <windowsx.h>
 #include <cmath>
+#include <algorithm>
 
 // Forward declarations
 void UpdateControls();
@@ -275,17 +276,23 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             else if (g_timelineDragMode == DragMode::StartMarker)
             {
-                if (g_cutEndTime >= 0 && seekTime >= g_cutEndTime)
-                    seekTime = g_cutEndTime - 0.01;
-                if (seekTime < 0) seekTime = 0;
                 g_cutStartTime = seekTime;
+                if (g_cutEndTime >= 0 && g_cutStartTime > g_cutEndTime)
+                {
+                    std::swap(g_cutStartTime, g_cutEndTime);
+                    g_timelineDragMode = DragMode::EndMarker;
+                }
+                if (g_cutStartTime < 0) g_cutStartTime = 0;
                 UpdateCutInfoLabel(GetParent(hwnd));
             }
             else if (g_timelineDragMode == DragMode::EndMarker)
             {
-                if (g_cutStartTime >= 0 && seekTime <= g_cutStartTime)
-                    seekTime = g_cutStartTime + 0.01;
                 g_cutEndTime = seekTime;
+                if (g_cutStartTime >= 0 && g_cutEndTime < g_cutStartTime)
+                {
+                    std::swap(g_cutStartTime, g_cutEndTime);
+                    g_timelineDragMode = DragMode::StartMarker;
+                }
                 UpdateCutInfoLabel(GetParent(hwnd));
             }
 
@@ -340,17 +347,17 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             else if (g_timelineDragMode == DragMode::StartMarker)
             {
-                if (g_cutEndTime >= 0 && seekTime >= g_cutEndTime)
-                    seekTime = g_cutEndTime - 0.01;
-                if (seekTime < 0) seekTime = 0;
                 g_cutStartTime = seekTime;
+                if (g_cutEndTime >= 0 && g_cutStartTime > g_cutEndTime)
+                    std::swap(g_cutStartTime, g_cutEndTime);
+                if (g_cutStartTime < 0) g_cutStartTime = 0;
                 UpdateCutInfoLabel(GetParent(hwnd));
             }
             else if (g_timelineDragMode == DragMode::EndMarker)
             {
-                if (g_cutStartTime >= 0 && seekTime <= g_cutStartTime)
-                    seekTime = g_cutStartTime + 0.01;
                 g_cutEndTime = seekTime;
+                if (g_cutStartTime >= 0 && g_cutEndTime < g_cutStartTime)
+                    std::swap(g_cutStartTime, g_cutEndTime);
                 UpdateCutInfoLabel(GetParent(hwnd));
             }
 

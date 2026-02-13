@@ -9,6 +9,7 @@
 #include "upload_dialog.h"
 #include "utils.h"
 #include <windowsx.h>
+#include <algorithm>
 
 // Forward declarations for functions in other files
 void ApplyDarkTheme(HWND hwnd);
@@ -161,8 +162,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 if (t >= 0)
                 {
                     g_cutStartTime = t;
-                    if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
-                        g_cutEndTime = -1.0;
+                    if (g_cutEndTime >= 0 && g_cutStartTime > g_cutEndTime)
+                        std::swap(g_cutStartTime, g_cutEndTime);
                 }
                 else
                 {
@@ -187,8 +188,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 if (t >= 0)
                 {
                     g_cutEndTime = t;
-                    if (g_cutStartTime >= 0 && g_cutEndTime <= g_cutStartTime)
-                        g_cutEndTime = -1.0;
+                    if (g_cutStartTime >= 0 && g_cutEndTime < g_cutStartTime)
+                        std::swap(g_cutStartTime, g_cutEndTime);
                 }
                 else
                 {
@@ -257,8 +258,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             g_cutStartTime += step;
             if (g_cutStartTime < 0) g_cutStartTime = 0;
-            if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
-                g_cutStartTime = g_cutEndTime - 0.01;
+            if (g_cutEndTime >= 0 && g_cutStartTime > g_cutEndTime)
+                std::swap(g_cutStartTime, g_cutEndTime);
             UpdateCutInfoLabel(hwnd);
             UpdateCutTimeEdits();
             UpdateTimeline();
@@ -267,8 +268,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             g_cutEndTime += step;
             if (g_cutEndTime < 0) g_cutEndTime = 0;
-            if (g_cutStartTime >= 0 && g_cutEndTime <= g_cutStartTime)
-                g_cutEndTime = g_cutStartTime + 0.01;
+            if (g_cutStartTime >= 0 && g_cutEndTime < g_cutStartTime)
+                std::swap(g_cutStartTime, g_cutEndTime);
             UpdateCutInfoLabel(hwnd);
             UpdateCutTimeEdits();
             UpdateTimeline();

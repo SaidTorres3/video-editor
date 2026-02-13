@@ -1535,19 +1535,21 @@ void RenderUI(HWND hwnd)
                 if (AccentButton("Set Start", ImVec2(halfW, 0)))
                 {
                     g_cutStartTime = g_videoPlayer->GetCurrentTime();
-                    if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
-                        g_cutEndTime = -1.0;
+                    if (g_cutEndTime >= 0 && g_cutStartTime > g_cutEndTime)
+                        std::swap(g_cutStartTime, g_cutEndTime);
                     snprintf(g_startTimeStr, sizeof(g_startTimeStr), "%s", FormatTimeA(g_cutStartTime, true).c_str());
+                    if (g_cutEndTime >= 0)
+                        snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
                 }
                 ImGui::SameLine();
                 if (AccentButton("Set End", ImVec2(halfW, 0)))
                 {
-                    double ct = g_videoPlayer->GetCurrentTime();
-                    if (g_cutStartTime < 0 || ct > g_cutStartTime)
-                    {
-                        g_cutEndTime = ct;
-                        snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
-                    }
+                    g_cutEndTime = g_videoPlayer->GetCurrentTime();
+                    if (g_cutStartTime >= 0 && g_cutStartTime > g_cutEndTime)
+                        std::swap(g_cutStartTime, g_cutEndTime);
+                    snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
+                    if (g_cutStartTime >= 0)
+                        snprintf(g_startTimeStr, sizeof(g_startTimeStr), "%s", FormatTimeA(g_cutStartTime, true).c_str());
                 }
 
                 // Time inputs
@@ -1558,9 +1560,9 @@ void RenderUI(HWND hwnd)
                     double t = ParseTimeString(AtoW(g_startTimeStr));
                     if (t >= 0) {
                         g_cutStartTime = t;
-                        if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime) {
-                            g_cutEndTime = -1.0;
-                            g_endTimeStr[0] = 0;
+                        if (g_cutEndTime >= 0 && g_cutStartTime > g_cutEndTime) {
+                            std::swap(g_cutStartTime, g_cutEndTime);
+                            snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
                         }
                     }
                     snprintf(g_startTimeStr, sizeof(g_startTimeStr), "%s", FormatTimeA(g_cutStartTime, true).c_str());
@@ -1575,10 +1577,10 @@ void RenderUI(HWND hwnd)
                     if (g_cutStartTime < 0) g_cutStartTime = 0;
                     if (g_videoPlayer && g_cutStartTime > g_videoPlayer->duration) g_cutStartTime = g_videoPlayer->duration;
                     
-                    if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
+                    if (g_cutEndTime >= 0 && g_cutStartTime > g_cutEndTime)
                     {
-                        g_cutEndTime = -1.0;
-                        g_endTimeStr[0] = 0;
+                        std::swap(g_cutStartTime, g_cutEndTime);
+                        snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
                     }
 
                     snprintf(g_startTimeStr, sizeof(g_startTimeStr), "%s", FormatTimeA(g_cutStartTime, true).c_str());
@@ -1592,9 +1594,14 @@ void RenderUI(HWND hwnd)
                     ImGuiInputTextFlags_EnterReturnsTrue))
                 {
                     double t = ParseTimeString(AtoW(g_endTimeStr));
-                    if (t >= 0 && (g_cutStartTime < 0 || t > g_cutStartTime))
+                    if (t >= 0)
                     {
                         g_cutEndTime = t;
+                        if (g_cutStartTime >= 0 && g_cutStartTime > g_cutEndTime)
+                        {
+                            std::swap(g_cutStartTime, g_cutEndTime);
+                            snprintf(g_startTimeStr, sizeof(g_startTimeStr), "%s", FormatTimeA(g_cutStartTime, true).c_str());
+                        }
                     }
                     snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
                     if (g_videoPlayer) g_videoPlayer->SeekToTime(g_cutEndTime);
@@ -1608,13 +1615,15 @@ void RenderUI(HWND hwnd)
                     if (nextVal < 0) nextVal = 0;
                     if (g_videoPlayer && nextVal > g_videoPlayer->duration) nextVal = g_videoPlayer->duration;
                     
-                    if (g_cutStartTime < 0 || nextVal > g_cutStartTime)
+                    g_cutEndTime = nextVal;
+                    if (g_cutStartTime >= 0 && g_cutStartTime > g_cutEndTime)
                     {
-                        g_cutEndTime = nextVal;
-                        snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
-                        if (g_videoPlayer) g_videoPlayer->SeekToTime(g_cutEndTime);
-                        if (wasActive) ImGui::ClearActiveID();
+                        std::swap(g_cutStartTime, g_cutEndTime);
+                        snprintf(g_startTimeStr, sizeof(g_startTimeStr), "%s", FormatTimeA(g_cutStartTime, true).c_str());
                     }
+                    snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
+                    if (g_videoPlayer) g_videoPlayer->SeekToTime(g_cutEndTime);
+                    if (wasActive) ImGui::ClearActiveID();
                 }
 
                 // Preview buttons
