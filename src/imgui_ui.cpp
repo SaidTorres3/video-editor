@@ -1554,15 +1554,65 @@ void RenderUI(HWND hwnd)
                     ImGuiInputTextFlags_EnterReturnsTrue))
                 {
                     double t = ParseTimeString(AtoW(g_startTimeStr));
-                    if (t >= 0) { g_cutStartTime = t; if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime) g_cutEndTime = -1.0; }
+                    if (t >= 0) {
+                        g_cutStartTime = t;
+                        if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime) {
+                            g_cutEndTime = -1.0;
+                            g_endTimeStr[0] = 0;
+                        }
+                    }
+                    snprintf(g_startTimeStr, sizeof(g_startTimeStr), "%s", FormatTimeA(g_cutStartTime, true).c_str());
+                    if (g_videoPlayer) g_videoPlayer->SeekToTime(g_cutStartTime);
                 }
+                if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0f)
+                {
+                    bool wasActive = ImGui::IsItemActive();
+                    double step = (ImGui::GetIO().KeyShift ? 0.1 : 1.0) * (ImGui::GetIO().MouseWheel > 0 ? 1 : -1);
+                    if (g_cutStartTime < 0) g_cutStartTime = (g_videoPlayer ? g_videoPlayer->GetCurrentTime() : 0.0);
+                    g_cutStartTime += step;
+                    if (g_cutStartTime < 0) g_cutStartTime = 0;
+                    if (g_videoPlayer && g_cutStartTime > g_videoPlayer->duration) g_cutStartTime = g_videoPlayer->duration;
+                    
+                    if (g_cutEndTime >= 0 && g_cutStartTime >= g_cutEndTime)
+                    {
+                        g_cutEndTime = -1.0;
+                        g_endTimeStr[0] = 0;
+                    }
+
+                    snprintf(g_startTimeStr, sizeof(g_startTimeStr), "%s", FormatTimeA(g_cutStartTime, true).c_str());
+                    if (g_videoPlayer) g_videoPlayer->SeekToTime(g_cutStartTime);
+                    if (wasActive) ImGui::ClearActiveID();
+                }
+
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(halfW);
                 if (ImGui::InputText("##EndTime", g_endTimeStr, sizeof(g_endTimeStr),
                     ImGuiInputTextFlags_EnterReturnsTrue))
                 {
                     double t = ParseTimeString(AtoW(g_endTimeStr));
-                    if (t >= 0 && (g_cutStartTime < 0 || t > g_cutStartTime)) g_cutEndTime = t;
+                    if (t >= 0 && (g_cutStartTime < 0 || t > g_cutStartTime))
+                    {
+                        g_cutEndTime = t;
+                    }
+                    snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
+                    if (g_videoPlayer) g_videoPlayer->SeekToTime(g_cutEndTime);
+                }
+                if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0f)
+                {
+                    bool wasActive = ImGui::IsItemActive();
+                    double step = (ImGui::GetIO().KeyShift ? 0.1 : 1.0) * (ImGui::GetIO().MouseWheel > 0 ? 1 : -1);
+                    if (g_cutEndTime < 0) g_cutEndTime = (g_videoPlayer ? g_videoPlayer->duration : 0);
+                    double nextVal = g_cutEndTime + step;
+                    if (nextVal < 0) nextVal = 0;
+                    if (g_videoPlayer && nextVal > g_videoPlayer->duration) nextVal = g_videoPlayer->duration;
+                    
+                    if (g_cutStartTime < 0 || nextVal > g_cutStartTime)
+                    {
+                        g_cutEndTime = nextVal;
+                        snprintf(g_endTimeStr, sizeof(g_endTimeStr), "%s", FormatTimeA(g_cutEndTime, true).c_str());
+                        if (g_videoPlayer) g_videoPlayer->SeekToTime(g_cutEndTime);
+                        if (wasActive) ImGui::ClearActiveID();
+                    }
                 }
 
                 // Preview buttons
