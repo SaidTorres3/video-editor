@@ -444,15 +444,17 @@ static void DrawTimeline(float width, float height)
     }
 
     // Crop keyframes
-    auto keyframes = g_videoPlayer->GetCropKeyframeTimes();
-    for (double kt : keyframes)
+    auto cropKeys = g_videoPlayer->GetCropKeyframes();
+    for (const auto& key : cropKeys)
     {
-        float kx = timeToX(kt);
+        float kx = timeToX(key.time);
+        ImU32 col = key.enabled ? IM_COL32(240, 200, 50, 255) : IM_COL32(160, 160, 170, 255);
         dl->AddTriangleFilled(
             ImVec2(kx, barY), ImVec2(kx - 5, barY - 8), ImVec2(kx + 5, barY - 8),
-            IM_COL32(240, 200, 50, 255));
+            col);
     }
 
+    auto keyframes = g_videoPlayer->GetCropKeyframeTimes(); // For hit-testing and legacy code compatibility
     bool blockTimelineInputThisFrame = false;
 
     // Keyframe move mode - track mouse and move keyframe without seeking playhead

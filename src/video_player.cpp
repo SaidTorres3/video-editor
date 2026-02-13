@@ -708,12 +708,7 @@ std::vector<double> VideoPlayer::GetCropKeyframeTimes() const
     times.reserve(cropTimeline.size());
     for (const auto& key : cropTimeline)
     {
-        if (!key.enabled)
-            continue;
-        LONG width = key.rect.right - key.rect.left;
-        LONG height = key.rect.bottom - key.rect.top;
-        if (width > 0 && height > 0)
-            times.push_back(key.time);
+        times.push_back(key.time);
     }
     return times;
 }
