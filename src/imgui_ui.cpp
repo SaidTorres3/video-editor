@@ -68,6 +68,8 @@ static std::string g_resultMessage;
 static int g_selectedAudioTrack = -1;
 static float g_masterVolumeDb = 0.0f;
 static float g_trackVolumeDb = 0.0f;
+static bool g_masterMuted = false;
+static float g_prevMasterVolumeDb = 0.0f;
 static bool g_mergeAudio = false;
 static int g_codecMode = 0; // 0 = H264, 1 = Copy
 static int g_bitrateMode = 0; // 0 = Bitrate, 1 = Target Size
@@ -1467,47 +1469,77 @@ void RenderUI(HWND hwnd)
                 int trackCount = isLoaded ? g_videoPlayer->GetAudioTrackCount() : 0;
                 if (trackCount > 0)
                 {
-                    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.12f, 0.14f, 1.0f));
-                    if (ImGui::BeginListBox("##AudioTracks", ImVec2(-1, 70)))
+                    // Custom track list with inline controls
+                    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.14f, 1.0f));
+                    ImGui::BeginChild("##AudioTracksCustom", ImVec2(-1, 80), ImGuiChildFlags_Borders);
                     {
                         for (int i = 0; i < trackCount; i++)
                         {
-                            std::string name = g_videoPlayer->GetAudioTrackName(i);
-                            if (g_videoPlayer->IsAudioTrackMuted(i)) name += " (MUTED)";
-                            if (g_videoPlayer->IsVoiceIsolationEnabled(i)) name += " (VOICE)";
+                            ImGui::PushID(i);
                             
-                            bool selected = (g_selectedAudioTrack == i);
-                            if (ImGui::Selectable(name.c_str(), selected))
+                            bool muted = g_videoPlayer->IsAudioTrackMuted(i);
+                            bool voiceIso = g_videoPlayer->IsVoiceIsolationEnabled(i);
+                            float vol = g_videoPlayer->GetAudioTrackVolume(i);
+                            float volDb = (vol > 0.0f) ? 20.0f * log10f(vol) : -30.0f;
+                            
+                            // Mute button
+                            ImGui::PushStyleColor(ImGuiCol_Button, muted ? ImVec4(0.8f, 0.3f, 0.3f, 0.8f) : ImVec4(0.3f, 0.3f, 0.35f, 0.8f));
+                            if (ImGui::SmallButton("M"))
+                                g_videoPlayer->SetAudioTrackMuted(i, !muted);
+                            ImGui::PopStyleColor();
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip(muted ? "Unmute" : "Mute");
+                            
+                            ImGui::SameLine();
+                            
+                            // Voice Isolation button
+                            ImGui::PushStyleColor(ImGuiCol_Button, voiceIso ? ImVec4(0.3f, 0.6f, 0.8f, 0.8f) : ImVec4(0.3f, 0.3f, 0.35f, 0.8f));
+                            if (ImGui::SmallButton("V"))
+                                g_videoPlayer->SetVoiceIsolationEnabled(i, !voiceIso);
+                            ImGui::PopStyleColor();
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip(voiceIso ? "Disable Voice Isolation" : "Enable Voice Isolation");
+                            
+                            ImGui::SameLine();
+                            
+                            // Volume Slider with Track Name inside, dB label on the right
+                            std::string trackName = g_videoPlayer->GetAudioTrackName(i);
+                            float dbLabelWidth = ImGui::CalcTextSize("-00.0 dB").x;
+                            float availWidth = ImGui::GetContentRegionAvail().x;
+                            
+                            ImGui::PushItemWidth(availWidth - dbLabelWidth - 8);
+                            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
+                            if (ImGui::SliderFloat("##VolSlider", &volDb, -30.0f, 30.0f, ""))
                             {
-                                g_selectedAudioTrack = i;
-                                float vol = g_videoPlayer->GetAudioTrackVolume(i);
-                                g_trackVolumeDb = (vol > 0.0f) ? 20.0f * log10f(vol) : -30.0f;
+                                float newVol = powf(10.0f, volDb / 20.0f);
+                                g_videoPlayer->SetAudioTrackVolume(i, newVol);
+                                if (g_selectedAudioTrack == i) g_trackVolumeDb = volDb;
+
+                                // Auto-mute if at minimum level
+                                if (volDb <= -29.9f)
+                                    g_videoPlayer->SetAudioTrackMuted(i, true);
+                                else if (volDb > -29.9f && muted)
+                                    g_videoPlayer->SetAudioTrackMuted(i, false);
                             }
+                            
+                            // Overlay track name on the slider (inside)
+                            ImVec2 sliderMin = ImGui::GetItemRectMin();
+                            ImVec2 sliderMax = ImGui::GetItemRectMax();
+                            ImGui::RenderTextClipped(ImVec2(sliderMin.x + 5, sliderMin.y), sliderMax, trackName.c_str(), NULL, NULL, ImVec2(0.0f, 0.5f));
+
+                            if (ImGui::IsItemClicked())
+                                g_selectedAudioTrack = i;
+
+                            ImGui::SameLine();
+                            ImGui::Text("%.1f dB", volDb);
+
+                            ImGui::PopStyleVar();
+                            ImGui::PopItemWidth();
+                            ImGui::PopID();
                         }
-                        ImGui::EndListBox();
                     }
+                    ImGui::EndChild();
                     ImGui::PopStyleColor();
-
-                    if (g_selectedAudioTrack >= 0 && g_selectedAudioTrack < trackCount)
-                    {
-                        ImGui::Spacing();
-                        bool muted = g_videoPlayer->IsAudioTrackMuted(g_selectedAudioTrack);
-                        if (ImGui::Button(muted ? "Unmute" : "Mute", ImVec2(80, 0)))
-                            g_videoPlayer->SetAudioTrackMuted(g_selectedAudioTrack, !muted);
-
-                        ImGui::SameLine();
-                        bool vi = g_videoPlayer->IsVoiceIsolationEnabled(g_selectedAudioTrack);
-                        if (ImGui::Checkbox("Voice Isolation", &vi))
-                            g_videoPlayer->SetVoiceIsolationEnabled(g_selectedAudioTrack, vi);
-
-                        // Track volume
-                        ImGui::Text("Track Volume: %.1f dB", g_trackVolumeDb);
-                        if (ImGui::SliderFloat("##TrackVol", &g_trackVolumeDb, -30.0f, 30.0f, "%.1f dB"))
-                        {
-                            float vol = powf(10.0f, g_trackVolumeDb / 20.0f);
-                            g_videoPlayer->SetAudioTrackVolume(g_selectedAudioTrack, vol);
-                        }
-                    }
                 }
                 else
                 {
@@ -1517,11 +1549,45 @@ void RenderUI(HWND hwnd)
                 // Master volume
                 ImGui::Spacing();
                 ImGui::Text("Master Volume: %.1f dB", g_masterVolumeDb);
+
+                // Mute button for master
+                ImGui::PushStyleColor(ImGuiCol_Button, g_masterMuted ? ImVec4(0.8f, 0.3f, 0.3f, 0.8f) : ImVec4(0.3f, 0.3f, 0.35f, 0.8f));
+                if (ImGui::SmallButton(g_masterMuted ? "M##Master" : "U##Master"))
+                {
+                    g_masterMuted = !g_masterMuted;
+                    if (g_videoPlayer)
+                    {
+                        if (g_masterMuted) {
+                            g_prevMasterVolumeDb = g_masterVolumeDb;
+                            g_videoPlayer->SetMasterVolume(0.0f);
+                        } else {
+                            float vol = powf(10.0f, g_masterVolumeDb / 20.0f);
+                            g_videoPlayer->SetMasterVolume(vol);
+                        }
+                    }
+                }
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(g_masterMuted ? "Unmute Master" : "Mute Master");
+
+                ImGui::SameLine();
+                float masterSliderWidth = ImGui::GetContentRegionAvail().x - 8;
+                ImGui::PushItemWidth(masterSliderWidth);
                 if (ImGui::SliderFloat("##MasterVol", &g_masterVolumeDb, -30.0f, 30.0f, "%.1f dB"))
                 {
-                    float vol = powf(10.0f, g_masterVolumeDb / 20.0f);
-                    if (g_videoPlayer) g_videoPlayer->SetMasterVolume(vol);
+                    // Auto-mute if at minimum
+                    if (g_masterVolumeDb <= -29.9f)
+                        g_masterMuted = true;
+                    else if (g_masterVolumeDb > -29.9f && g_masterMuted)
+                        g_masterMuted = false;
+
+                    if (g_videoPlayer)
+                    {
+                        float vol = g_masterMuted ? 0.0f : powf(10.0f, g_masterVolumeDb / 20.0f);
+                        g_videoPlayer->SetMasterVolume(vol);
+                    }
                 }
+                ImGui::PopItemWidth();
             }
             ImGui::EndDisabled();
 
