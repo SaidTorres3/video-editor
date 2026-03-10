@@ -33,6 +33,7 @@ extern "C"
 #include <atomic>
 #include <chrono>
 #include <limits>
+#include <cstdint>
 
 enum class EncoderSelection : int;
 
@@ -185,6 +186,13 @@ private:
     };
     std::deque<CachedFrame> frameCache;
     size_t frameCacheLimit;
+    std::thread seekRefineThread;
+    std::mutex seekRefineMutex;
+    std::condition_variable seekRefineCondition;
+    bool seekRefineThreadExit;
+    bool seekRefinePending;
+    double seekRefineTarget;
+    std::uint64_t seekRefineGeneration;
 
 public:
     VideoPlayer(HWND parent);
@@ -246,6 +254,11 @@ public:
     void OnTimer();
 
 private:
+    bool SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact);
+    std::uint64_t BeginSeekOperation();
+    void QueueSeekRefinement(double seconds, std::uint64_t generation);
+    void CancelPendingSeekRefinement();
+    void SeekRefinementThreadFunction();
     void CreateVideoWindow();
     void PlaybackThreadFunction();
     static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

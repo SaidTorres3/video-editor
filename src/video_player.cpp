@@ -16,6 +16,7 @@
 #include <iterator>
 #include <cstring>
 #include <chrono>
+#include <climits>
 
 void UpdateControls();
 void UpdateTimeline();
@@ -38,12 +39,16 @@ VideoPlayer::VideoPlayer(HWND parent)
       playbackThreadRunning(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
-      dropAudioDuringStepping(false), frameCacheLimit(20)
+            dropAudioDuringStepping(false), frameCacheLimit(20),
+            seekRefineThreadExit(false), seekRefinePending(false), seekRefineTarget(0.0),
+            seekRefineGeneration(0)
 {
     m_decoder = std::make_unique<VideoDecoder>(this);
     m_audioPlayer = std::make_unique<AudioPlayer>(this);
     m_renderer = std::make_unique<VideoRenderer>(this);
     m_cutter = std::make_unique<VideoCutter>(this);
+
+        seekRefineThread = std::thread(&VideoPlayer::SeekRefinementThreadFunction, this);
 
     m_renderer->Initialize();
     CreateVideoWindow();
@@ -52,6 +57,19 @@ VideoPlayer::VideoPlayer(HWND parent)
 
 VideoPlayer::~VideoPlayer()
 {
+    CancelPendingSeekRefinement();
+    {
+        std::lock_guard<std::mutex> lock(decodeMutex);
+    }
+    {
+        std::lock_guard<std::mutex> lock(seekRefineMutex);
+        seekRefineThreadExit = true;
+        seekRefinePending = false;
+    }
+    seekRefineCondition.notify_all();
+    if (seekRefineThread.joinable())
+        seekRefineThread.join();
+
     UnloadVideo();
     m_audioPlayer->Cleanup();
     m_renderer->Cleanup();
@@ -185,6 +203,10 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
 void VideoPlayer::UnloadVideo()
 {
     Stop();
+    CancelPendingSeekRefinement();
+    {
+        std::lock_guard<std::mutex> lock(decodeMutex);
+    }
     m_audioPlayer->CleanupTracks();
     m_decoder->Cleanup();
     if (d2dBitmap)
@@ -219,6 +241,7 @@ bool VideoPlayer::Play()
 {
     if (!isLoaded || isPlaying)
         return false;
+    CancelPendingSeekRefinement();
     isPlaying = true;
 
     masterStartPts = currentPts;
@@ -257,6 +280,7 @@ void VideoPlayer::Stop()
 {
     clipPreviewActive = false;
     Pause();
+    CancelPendingSeekRefinement();
     currentFrame = 0;
     currentPts = 0.0;
     if (isLoaded)
@@ -278,6 +302,91 @@ void VideoPlayer::Stop()
     }
 }
 
+std::uint64_t VideoPlayer::BeginSeekOperation()
+{
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(seekRefineMutex);
+        generation = ++seekRefineGeneration;
+        seekRefinePending = false;
+    }
+    seekRefineCondition.notify_all();
+    return generation;
+}
+
+void VideoPlayer::QueueSeekRefinement(double seconds, std::uint64_t generation)
+{
+    {
+        std::lock_guard<std::mutex> lock(seekRefineMutex);
+        seekRefineTarget = seconds;
+        seekRefineGeneration = generation;
+        seekRefinePending = true;
+    }
+    seekRefineCondition.notify_one();
+}
+
+void VideoPlayer::CancelPendingSeekRefinement()
+{
+    BeginSeekOperation();
+}
+
+void VideoPlayer::SeekRefinementThreadFunction()
+{
+    while (true)
+    {
+        double target = 0.0;
+        std::uint64_t generation = 0;
+
+        {
+            std::unique_lock<std::mutex> lock(seekRefineMutex);
+            seekRefineCondition.wait(lock, [this]() {
+                return seekRefineThreadExit || seekRefinePending;
+            });
+
+            if (seekRefineThreadExit)
+                return;
+
+            target = seekRefineTarget;
+            generation = seekRefineGeneration;
+            seekRefinePending = false;
+        }
+
+        if (!isLoaded || isPlaying)
+            continue;
+
+        const double frameDuration = (frameRate > 0.0) ? (1.0 / frameRate) : 0.033;
+        while (isLoaded && !isPlaying)
+        {
+            {
+                std::lock_guard<std::mutex> lock(seekRefineMutex);
+                if (generation != seekRefineGeneration)
+                    break;
+            }
+
+            if (currentPts >= target - (frameDuration * 0.5))
+                break;
+
+            double delta = target - currentPts;
+            bool closeToTarget = delta < 0.2 || delta < (frameDuration * 5.0);
+            if (!m_decoder->DecodeNextFrame(false, false, closeToTarget))
+                break;
+        }
+
+        bool shouldPresent = false;
+        {
+            std::lock_guard<std::mutex> lock(seekRefineMutex);
+            shouldPresent = isLoaded && !isPlaying && generation == seekRefineGeneration &&
+                            currentPts >= target - (frameDuration * 0.5);
+        }
+
+        if (shouldPresent)
+        {
+            m_renderer->UpdateDisplay();
+            UpdateTimeline();
+        }
+    }
+}
+
 void VideoPlayer::PlayClip(double startTime, double endTime)
 {
     if (!isLoaded)
@@ -287,7 +396,7 @@ void VideoPlayer::PlayClip(double startTime, double endTime)
 
     clipPreviewEndTime = endTime;
     clipPreviewActive = true;
-    SeekToTime(startTime);
+    SeekToTimeExact(startTime);
     Play();
 }
 
@@ -469,7 +578,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     {
         // For forward seeking beyond next frame
         double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
-        SeekToTime(seconds, 0);
+        SeekToTimeInternal(seconds, INT_MAX, false, true);
 
         while (currentFrame < frameNumber)
         {
@@ -487,32 +596,45 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 
 void VideoPlayer::SeekToTime(double seconds, int decodeCount)
 {
-    if (!isLoaded)
+    SeekToTimeInternal(seconds, decodeCount, true, false);
+}
+
+void VideoPlayer::SeekToTimeExact(double seconds)
+{
+    if (!SeekToTimeInternal(seconds, INT_MAX, false, true))
         return;
 
-    // Clamp seconds to valid range
-    if (seconds < 0.0) seconds = 0.0;
-    if (duration > 0.0 && seconds >= duration) {
-        double frameDur = (frameRate > 0) ? (1.0 / frameRate) : 0.033;
+    std::lock_guard<std::mutex> lock(decodeMutex);
+    currentPts = seconds;
+    currentFrame = frameRate > 0 ? static_cast<int64_t>(seconds * frameRate) : 0;
+    UpdateCropForTime(currentPts);
+}
+
+bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact)
+{
+    if (!isLoaded)
+        return false;
+
+    std::uint64_t generation = BeginSeekOperation();
+
+    if (seconds < 0.0)
+        seconds = 0.0;
+    if (duration > 0.0 && seconds >= duration)
+    {
+        double frameDur = (frameRate > 0.0) ? (1.0 / frameRate) : 0.033;
         seconds = duration - frameDur;
-        if (seconds < 0.0) seconds = 0.0;
+        if (seconds < 0.0)
+            seconds = 0.0;
     }
 
-    double frameDuration = (frameRate > 0) ? (1.0 / frameRate) : 0.033;
+    const double frameDuration = (frameRate > 0.0) ? (1.0 / frameRate) : 0.033;
     bool smartSeek = false;
 
-    // Check if we can just decode forward without seeking
-    // This optimization is crucial for smooth timeline dragging
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
-        
-        // If target is ahead of current position but within a reasonable range (e.g. 100 frames)
-        // we can just decode forward instead of seeking back to the previous keyframe.
-        double threshold = frameDuration * 100.0; 
+        double threshold = frameDuration * 100.0;
         if (seconds >= currentPts && seconds <= currentPts + threshold)
-        {
             smartSeek = true;
-        }
     }
 
     if (!smartSeek)
@@ -521,24 +643,22 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
         frameCache.clear();
 
         AVStream *vs = formatContext->streams[videoStreamIndex];
-        int64_t ts = (int64_t)((seconds + startTimeOffset) / av_q2d(vs->time_base));
+        int64_t ts = static_cast<int64_t>((seconds + startTimeOffset) / av_q2d(vs->time_base));
 
-        // Seek to previous keyframe (BACKWARD only, no ANY) to ensure we land on a valid reference frame
         av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
         avcodec_flush_buffers(codecContext);
-        
+
         for (auto &track : audioTracks)
         {
             if (track->codecContext)
                 avcodec_flush_buffers(track->codecContext);
         }
         {
-            std::lock_guard<std::mutex> lock(audioMutex);
-            for (auto& tr : audioTracks)
+            std::lock_guard<std::mutex> audioLock(audioMutex);
+            for (auto &tr : audioTracks)
                 tr->buffer.clear();
         }
 
-        // Update currentPts to the keyframe time
         const AVIndexEntry *entry = avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
         if (entry)
         {
@@ -548,61 +668,43 @@ void VideoPlayer::SeekToTime(double seconds, int decodeCount)
         }
         else
         {
-            // Fallback: assume we are before the target so decoding can proceed
             currentPts = -1.0;
             currentFrame = 0;
         }
         UpdateCropForTime(currentPts);
     }
 
-    // Decode frames until we reach the target time
-    int maxDecodeFrames = 1000; // Safety limit
+    const bool exactMode = forceExact || smartSeek;
+    const int maxSyncFrames = exactMode ? INT_MAX : std::max(1, decodeCount);
+    const int maxDecodeFrames = 1000;
     int decoded = 0;
-    
-    // After a full seek (non-smartSeek), we must decode at least one frame
-    // because the seek only positions the decoder - it doesn't decode a frame yet
     bool needAtLeastOneFrame = !smartSeek;
-    
+
     while (decoded < maxDecodeFrames)
     {
-        // Check if we reached target (within half a frame tolerance)
-        // But always decode at least one frame after a full seek
         if (!needAtLeastOneFrame && currentPts >= seconds - (frameDuration * 0.5))
             break;
-            
-        // Optimization: only generate image if we are close to the target
-        bool closeToTarget = (seconds - currentPts) < 0.2 || (seconds - currentPts) < (frameDuration * 5.0);
+        if (!exactMode && decoded >= maxSyncFrames)
+            break;
 
-        // Decode next frame without presenting it yet
+        double delta = seconds - currentPts;
+        bool closeToTarget = delta < 0.2 || delta < (frameDuration * 5.0);
         if (!m_decoder->DecodeNextFrame(false, false, closeToTarget))
             break;
-            
+
         decoded++;
-        needAtLeastOneFrame = false;  // We've decoded at least one frame now
+        needAtLeastOneFrame = false;
     }
-    
-    // Ensure the final frame is displayed
+
+    const bool reachedTarget = currentPts >= seconds - (frameDuration * 0.5);
+
     m_renderer->UpdateDisplay();
     UpdateTimeline();
-}
 
-void VideoPlayer::SeekToTimeExact(double seconds)
-{
-    if (!isLoaded)
-        return;
+    if (!reachedTarget && allowAsyncRefine && !forceExact && !isPlaying)
+        QueueSeekRefinement(seconds, generation);
 
-    // Seek to the target time
-    SeekToTime(seconds, 0);
-    
-    // After seeking and decoding a frame, the actual PTS might differ from the target.
-    // For keyframe editing, we want to be exactly at the keyframe time.
-    // Lock and directly set currentPts to the requested time to ensure exact positioning.
-    {
-        std::lock_guard<std::mutex> lock(decodeMutex);
-        currentPts = seconds;
-        currentFrame = frameRate > 0 ? static_cast<int64_t>(seconds * frameRate) : 0;
-        UpdateCropForTime(currentPts);
-    }
+    return reachedTarget;
 }
 
 double VideoPlayer::GetDuration() const
