@@ -99,7 +99,6 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     int x = GET_X_LPARAM(lParam);
                     double targetTime = ClampTimelineTimeFromMouseX(x, rc, dur);
                     g_videoPlayer->MoveCropKeyframe(g_contextMovingKeyframeTime, targetTime);
-                    g_videoPlayer->SeekToTime(targetTime, 0);
                 }
 
                 g_isContextKeyframeMoveMode = false;
@@ -335,8 +334,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             else if (g_timelineDragMode == DragMode::Keyframe)
             {
-                // Keyframe drag is complete, seek to the final keyframe position
-                g_videoPlayer->SeekToTime(seekTime, 0);
+                // Keyframe drag is complete
                 g_draggedKeyframeTime = -1.0;
             }
             else if (g_timelineDragMode == DragMode::StartMarker)
