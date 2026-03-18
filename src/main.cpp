@@ -57,10 +57,6 @@ DragMode g_timelineDragMode = DragMode::None;
 double g_draggedKeyframeTime = -1.0;  // Time of the keyframe being dragged
 extern double g_previewSeekTime;
 
-// Key hold state for acceleration
-ULONGLONG g_keyHoldStart = 0;
-WPARAM g_keyHoldCode = 0;
-
 // Dark mode UI resources
 HFONT g_hFont = nullptr;
 HBRUSH g_hbrBackground = nullptr;
@@ -170,15 +166,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     MSG msg = {};
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
-        if (msg.message == WM_KEYUP)
-        {
-            if (msg.wParam == g_keyHoldCode)
-            {
-                g_keyHoldCode = 0;
-                g_keyHoldStart = 0;
-            }
-        }
-        else if (msg.message == WM_KEYDOWN && g_videoPlayer && g_videoPlayer->IsLoaded())
+        if (msg.message == WM_KEYDOWN && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             HWND focused = GetFocus();
             bool isEdit = false;
@@ -191,20 +179,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
             }
             if (!isEdit)
             {
-                // Track key hold time for acceleration
-                if (g_keyHoldCode != msg.wParam)
-                {
-                    g_keyHoldCode = msg.wParam;
-                    g_keyHoldStart = GetTickCount64();
-                }
-
-                double speedMultiplier = 1.0;
-                if (g_keyHoldStart > 0)
-                {
-                    ULONGLONG elapsed = GetTickCount64() - g_keyHoldStart;
-                    if (elapsed > 5000) // 5 seconds threshold
-                        speedMultiplier = 10.0;
-                }
+                double speedMultiplier = (GetKeyState(VK_SHIFT) & 0x8000) ? 10.0 : 1.0;
 
                 bool handled = true;
                 switch (msg.wParam)
