@@ -727,6 +727,12 @@ void VideoPlayer::Render()
     m_renderer->Render();
 }
 
+void VideoPlayer::ForceRedraw()
+{
+    if (m_renderer)
+        m_renderer->UpdateDisplay();
+}
+
 namespace
 {
     constexpr double kCropTimeEpsilon = 0.02;

@@ -228,8 +228,18 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 if (std::fabs(targetTime - g_contextMovingKeyframeTime) >= 0.001 &&
                     g_videoPlayer->MoveCropKeyframe(g_contextMovingKeyframeTime, targetTime))
                 {
+                    double oldTime = g_contextMovingKeyframeTime;
                     g_contextMovingKeyframeTime = targetTime;
-                    g_videoPlayer->UpdateCropForTime(g_videoPlayer->GetCurrentTime());
+                    if (!g_videoPlayer->IsPlaying())
+                    {
+                        double curTime = g_videoPlayer->GetCurrentTime();
+                        if ((oldTime <= curTime && targetTime >= curTime) || 
+                            (oldTime >= curTime && targetTime <= curTime))
+                        {
+                            if (g_videoPlayer->UpdateCropForTime(curTime))
+                                g_videoPlayer->ForceRedraw();
+                        }
+                    }
                     InvalidateRect(hwnd, NULL, FALSE);
                     UpdateControls();
                 }
@@ -270,8 +280,20 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 // Move the dragged keyframe to the new time
                 if (g_draggedKeyframeTime >= 0.0 && dur > 0.0)
                 {
+                    double oldTime = g_draggedKeyframeTime;
                     g_videoPlayer->MoveCropKeyframe(g_draggedKeyframeTime, seekTime);
                     g_draggedKeyframeTime = seekTime;  // Update the tracked time
+                    
+                    if (!g_videoPlayer->IsPlaying())
+                    {
+                        double curTime = g_videoPlayer->GetCurrentTime();
+                        if ((oldTime <= curTime && seekTime >= curTime) || 
+                            (oldTime >= curTime && seekTime <= curTime))
+                        {
+                            if (g_videoPlayer->UpdateCropForTime(curTime))
+                                g_videoPlayer->ForceRedraw();
+                        }
+                    }
                 }
             }
             else if (g_timelineDragMode == DragMode::StartMarker)
@@ -336,6 +358,12 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 // Keyframe drag is complete
                 g_draggedKeyframeTime = -1.0;
+                
+                if (!g_videoPlayer->IsPlaying())
+                {
+                    if (g_videoPlayer->UpdateCropForTime(g_videoPlayer->GetCurrentTime()))
+                        g_videoPlayer->ForceRedraw();
+                }
             }
             else if (g_timelineDragMode == DragMode::StartMarker)
             {
