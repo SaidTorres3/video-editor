@@ -19,6 +19,45 @@ extern DragMode g_timelineDragMode;
 extern double g_draggedKeyframeTime;
 double g_previewSeekTime = -1.0; // For immediate timeline feedback
 
+// Hover tooltip tracking
+static int g_timelineHoverX = -1;
+static bool g_timelineMouseTracking = false;
+
+// Timecode tooltip popup window
+static HWND g_timecodeTooltipWnd = nullptr;
+static wchar_t g_timecodeTooltipText[32] = {};
+static const wchar_t* TIMECODE_TOOLTIP_CLASS = L"TimelineTimecodeTooltip";
+
+static LRESULT CALLBACK TimecodeTooltipWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH bg = CreateSolidBrush(RGB(40, 40, 40));
+        FillRect(hdc, &rc, bg);
+        DeleteObject(bg);
+        HFONT font = CreateFont(13, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+                                DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
+        HGDIOBJ oldFont = SelectObject(hdc, font);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        SetBkMode(hdc, TRANSPARENT);
+        DrawTextW(hdc, g_timecodeTooltipText, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, oldFont);
+        DeleteObject(font);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
 // Timeline zoom variables
 double g_timelineZoomLevel = 1.0;  // 1.0 = full video, 2.0 = 2x zoom, etc.
 double g_timelineScrollOffset = 0.0;  // Horizontal scroll offset in seconds
@@ -87,6 +126,28 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
+    case WM_CREATE:
+    {
+        WNDCLASSEXW wc = { sizeof(wc) };
+        wc.lpfnWndProc = TimecodeTooltipWndProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = TIMECODE_TOOLTIP_CLASS;
+        RegisterClassExW(&wc); // Ignore error if already registered
+        g_timecodeTooltipWnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            TIMECODE_TOOLTIP_CLASS, L"",
+            WS_POPUP | WS_BORDER,
+            0, 0, 60, 22,
+            nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        return 0;
+    }
+    case WM_DESTROY:
+        if (g_timecodeTooltipWnd)
+        {
+            DestroyWindow(g_timecodeTooltipWnd);
+            g_timecodeTooltipWnd = nullptr;
+        }
+        return 0;
     case WM_LBUTTONDOWN:
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
@@ -218,6 +279,58 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_MOUSEMOVE:
+        // Update hover position for tooltip
+        g_timelineHoverX = GET_X_LPARAM(lParam);
+        if (!g_timelineMouseTracking)
+        {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+            g_timelineMouseTracking = true;
+        }
+        // Show timecode tooltip popup above the timeline
+        if (g_timecodeTooltipWnd && g_videoPlayer && g_videoPlayer->IsLoaded())
+        {
+            RECT rc; GetClientRect(hwnd, &rc);
+            double dur = g_videoPlayer->GetDuration();
+            if (dur > 0.0)
+            {
+                double hoverTime = PixelToTime(g_timelineHoverX, rc, dur);
+                if (hoverTime >= 0.0 && hoverTime < dur)
+                {
+                    int totalSecs = (int)hoverTime;
+                    int hours = totalSecs / 3600;
+                    int mins = (totalSecs % 3600) / 60;
+                    int secs = totalSecs % 60;
+                    if (hours > 0)
+                        swprintf(g_timecodeTooltipText, 32, L"%d:%02d:%02d", hours, mins, secs);
+                    else
+                        swprintf(g_timecodeTooltipText, 32, L"%02d:%02d", mins, secs);
+
+                    HDC hdc = GetDC(g_timecodeTooltipWnd);
+                    HFONT font = CreateFont(13, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+                                           DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
+                    HGDIOBJ oldFont = SelectObject(hdc, font);
+                    SIZE sz;
+                    GetTextExtentPoint32W(hdc, g_timecodeTooltipText,
+                                         (int)wcslen(g_timecodeTooltipText), &sz);
+                    SelectObject(hdc, oldFont);
+                    DeleteObject(font);
+                    ReleaseDC(g_timecodeTooltipWnd, hdc);
+
+                    const int PAD = 6;
+                    int tw = sz.cx + PAD * 2;
+                    int th = sz.cy + PAD * 2;
+                    POINT pt = { g_timelineHoverX, 0 };
+                    ClientToScreen(hwnd, &pt);
+                    int sx = pt.x - tw / 2;
+                    int sy = pt.y - th - 2;
+                    SetWindowPos(g_timecodeTooltipWnd, HWND_TOPMOST, sx, sy, tw, th,
+                                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    InvalidateRect(g_timecodeTooltipWnd, nullptr, FALSE);
+                    UpdateWindow(g_timecodeTooltipWnd);
+                }
+            }
+        }
         if (g_isContextKeyframeMoveMode && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             RECT rc; GetClientRect(hwnd, &rc);
@@ -318,6 +431,8 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             UpdateControls();
             return 0;
         }
+        // Hovering without dragging — redraw for tooltip update
+        InvalidateRect(hwnd, NULL, FALSE);
         break;
     case WM_LBUTTONUP:
         // Stop arrow scrolling if it was active
@@ -460,6 +575,13 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             UpdateControls();
         }
         break;
+    case WM_MOUSELEAVE:
+        g_timelineHoverX = -1;
+        g_timelineMouseTracking = false;
+        if (g_timecodeTooltipWnd)
+            ShowWindow(g_timecodeTooltipWnd, SW_HIDE);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
     case WM_MOUSEWHEEL:
     {
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
@@ -689,6 +811,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 DeleteObject(disabledPen);
             }
         }
+
         EndPaint(hwnd, &ps);
         return 0;
     }
