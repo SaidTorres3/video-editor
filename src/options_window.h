@@ -32,6 +32,15 @@
 #define ID_CHECKBOX_USE_CATBOX  2008
 #define ID_CHECKBOX_USE_B2      2009
 
+// Exportation settings control identifiers
+#define ID_TAB_EXPORT           1049
+#define ID_PANEL_EXPORT         1050
+#define ID_EDIT_EXPORT_NAME     2010
+#define ID_BUTTON_EXPORT_FOLDER 2011
+#define ID_CHECKBOX_AUTO_EXPORT 2012
+#define ID_COMBO_DEFAULT_CODEC  2013
+#define ID_BUTTON_EXPORT_FOLDER_CLEAR 2014
+
 enum class EncoderSelection : int {
     Libx264 = 0,
     Nvenc   = 1,
@@ -52,6 +61,12 @@ extern bool g_autoUpload;
 extern bool g_useCatbox;
 extern bool g_useB2;
 extern std::wstring g_catboxUserHash;
+
+// Exportation settings
+extern std::wstring g_exportSaveName;
+extern std::wstring g_exportDefaultFolder;
+extern bool g_exportAutoSave;
+extern bool g_exportDefaultCodecH264; // true = H264, false = Copy codec
 
 void ShowUploadWindow(HWND parent);
 LRESULT CALLBACK UploadProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

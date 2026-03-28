@@ -14,8 +14,11 @@ AudioPlayer::~AudioPlayer() {
 bool AudioPlayer::Initialize() {
     // Use multi-threaded COM so the audio client functions correctly from any thread
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(hr))
+    // RPC_E_CHANGED_MODE means COM is already initialized on this thread (e.g. as STA
+    // by WinMain) — that is fine, WASAPI works from either apartment model.
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
         return false;
+    m_comInitializedByUs = SUCCEEDED(hr);
 
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                           __uuidof(IMMDeviceEnumerator), (void**)&m_player->deviceEnumerator);
@@ -133,7 +136,8 @@ void AudioPlayer::Cleanup() {
     m_player->audioOutputIsFloat = false;
     
     m_player->audioInitialized = false;
-    CoUninitialize();
+    if (m_comInitializedByUs)
+        CoUninitialize();
 }
 
 bool AudioPlayer::InitializeTracks() {

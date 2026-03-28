@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>  // For file dialog
+#include <objbase.h>  // For CoInitializeEx
 #include <commctrl.h> // For common controls
 #include <shellapi.h> // For drag-and-drop
 #include <dwmapi.h>
@@ -65,6 +66,7 @@ COLORREF g_textColor = RGB(240, 240, 240);
 // Entry point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     LoadSettings();
     curl_global_init(CURL_GLOBAL_DEFAULT);
     const wchar_t CLASS_NAME[] = L"VideoEditorClass";
@@ -338,5 +340,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         DispatchMessage(&msg);
     }
     curl_global_cleanup();
+    CoUninitialize();
     return 0;
 }

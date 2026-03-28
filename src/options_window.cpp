@@ -1,5 +1,7 @@
 #include "options_window.h"
 #include "utils.h"
+#include <shlobj.h>
+#include <shobjidl.h>
 
 static HWND g_hOptionsWnd = nullptr;
 static HWND g_hUploadWnd = nullptr;
@@ -7,6 +9,7 @@ static HWND g_hCatboxWnd = nullptr;
 static HWND g_hGeneralPanel = nullptr;
 static HWND g_hEncodingPanel = nullptr;
 static HWND g_hUploadPanel = nullptr;
+static HWND g_hExportPanel = nullptr;
 static int g_selectedCategory = ID_TAB_GENERAL;
 static HBRUSH g_hOptionsBgBrush = (HBRUSH)GetStockObject(BLACK_BRUSH);
 
@@ -34,6 +37,12 @@ bool g_autoUpload = false;
 bool g_useCatbox = false;
 bool g_useB2 = true;
 std::wstring g_catboxUserHash;
+
+// Exportation settings
+std::wstring g_exportSaveName = L"$[filename]_edited";
+std::wstring g_exportDefaultFolder;
+bool g_exportAutoSave = false;
+bool g_exportDefaultCodecH264 = true;
 
 // Load settings from Windows registry
 void LoadSettings()
@@ -85,6 +94,21 @@ void LoadSettings()
         sz = sizeof(buf);
         if (RegQueryValueExW(hKey, L"QualityPreset", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
             g_qualityPreset = buf;
+
+        // Exportation settings
+        sz = sizeof(buf);
+        if (RegQueryValueExW(hKey, L"ExportSaveName", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
+            g_exportSaveName = buf;
+        sz = sizeof(buf);
+        if (RegQueryValueExW(hKey, L"ExportDefaultFolder", nullptr, nullptr, (LPBYTE)buf, &sz) == ERROR_SUCCESS)
+            g_exportDefaultFolder = buf;
+        sz = sizeof(DWORD); val = 0;
+        if (RegQueryValueExW(hKey, L"ExportAutoSave", nullptr, nullptr, (LPBYTE)&val, &sz) == ERROR_SUCCESS)
+            g_exportAutoSave = val != 0;
+        sz = sizeof(DWORD); val = 1;
+        if (RegQueryValueExW(hKey, L"ExportDefaultCodecH264", nullptr, nullptr, (LPBYTE)&val, &sz) == ERROR_SUCCESS)
+            g_exportDefaultCodecH264 = val != 0;
+
         RegCloseKey(hKey);
     }
 }
@@ -115,6 +139,15 @@ void SaveSettings()
         RegSetValueExW(hKey, L"UseB2", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"CatboxHash", 0, REG_SZ, (const BYTE*)g_catboxUserHash.c_str(), (DWORD)((g_catboxUserHash.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"QualityPreset", 0, REG_SZ, (const BYTE*)g_qualityPreset.c_str(), (DWORD)((g_qualityPreset.size()+1)*sizeof(wchar_t)));
+
+        // Exportation settings
+        RegSetValueExW(hKey, L"ExportSaveName", 0, REG_SZ, (const BYTE*)g_exportSaveName.c_str(), (DWORD)((g_exportSaveName.size()+1)*sizeof(wchar_t)));
+        RegSetValueExW(hKey, L"ExportDefaultFolder", 0, REG_SZ, (const BYTE*)g_exportDefaultFolder.c_str(), (DWORD)((g_exportDefaultFolder.size()+1)*sizeof(wchar_t)));
+        val = g_exportAutoSave ? 1 : 0;
+        RegSetValueExW(hKey, L"ExportAutoSave", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = g_exportDefaultCodecH264 ? 1 : 0;
+        RegSetValueExW(hKey, L"ExportDefaultCodecH264", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+
         RegCloseKey(hKey);
     }
 }
@@ -165,6 +198,7 @@ void SwitchCategory(int categoryId)
     if (g_hGeneralPanel) ShowWindow(g_hGeneralPanel, SW_HIDE);
     if (g_hEncodingPanel) ShowWindow(g_hEncodingPanel, SW_HIDE);
     if (g_hUploadPanel) ShowWindow(g_hUploadPanel, SW_HIDE);
+    if (g_hExportPanel) ShowWindow(g_hExportPanel, SW_HIDE);
     
     // Show selected panel
     if (categoryId == ID_TAB_GENERAL && g_hGeneralPanel)
@@ -173,6 +207,8 @@ void SwitchCategory(int categoryId)
         ShowWindow(g_hEncodingPanel, SW_SHOW);
     else if (categoryId == ID_TAB_UPLOAD && g_hUploadPanel)
         ShowWindow(g_hUploadPanel, SW_SHOW);
+    else if (categoryId == ID_TAB_EXPORT && g_hExportPanel)
+        ShowWindow(g_hExportPanel, SW_SHOW);
     
     // Force redraw of category buttons to update highlighting
     InvalidateRect(g_hOptionsWnd, nullptr, TRUE);
@@ -214,10 +250,15 @@ void ShowOptionsWindow(HWND parent)
                                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
                                    0, 130, leftPanelWidth, 40, g_hOptionsWnd,
                                    (HMENU)ID_TAB_UPLOAD, hInst, nullptr);
+    HWND hTabExport = CreateWindow(L"BUTTON", L"  Exportation",
+                                   WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
+                                   0, 170, leftPanelWidth, 40, g_hOptionsWnd,
+                                   (HMENU)ID_TAB_EXPORT, hInst, nullptr);
 
     ApplyDarkTheme(hTabGeneral);
     ApplyDarkTheme(hTabEncoding);
     ApplyDarkTheme(hTabUpload);
+    ApplyDarkTheme(hTabExport);
 
     // ===== GENERAL PANEL =====
     g_hGeneralPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
@@ -327,6 +368,73 @@ void ShowOptionsWindow(HWND parent)
     ApplyDarkTheme(hCatbox);
     ApplyDarkTheme(hB2);
 
+    // ===== EXPORTATION PANEL =====
+    g_hExportPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
+                                    WS_CHILD,
+                                    contentX, contentY, contentWidth, 380,
+                                    g_hOptionsWnd, (HMENU)ID_PANEL_EXPORT, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Exportation Settings", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 0, contentWidth, 26, g_hExportPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+                 0, 32, contentWidth, 2, g_hExportPanel, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Save Name", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 50, contentWidth, 22, g_hExportPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"Template:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 20, 78, 80, 22, g_hExportPanel, nullptr, hInst, nullptr);
+    HWND hExportName = CreateWindow(L"EDIT", g_exportSaveName.c_str(),
+                                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                                    110, 76, 350, 22, g_hExportPanel,
+                                    (HMENU)ID_EDIT_EXPORT_NAME, hInst, nullptr);
+    ApplyDarkTheme(hExportName);
+    CreateWindow(L"STATIC", L"Use $[filename] for the original file name (without extension).",
+                 WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 20, 104, contentWidth - 20, 22, g_hExportPanel, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Default Folder Location", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 140, contentWidth, 22, g_hExportPanel, nullptr, hInst, nullptr);
+    HWND hExportFolder = CreateWindow(L"EDIT", g_exportDefaultFolder.c_str(),
+                                      WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_READONLY,
+                                      20, 168, 280, 22, g_hExportPanel,
+                                      (HMENU)(ID_EDIT_EXPORT_NAME + 100), hInst, nullptr);
+    ApplyDarkTheme(hExportFolder);
+    HWND hBrowse = CreateWindow(L"BUTTON", L"Browse...",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                310, 166, 70, 26, g_hExportPanel,
+                                (HMENU)ID_BUTTON_EXPORT_FOLDER, hInst, nullptr);
+    ApplyDarkTheme(hBrowse);
+    HWND hClearFolder = CreateWindow(L"BUTTON", L"Clear",
+                                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                     390, 166, 55, 26, g_hExportPanel,
+                                     (HMENU)ID_BUTTON_EXPORT_FOLDER_CLEAR, hInst, nullptr);
+    ApplyDarkTheme(hClearFolder);
+    CreateWindow(L"STATIC", L"If empty, defaults to the folder of the imported file.",
+                 WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 20, 196, contentWidth - 20, 22, g_hExportPanel, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Quick Export", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 232, contentWidth, 22, g_hExportPanel, nullptr, hInst, nullptr);
+    HWND hAutoExport = CreateWindow(L"BUTTON", L"Automatically save without asking name and path",
+                                    WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                    20, 260, 420, 22, g_hExportPanel,
+                                    (HMENU)ID_CHECKBOX_AUTO_EXPORT, hInst, nullptr);
+    ApplyDarkTheme(hAutoExport);
+    SendMessage(hAutoExport, BM_SETCHECK, g_exportAutoSave ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    CreateWindow(L"STATIC", L"Default Codec", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 298, contentWidth, 22, g_hExportPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"Codec:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 20, 326, 80, 22, g_hExportPanel, nullptr, hInst, nullptr);
+    HWND hCodecCombo = CreateWindow(L"COMBOBOX", L"",
+                                    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                    110, 324, 200, 200, g_hExportPanel,
+                                    (HMENU)ID_COMBO_DEFAULT_CODEC, hInst, nullptr);
+    ApplyDarkTheme(hCodecCombo);
+    SendMessage(hCodecCombo, CB_ADDSTRING, 0, (LPARAM)L"H264 (re-encode)");
+    SendMessage(hCodecCombo, CB_ADDSTRING, 0, (LPARAM)L"Copy codec (no re-encode)");
+    SendMessage(hCodecCombo, CB_SETCURSEL, g_exportDefaultCodecH264 ? 0 : 1, 0);
+
     // ===== BOTTOM BUTTONS =====
     HWND hOk = CreateWindow(L"BUTTON", L"OK",
                             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
@@ -363,8 +471,39 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         // Handle category button clicks
         if (LOWORD(wParam) == ID_TAB_GENERAL || 
             LOWORD(wParam) == ID_TAB_ENCODING || 
-            LOWORD(wParam) == ID_TAB_UPLOAD) {
+            LOWORD(wParam) == ID_TAB_UPLOAD ||
+            LOWORD(wParam) == ID_TAB_EXPORT) {
             SwitchCategory(LOWORD(wParam));
+        }
+        else if (LOWORD(wParam) == ID_BUTTON_EXPORT_FOLDER) {
+            IFileOpenDialog* pfd = nullptr;
+            if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd)))) {
+                DWORD options = 0;
+                pfd->GetOptions(&options);
+                pfd->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+                pfd->SetTitle(L"Select default export folder");
+                if (SUCCEEDED(pfd->Show(hwnd))) {
+                    IShellItem* psi = nullptr;
+                    if (SUCCEEDED(pfd->GetResult(&psi))) {
+                        PWSTR folderPath = nullptr;
+                        if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &folderPath))) {
+                            g_exportDefaultFolder = folderPath;
+                            HWND hFolderEdit = GetDlgItem(g_hExportPanel, ID_EDIT_EXPORT_NAME + 100);
+                            if (hFolderEdit)
+                                SetWindowTextW(hFolderEdit, folderPath);
+                            CoTaskMemFree(folderPath);
+                        }
+                        psi->Release();
+                    }
+                }
+                pfd->Release();
+            }
+        }
+        else if (LOWORD(wParam) == ID_BUTTON_EXPORT_FOLDER_CLEAR) {
+            g_exportDefaultFolder.clear();
+            HWND hFolderEdit = GetDlgItem(g_hExportPanel, ID_EDIT_EXPORT_NAME + 100);
+            if (hFolderEdit)
+                SetWindowTextW(hFolderEdit, L"");
         }
         else if (LOWORD(wParam) == ID_BUTTON_CATBOX_CONFIG) {
             ShowCatboxConfigWindow(hwnd);
@@ -397,7 +536,23 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoUpload = SendMessage(hAutoUpload, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            
+
+            // Get exportation settings
+            {
+                wchar_t nameBuf[512] = {};
+                HWND hExpName = GetDlgItem(g_hExportPanel, ID_EDIT_EXPORT_NAME);
+                if (hExpName) {
+                    GetWindowTextW(hExpName, nameBuf, 512);
+                    g_exportSaveName = nameBuf;
+                }
+                HWND hAutoExp = GetDlgItem(g_hExportPanel, ID_CHECKBOX_AUTO_EXPORT);
+                if (hAutoExp)
+                    g_exportAutoSave = SendMessage(hAutoExp, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                HWND hCodecCombo = GetDlgItem(g_hExportPanel, ID_COMBO_DEFAULT_CODEC);
+                if (hCodecCombo)
+                    g_exportDefaultCodecH264 = SendMessage(hCodecCombo, CB_GETCURSEL, 0, 0) == 0;
+            }
+
             SaveSettings();
             DestroyWindow(hwnd);
         }
@@ -427,7 +582,23 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hAuto = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUTO_PLAY);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            
+
+            // Get exportation settings
+            {
+                wchar_t nameBuf[512] = {};
+                HWND hExpName = GetDlgItem(g_hExportPanel, ID_EDIT_EXPORT_NAME);
+                if (hExpName) {
+                    GetWindowTextW(hExpName, nameBuf, 512);
+                    g_exportSaveName = nameBuf;
+                }
+                HWND hAutoExp = GetDlgItem(g_hExportPanel, ID_CHECKBOX_AUTO_EXPORT);
+                if (hAutoExp)
+                    g_exportAutoSave = SendMessage(hAutoExp, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                HWND hCodecCombo = GetDlgItem(g_hExportPanel, ID_COMBO_DEFAULT_CODEC);
+                if (hCodecCombo)
+                    g_exportDefaultCodecH264 = SendMessage(hCodecCombo, CB_GETCURSEL, 0, 0) == 0;
+            }
+
             SaveSettings();
             DestroyWindow(hwnd);
         }
@@ -437,6 +608,7 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_hGeneralPanel = nullptr;
         g_hEncodingPanel = nullptr;
         g_hUploadPanel = nullptr;
+        g_hExportPanel = nullptr;
         g_selectedCategory = ID_TAB_GENERAL;
         break;
     }

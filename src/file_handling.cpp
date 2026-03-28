@@ -82,6 +82,15 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         EnableWindow(g_hRadioH264, TRUE);
         EnableWindow(g_hRadioUseBitrate, TRUE);
         EnableWindow(g_hRadioUseSize, TRUE);
+
+        // Apply default codec from exportation settings
+        if (g_exportDefaultCodecH264) {
+            SendMessage(g_hRadioH264, BM_SETCHECK, BST_CHECKED, 0);
+            SendMessage(g_hRadioCopyCodec, BM_SETCHECK, BST_UNCHECKED, 0);
+        } else {
+            SendMessage(g_hRadioCopyCodec, BM_SETCHECK, BST_CHECKED, 0);
+            SendMessage(g_hRadioH264, BM_SETCHECK, BST_UNCHECKED, 0);
+        }
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
         UpdateCutInfoLabel(hwnd);

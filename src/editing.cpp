@@ -15,6 +15,40 @@
 void UpdateCutInfoLabel(HWND hwnd);
 void UpdateCutTimeEdits();
 
+// Build the resolved output path from exportation settings.
+// Returns the full path including .mp4 extension.
+static std::wstring BuildExportPath(const std::wstring& loadedFile)
+{
+    namespace fs = std::filesystem;
+    // Determine folder
+    std::wstring folder;
+    if (!g_exportDefaultFolder.empty())
+        folder = g_exportDefaultFolder;
+    else if (!loadedFile.empty())
+        folder = fs::path(loadedFile).parent_path().wstring();
+    else if (!g_lastSaveDir.empty())
+        folder = g_lastSaveDir;
+
+    // Determine name from template
+    std::wstring stem;
+    if (!loadedFile.empty())
+        stem = fs::path(loadedFile).stem().wstring();
+    else
+        stem = L"video";
+
+    std::wstring name = g_exportSaveName;
+    // Replace $[filename] with the original filename stem
+    size_t pos = name.find(L"$[filename]");
+    while (pos != std::wstring::npos) {
+        name.replace(pos, 11, stem);
+        pos = name.find(L"$[filename]", pos + stem.size());
+    }
+
+    if (folder.empty())
+        return name + L".mp4";
+    return (fs::path(folder) / (name + L".mp4")).wstring();
+}
+
 // Global variables
 extern VideoPlayer *g_videoPlayer;
 extern double g_cutStartTime, g_cutEndTime;
@@ -97,22 +131,47 @@ void OnCutClicked(HWND hwnd)
 
     OPENFILENAMEW ofn;
     wchar_t szFile[260] = { 0 };
+    std::wstring resolvedPath;
 
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hwnd;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
-    ofn.lpstrFilter = L"MP4 Video\0*.mp4\0All Files\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
-    ofn.lpstrDefExt = L"mp4";
-    if (!g_lastSaveDir.empty())
-        ofn.lpstrInitialDir = g_lastSaveDir.c_str();
+    if (g_exportAutoSave) {
+        resolvedPath = BuildExportPath(g_videoPlayer ? g_videoPlayer->loadedFilename : L"");
+        if (std::filesystem::exists(resolvedPath)) {
+            int res = MessageBoxW(hwnd, (L"File already exists:\n" + resolvedPath + L"\n\nOverwrite?").c_str(),
+                                  L"Confirm Overwrite", MB_YESNO | MB_ICONWARNING);
+            if (res != IDYES)
+                return;
+        }
+    } else {
+        // Pre-fill with export settings
+        std::wstring prefilledPath = BuildExportPath(g_videoPlayer ? g_videoPlayer->loadedFilename : L"");
+        wcsncpy_s(szFile, prefilledPath.c_str(), _TRUNCATE);
 
-    if (GetSaveFileNameW(&ofn))
-    {
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = hwnd;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
+        ofn.lpstrFilter = L"MP4 Video\0*.mp4\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+        ofn.lpstrDefExt = L"mp4";
+
+        std::wstring initDir;
+        if (!g_exportDefaultFolder.empty())
+            initDir = g_exportDefaultFolder;
+        else if (!g_lastSaveDir.empty())
+            initDir = g_lastSaveDir;
+        if (!initDir.empty())
+            ofn.lpstrInitialDir = initDir.c_str();
+
+        if (!GetSaveFileNameW(&ofn))
+            return;
+
+        resolvedPath = szFile;
         g_lastSaveDir = std::filesystem::path(szFile).parent_path().wstring();
+    }
+
+    {
         SetWindowTextW(g_hStatusText, L"Cutting video... Please wait.");
         EnableWindow(hwnd, FALSE); // Disable UI during cut
 
@@ -150,7 +209,7 @@ void OnCutClicked(HWND hwnd)
 
         ShowProgressWindow(hwnd);
         UpdateProgressStatus(L"Preparing to cut video...");
-        std::wstring outFile = szFile;
+        std::wstring outFile = resolvedPath;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
             g_uploadSuccess = false;
             g_catboxUploadSuccess = false;
@@ -204,22 +263,47 @@ void OnExportClicked(HWND hwnd)
 
     OPENFILENAMEW ofn;
     wchar_t szFile[260] = { 0 };
+    std::wstring resolvedPath;
 
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hwnd;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
-    ofn.lpstrFilter = L"MP4 Video\0*.mp4\0All Files\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
-    ofn.lpstrDefExt = L"mp4";
-    if (!g_lastSaveDir.empty())
-        ofn.lpstrInitialDir = g_lastSaveDir.c_str();
+    if (g_exportAutoSave) {
+        resolvedPath = BuildExportPath(g_videoPlayer->loadedFilename);
+        if (std::filesystem::exists(resolvedPath)) {
+            int res = MessageBoxW(hwnd, (L"File already exists:\n" + resolvedPath + L"\n\nOverwrite?").c_str(),
+                                  L"Confirm Overwrite", MB_YESNO | MB_ICONWARNING);
+            if (res != IDYES)
+                return;
+        }
+    } else {
+        // Pre-fill with export settings
+        std::wstring prefilledPath = BuildExportPath(g_videoPlayer->loadedFilename);
+        wcsncpy_s(szFile, prefilledPath.c_str(), _TRUNCATE);
 
-    if (GetSaveFileNameW(&ofn))
-    {
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = hwnd;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
+        ofn.lpstrFilter = L"MP4 Video\0*.mp4\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+        ofn.lpstrDefExt = L"mp4";
+
+        std::wstring initDir;
+        if (!g_exportDefaultFolder.empty())
+            initDir = g_exportDefaultFolder;
+        else if (!g_lastSaveDir.empty())
+            initDir = g_lastSaveDir;
+        if (!initDir.empty())
+            ofn.lpstrInitialDir = initDir.c_str();
+
+        if (!GetSaveFileNameW(&ofn))
+            return;
+
+        resolvedPath = szFile;
         g_lastSaveDir = std::filesystem::path(szFile).parent_path().wstring();
+    }
+
+    {
         SetWindowTextW(g_hStatusText, L"Exporting video... Please wait.");
         EnableWindow(hwnd, FALSE);
 
@@ -257,7 +341,7 @@ void OnExportClicked(HWND hwnd)
 
         ShowProgressWindow(hwnd);
         UpdateProgressStatus(L"Preparing to export video...");
-        std::wstring outFile = szFile;
+        std::wstring outFile = resolvedPath;
         std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
             g_uploadSuccess = false;
             g_catboxUploadSuccess = false;
