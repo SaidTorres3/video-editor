@@ -48,6 +48,7 @@ extern std::wstring g_lastOutputFile;
 extern HBRUSH g_hbrBackground;
 extern HFONT g_hFont;
 extern COLORREF g_textColor;
+extern bool g_isPanelVisible;
 
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -102,6 +103,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case 1020: // ID_BUTTON_OPTIONS
             ShowOptionsWindow(hwnd);
+            break;
+        case 1029: // ID_BUTTON_TOGGLE_PANEL
+            g_isPanelVisible = !g_isPanelVisible;
+            RepositionControls(hwnd);
+            UpdateControls();
             break;
         case 1008: // ID_BUTTON_MUTE_TRACK
             OnMuteTrackClicked();

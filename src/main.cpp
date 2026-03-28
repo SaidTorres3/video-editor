@@ -49,6 +49,8 @@ HWND g_hLabelTargetSize;
 HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd;
 HWND g_hLabelCutInfo;
 HWND g_hButtonOptions;
+HWND g_hButtonTogglePanel;
+bool g_isPanelVisible = true;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
 bool g_isTimelineDragging = false;

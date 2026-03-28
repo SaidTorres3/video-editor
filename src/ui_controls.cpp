@@ -34,6 +34,7 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_CONTEXT_VOICE_ISOLATION 1026
 #define ID_BUTTON_PLAY_CLIP 1027
 #define ID_BUTTON_PLAY_END 1028
+#define ID_BUTTON_TOGGLE_PANEL 1029
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -50,6 +51,8 @@ extern HWND g_hLabelBitrate, g_hLabelTargetSize;
 extern HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd;
 extern HWND g_hLabelCutInfo;
 extern HWND g_hButtonOptions;
+extern HWND g_hButtonTogglePanel;
+extern bool g_isPanelVisible;
 
 void CreateControls(HWND hwnd)
 {
@@ -97,6 +100,14 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_OPTIONS,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonOptions);
+
+    g_hButtonTogglePanel = CreateWindow(
+        L"BUTTON", L"\u25C4 Panel",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        420, 10, 80, 30,
+        hwnd, (HMENU)ID_BUTTON_TOGGLE_PANEL,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonTogglePanel);
 
     // Timeline
     g_hTimeline = CreateWindow(
@@ -380,47 +391,76 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonPause, 190, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonStop, 260, mainControlsY, 60, mainControlsHeight, TRUE);
     int optionsWidth = 80;
+    int toggleWidth = 80;
     int optionsX = clientRect.right - optionsWidth - 10;
+    int toggleX = optionsX - toggleWidth - 5;
     MoveWindow(g_hButtonOptions, optionsX, mainControlsY, optionsWidth, mainControlsHeight, TRUE);
+    MoveWindow(g_hButtonTogglePanel, toggleX, mainControlsY, toggleWidth, mainControlsHeight, TRUE);
+    SetWindowTextW(g_hButtonTogglePanel, g_isPanelVisible ? L"\u25BA Panel" : L"\u25C4 Panel");
 
     // Audio controls (aligned to the right)
     int audioControlsWidth = 250;
     int audioControlsX = clientRect.right - audioControlsWidth - 10;
     int audioControlsY = 50;
 
-    MoveWindow(g_hLabelAudioTracks, audioControlsX, audioControlsY, 200, 20, TRUE);
-    MoveWindow(g_hListBoxAudioTracks, audioControlsX, audioControlsY + 25, 200, 100, TRUE);
-    MoveWindow(g_hButtonMuteTrack, audioControlsX, audioControlsY + 135, 100, 25, TRUE);
+    int nCmdShow = g_isPanelVisible ? SW_SHOW : SW_HIDE;
+    ShowWindow(g_hLabelAudioTracks, nCmdShow);
+    ShowWindow(g_hListBoxAudioTracks, nCmdShow);
+    ShowWindow(g_hButtonMuteTrack, nCmdShow);
+    ShowWindow(g_hLabelTrackVolume, nCmdShow);
+    ShowWindow(g_hSliderTrackVolume, nCmdShow);
+    ShowWindow(g_hLabelMasterVolume, nCmdShow);
+    ShowWindow(g_hSliderMasterVolume, nCmdShow);
+    ShowWindow(g_hLabelEditing, nCmdShow);
+    ShowWindow(g_hButtonSetStart, nCmdShow);
+    ShowWindow(g_hButtonSetEnd, nCmdShow);
+    ShowWindow(g_hEditStartTime, nCmdShow);
+    ShowWindow(g_hEditEndTime, nCmdShow);
+    ShowWindow(g_hButtonPlayClip, nCmdShow);
+    ShowWindow(g_hButtonPlayEnd, nCmdShow);
+    ShowWindow(g_hLabelCutInfo, nCmdShow);
+    ShowWindow(g_hButtonCut, nCmdShow);
+    ShowWindow(g_hCheckboxMergeAudio, nCmdShow);
+    ShowWindow(g_hRadioH264, nCmdShow);
+    ShowWindow(g_hRadioCopyCodec, nCmdShow);
 
-    MoveWindow(g_hLabelTrackVolume, audioControlsX, audioControlsY + 170, 200, 20, TRUE);
-    MoveWindow(g_hSliderTrackVolume, audioControlsX, audioControlsY + 195, 200, 30, TRUE);
+    if (g_isPanelVisible)
+    {
+        MoveWindow(g_hLabelAudioTracks, audioControlsX, audioControlsY, 200, 20, TRUE);
+        MoveWindow(g_hListBoxAudioTracks, audioControlsX, audioControlsY + 25, 200, 100, TRUE);
+        MoveWindow(g_hButtonMuteTrack, audioControlsX, audioControlsY + 135, 100, 25, TRUE);
 
-    MoveWindow(g_hLabelMasterVolume, audioControlsX, audioControlsY + 235, 200, 20, TRUE);
-    MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 260, 200, 30, TRUE);
+        MoveWindow(g_hLabelTrackVolume, audioControlsX, audioControlsY + 170, 200, 20, TRUE);
+        MoveWindow(g_hSliderTrackVolume, audioControlsX, audioControlsY + 195, 200, 30, TRUE);
 
-    // Editing controls (below audio)
-    int editingControlsY = audioControlsY + 260 + 40;
-    MoveWindow(g_hLabelEditing, audioControlsX, editingControlsY, 200, 20, TRUE);
-    MoveWindow(g_hButtonSetStart, audioControlsX, editingControlsY + 25, 95, 25, TRUE);
-    MoveWindow(g_hButtonSetEnd, audioControlsX + 105, editingControlsY + 25, 95, 25, TRUE);
-    MoveWindow(g_hEditStartTime, audioControlsX, editingControlsY + 55, 95, 20, TRUE);
-    MoveWindow(g_hEditEndTime, audioControlsX + 105, editingControlsY + 55, 95, 20, TRUE);
-    MoveWindow(g_hButtonPlayClip, audioControlsX + 200, editingControlsY + 55, 20, 20, TRUE);
-    MoveWindow(g_hButtonPlayEnd, audioControlsX + 225, editingControlsY + 55, 20, 20, TRUE);
-    MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 80, 200, 40, TRUE);
-    MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 125, 200, 30, TRUE);
-    MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 160, 200, 25, TRUE);
-    MoveWindow(g_hRadioH264, audioControlsX, editingControlsY + 190, 120, 20, TRUE);
-    MoveWindow(g_hRadioCopyCodec, audioControlsX + 120, editingControlsY + 190, 100, 20, TRUE);
-    MoveWindow(g_hRadioUseBitrate, audioControlsX, editingControlsY + 215, 100, 20, TRUE);
-    MoveWindow(g_hRadioUseSize, audioControlsX + 105, editingControlsY + 215, 100, 20, TRUE);
-    MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
-    MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
-    MoveWindow(g_hLabelTargetSize, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
-    MoveWindow(g_hEditTargetSize, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
+        MoveWindow(g_hLabelMasterVolume, audioControlsX, audioControlsY + 235, 200, 20, TRUE);
+        MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 260, 200, 30, TRUE);
+
+        // Editing controls (below audio)
+        int editingControlsY = audioControlsY + 260 + 40;
+        MoveWindow(g_hLabelEditing, audioControlsX, editingControlsY, 200, 20, TRUE);
+        MoveWindow(g_hButtonSetStart, audioControlsX, editingControlsY + 25, 95, 25, TRUE);
+        MoveWindow(g_hButtonSetEnd, audioControlsX + 105, editingControlsY + 25, 95, 25, TRUE);
+        MoveWindow(g_hEditStartTime, audioControlsX, editingControlsY + 55, 95, 20, TRUE);
+        MoveWindow(g_hEditEndTime, audioControlsX + 105, editingControlsY + 55, 95, 20, TRUE);
+        MoveWindow(g_hButtonPlayClip, audioControlsX + 200, editingControlsY + 55, 20, 20, TRUE);
+        MoveWindow(g_hButtonPlayEnd, audioControlsX + 225, editingControlsY + 55, 20, 20, TRUE);
+        MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 80, 200, 40, TRUE);
+        MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 125, 200, 30, TRUE);
+        MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 160, 200, 25, TRUE);
+        MoveWindow(g_hRadioH264, audioControlsX, editingControlsY + 190, 120, 20, TRUE);
+        MoveWindow(g_hRadioCopyCodec, audioControlsX + 120, editingControlsY + 190, 100, 20, TRUE);
+        MoveWindow(g_hRadioUseBitrate, audioControlsX, editingControlsY + 215, 100, 20, TRUE);
+        MoveWindow(g_hRadioUseSize, audioControlsX + 105, editingControlsY + 215, 100, 20, TRUE);
+        MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
+        MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
+        MoveWindow(g_hLabelTargetSize, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
+        MoveWindow(g_hEditTargetSize, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
+    }
 
     // Video area (takes up remaining space)
-    int videoSectionWidth = clientRect.right - audioControlsWidth - 30;
+    int panelReserved = g_isPanelVisible ? (audioControlsWidth + 30) : 10;
+    int videoSectionWidth = clientRect.right - panelReserved - 10;
     int bottomControlsHeight = 100;
 
     g_videoPlayer->SetPosition(
