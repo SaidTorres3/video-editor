@@ -183,17 +183,18 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             // adjust `g_cutStartTime` and `g_cutEndTime`.
             if (g_videoPlayer->IsClipPreviewActive())
             {
-                if (seekTime < g_cutStartTime || seekTime > g_cutEndTime)
+                // Clamp to just before the clip end so we don't overshoot
+                double clampedSeek = seekTime;
+                if (g_cutEndTime >= 0 && clampedSeek >= g_cutEndTime)
                 {
-                    g_videoPlayer->CancelClipPreview();
+                    double frameTime = g_videoPlayer->frameRate > 0 ? (1.0 / g_videoPlayer->frameRate) : 0.033;
+                    clampedSeek = g_cutEndTime - frameTime;
+                    if (clampedSeek < 0.0) clampedSeek = 0.0;
                 }
-                else
-                {
-                    g_videoPlayer->SeekToTime(seekTime, 0);
-                    InvalidateRect(hwnd, NULL, FALSE);
-                    UpdateControls();
-                    return 0;
-                }
+                g_videoPlayer->PlayClip(clampedSeek, g_cutEndTime);
+                InvalidateRect(hwnd, NULL, FALSE);
+                UpdateControls();
+                return 0;
             }
             g_timelineDragMode = DragMode::Cursor;
             g_wasPlayingBeforeDrag = g_videoPlayer->IsPlaying();

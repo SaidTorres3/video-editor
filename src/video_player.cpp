@@ -1296,7 +1296,7 @@ void VideoPlayer::PlaybackThreadFunction()
         {
             clipPreviewActive = false;
             Pause();
-            UpdateControls();
+            PostMessage(parentWindow, WM_TIMER, 1006, 0);
             break;
         }
 
@@ -1306,7 +1306,6 @@ void VideoPlayer::PlaybackThreadFunction()
         if (delay > 0)
             std::this_thread::sleep_for(std::chrono::duration<double>(delay));
     }
-    isPlaying = false;
 }
 
 bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
