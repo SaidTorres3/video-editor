@@ -25,6 +25,7 @@ VideoPlayer::VideoPlayer(HWND parent)
     : parentWindow(parent), formatContext(nullptr), codecContext(nullptr),
       frame(nullptr), frameRGB(nullptr), hwFrame(nullptr), hwDeviceCtx(nullptr),
       hwPixelFormat(AV_PIX_FMT_NONE), useHwAccel(false), packet(nullptr), swsContext(nullptr),
+      swsSourceFormat(AV_PIX_FMT_NONE),
       buffer(nullptr), rgbBufferSize(0), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
@@ -1287,9 +1288,33 @@ void VideoPlayer::PlaybackThreadFunction()
 {
     auto startTime = masterStartTime;
     double startPts = masterStartPts;
+    const double frameDur = (frameRate > 0.0) ? (1.0 / frameRate) : (1.0 / 30.0);
+
     while (playbackThreadRunning)
     {
-        if (!m_decoder->DecodeNextFrame(false, true))
+        // Measure how far behind real-time we are before decoding.
+        double elapsed = std::chrono::duration<double>(
+            std::chrono::high_resolution_clock::now() - startTime).count();
+        double videoTime = currentPts - startPts;
+        double lag = elapsed - videoTime;
+
+        bool generateImage = true;
+
+        if (lag > 0.5)
+        {
+            // Very far behind (>500 ms): resync the clock so playback resumes
+            // smoothly from the current position instead of trying to catch up.
+            startTime = std::chrono::high_resolution_clock::now();
+            startPts = currentPts;
+            lag = 0.0;
+        }
+        else if (lag > frameDur * 2.0)
+        {
+            // Behind by 2+ frames: decode without image conversion to catch up.
+            generateImage = false;
+        }
+
+        if (!m_decoder->DecodeNextFrame(false, generateImage, generateImage))
             break;
 
         if (clipPreviewActive && currentPts >= clipPreviewEndTime)
@@ -1300,8 +1325,12 @@ void VideoPlayer::PlaybackThreadFunction()
             break;
         }
 
+        // When catching up (no image generated), skip sleep and keep decoding.
+        if (!generateImage)
+            continue;
+
         double target = currentPts - startPts;
-        double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
+        elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
         double delay = target - elapsed;
         if (delay > 0)
             std::this_thread::sleep_for(std::chrono::duration<double>(delay));

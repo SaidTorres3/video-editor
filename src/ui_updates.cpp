@@ -15,6 +15,8 @@ extern double g_cutStartTime, g_cutEndTime;
 extern double g_previewSeekTime;
 extern bool g_isPanelVisible;
 
+extern bool g_resumePlayAfterSeek;
+
 void UpdateControls()
 {
     if (!g_videoPlayer)
@@ -117,7 +119,27 @@ void UpdateTimeline()
 {
     if (!g_videoPlayer || !g_videoPlayer->IsLoaded())
         return;
-    double currentTime = g_videoPlayer->GetCurrentTime();
+
+    // Release the preview pin once the actual playback position has caught up.
+    // This keeps the cursor glued to the seek target during async refinement.
+    if (g_previewSeekTime >= 0.0)
+    {
+        double frameDur = g_videoPlayer->frameRate > 0.0
+                          ? (1.0 / g_videoPlayer->frameRate) : 0.033;
+        if (std::fabs(g_videoPlayer->GetCurrentTime() - g_previewSeekTime) <= frameDur * 1.5)
+        {
+            g_previewSeekTime = -1.0;
+
+            // If playback was deferred until the seek completed, resume now.
+            if (g_resumePlayAfterSeek)
+            {
+                g_resumePlayAfterSeek = false;
+                g_videoPlayer->Play();
+                UpdateControls();
+            }
+        }
+    }
+
     double duration = g_videoPlayer->GetDuration();
     if (duration > 0)
     {

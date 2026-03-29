@@ -14,6 +14,7 @@ extern VideoPlayer *g_videoPlayer;
 extern double g_cutStartTime, g_cutEndTime;
 extern bool g_isTimelineDragging;
 extern bool g_wasPlayingBeforeDrag;
+extern bool g_resumePlayAfterSeek;
 enum class DragMode { None, Cursor, StartMarker, EndMarker, Keyframe };
 extern DragMode g_timelineDragMode;
 extern double g_draggedKeyframeTime;
@@ -268,8 +269,8 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             UpdateWindow(hwnd); // Force restart of paint cycle to draw line immediately
             
             g_videoPlayer->SeekToTime(seekTime, 0);
-            
-            g_previewSeekTime = -1.0; // Reset after seek
+            // Keep g_previewSeekTime pinned to the target; UpdateTimeline() will
+            // clear it automatically once actual currentPts catches up.
 
             g_isTimelineDragging = true;
             SetCapture(hwnd);
@@ -386,8 +387,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 UpdateWindow(hwnd);
                 
                 g_videoPlayer->SeekToTime(seekTime, 0);
-                
-                g_previewSeekTime = -1.0;
+                // Keep g_previewSeekTime pinned; UpdateTimeline() auto-clears it.
             }
             else if (g_timelineDragMode == DragMode::Keyframe)
             {
@@ -466,9 +466,13 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             if (g_timelineDragMode == DragMode::Cursor)
             {
-                g_videoPlayer->SeekToTime(seekTime, 0);
+                // Set the resume flag BEFORE SeekToTime, because SeekToTime
+                // calls UpdateTimeline() synchronously which checks this flag.
                 if (g_wasPlayingBeforeDrag)
-                    g_videoPlayer->Play();
+                    g_resumePlayAfterSeek = true;
+                // Pin cursor to the drop position during the final refinement pass.
+                g_previewSeekTime = seekTime;
+                g_videoPlayer->SeekToTime(seekTime, 0);
             }
             else if (g_timelineDragMode == DragMode::Keyframe)
             {

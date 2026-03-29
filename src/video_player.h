@@ -94,6 +94,7 @@ public:
     bool useHwAccel;
     AVPacket *packet;
     struct SwsContext *swsContext;
+    AVPixelFormat swsSourceFormat;
     uint8_t *buffer;
     int rgbBufferSize;
     int videoStreamIndex;
@@ -157,6 +158,7 @@ public:
     std::mutex audioMutex;
     std::condition_variable audioCondition;
     std::mutex decodeMutex; // protects decoder during seek
+    std::mutex renderMutex; // protects frameRGB pixel buffer during sws_scale / D2D copy
     
     // Audio settings
     int audioSampleRate;

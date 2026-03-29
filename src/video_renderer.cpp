@@ -35,7 +35,7 @@ void VideoRenderer::UpdateDisplay() {
     if (!m_player->d2dRenderTarget || !m_player->frameRGB->data[0])
         return;
 
-    std::lock_guard<std::mutex> lock(m_player->decodeMutex);
+    std::lock_guard<std::mutex> lock(m_player->renderMutex);
 
     if (!m_player->d2dBitmap)
     {
