@@ -27,6 +27,7 @@ static HBRUSH ApplyDarkColors(HDC hdc, UINT msg)
 EncoderSelection g_encoderSelection = EncoderSelection::Libx264;
 bool g_logToFile = true;
 bool g_autoPlay = true;
+bool g_showVideoPreviewOnHover = true;
 std::wstring g_qualityPreset = L"Medium";
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
@@ -62,6 +63,9 @@ void LoadSettings()
         size = sizeof(val);
         if (RegQueryValueExW(hKey, L"AutoPlay", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
             g_autoPlay = (val != 0);
+        size = sizeof(val);
+        if (RegQueryValueExW(hKey, L"HoverPreview", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
+            g_showVideoPreviewOnHover = (val != 0);
 
         wchar_t buf[256];
         DWORD sz = sizeof(buf);
@@ -126,6 +130,8 @@ void SaveSettings()
         RegSetValueExW(hKey, L"EnableLogFile", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         val = g_autoPlay ? 1 : 0;
         RegSetValueExW(hKey, L"AutoPlay", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = g_showVideoPreviewOnHover ? 1 : 0;
+        RegSetValueExW(hKey, L"HoverPreview", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"B2KeyId", 0, REG_SZ, (const BYTE*)g_b2KeyId.c_str(), (DWORD)((g_b2KeyId.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2AppKey", 0, REG_SZ, (const BYTE*)g_b2AppKey.c_str(), (DWORD)((g_b2AppKey.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2BucketId", 0, REG_SZ, (const BYTE*)g_b2BucketId.c_str(), (DWORD)((g_b2BucketId.size()+1)*sizeof(wchar_t)));
@@ -278,16 +284,22 @@ void ShowOptionsWindow(HWND parent)
                               20, 78, 250, 22, g_hGeneralPanel,
                               (HMENU)ID_CHECKBOX_AUTO_PLAY, hInst, nullptr);
     ApplyDarkTheme(hAuto);
+    HWND hHoverPreview = CreateWindow(L"BUTTON", L"Show video preview on hover",
+                                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                      20, 106, 250, 22, g_hGeneralPanel,
+                                      (HMENU)ID_CHECKBOX_HOVER_PREVIEW, hInst, nullptr);
+    ApplyDarkTheme(hHoverPreview);
 
     CreateWindow(L"STATIC", L"Logging", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 0, 120, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
+                 0, 140, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
     HWND hLog = CreateWindow(L"BUTTON", L"Enable debug logging",
                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                             20, 148, 250, 22, g_hGeneralPanel,
+                             20, 168, 250, 22, g_hGeneralPanel,
                              (HMENU)ID_CHECKBOX_ENABLE_LOG, hInst, nullptr);
     ApplyDarkTheme(hLog);
     SendMessage(hLog, BM_SETCHECK, g_logToFile ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hAuto, BM_SETCHECK, g_autoPlay ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hHoverPreview, BM_SETCHECK, g_showVideoPreviewOnHover ? BST_CHECKED : BST_UNCHECKED, 0);
 
     // ===== ENCODING PANEL =====
     g_hEncodingPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
@@ -532,9 +544,11 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             // Get checkbox states
             HWND hLog = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUTO_PLAY);
+            HWND hHoverPrev = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_HOVER_PREVIEW);
             HWND hAutoUpload = GetDlgItem(g_hUploadPanel, ID_CHECKBOX_AUTO_UPLOAD);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hHoverPrev) g_showVideoPreviewOnHover = SendMessage(hHoverPrev, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoUpload = SendMessage(hAutoUpload, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
             // Get exportation settings
@@ -580,8 +594,10 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             // Get checkbox states
             HWND hLog = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUTO_PLAY);
+            HWND hHoverPrev = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_HOVER_PREVIEW);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hHoverPrev) g_showVideoPreviewOnHover = SendMessage(hHoverPrev, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
             // Get exportation settings
             {

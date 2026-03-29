@@ -198,11 +198,13 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
     else
         duration = 0.0;
     currentPts = 0.0;
+    InitThumbnailCtx();
     return true;
 }
 
 void VideoPlayer::UnloadVideo()
 {
+    CleanupThumbnailCtx();
     Stop();
     CancelPendingSeekRefinement();
     {
@@ -716,6 +718,253 @@ double VideoPlayer::GetDuration() const
 double VideoPlayer::GetCurrentTime() const
 {
     return currentPts;
+}
+
+bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vector<uint8_t>& pixels) const
+{
+    if (!isLoaded || loadedFilename.empty() || dstW <= 0 || dstH <= 0)
+        return false;
+
+    int bufSize = WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string utf8File(bufSize, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8File[0], bufSize, nullptr, nullptr);
+
+    AVFormatContext* fmt = nullptr;
+    if (avformat_open_input(&fmt, utf8File.c_str(), nullptr, nullptr) < 0)
+        return false;
+    struct ScopedFmt { AVFormatContext* f; ~ScopedFmt() { avformat_close_input(&f); } } scopedFmt{fmt};
+
+    if (avformat_find_stream_info(fmt, nullptr) < 0)
+        return false;
+
+    int vidIdx = -1;
+    for (unsigned i = 0; i < fmt->nb_streams; i++)
+    {
+        if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+        {
+            vidIdx = i;
+            break;
+        }
+    }
+    if (vidIdx < 0)
+        return false;
+
+    const AVCodec* codec = avcodec_find_decoder(fmt->streams[vidIdx]->codecpar->codec_id);
+    if (!codec)
+        return false;
+
+    AVCodecContext* cc = avcodec_alloc_context3(codec);
+    struct ScopedCC { AVCodecContext* c; ~ScopedCC() { avcodec_free_context(&c); } } scopedCC{cc};
+    avcodec_parameters_to_context(cc, fmt->streams[vidIdx]->codecpar);
+    cc->thread_count = 2;
+    if (avcodec_open2(cc, codec, nullptr) < 0)
+        return false;
+
+    // Compute start time offset (matches LoadVideo logic)
+    double sto = 0.0;
+    {
+        double minStart = std::numeric_limits<double>::max();
+        for (unsigned i = 0; i < fmt->nb_streams; ++i)
+        {
+            AVStream* s = fmt->streams[i];
+            if (s->start_time != AV_NOPTS_VALUE)
+            {
+                double t = s->start_time * av_q2d(s->time_base);
+                if (t < minStart) minStart = t;
+            }
+        }
+        if (minStart != std::numeric_limits<double>::max())
+            sto = minStart;
+    }
+
+    AVStream* vs = fmt->streams[vidIdx];
+    double clampedTime = time;
+    if (clampedTime < 0.0) clampedTime = 0.0;
+    const double frameDur = (frameRate > 0.0) ? 1.0 / frameRate : 0.033;
+    if (duration > 0.0 && clampedTime >= duration)
+        clampedTime = duration - frameDur;
+    if (clampedTime < 0.0) clampedTime = 0.0;
+
+    int64_t ts = static_cast<int64_t>((clampedTime + sto) / av_q2d(vs->time_base));
+    av_seek_frame(fmt, vidIdx, ts, AVSEEK_FLAG_BACKWARD);
+    avcodec_flush_buffers(cc);
+
+    AVFrame* frm = av_frame_alloc();
+    struct ScopedFrm { AVFrame* f; ~ScopedFrm() { av_frame_free(&f); } } scopedFrm{frm};
+    AVPacket* pkt = av_packet_alloc();
+    struct ScopedPkt { AVPacket* p; ~ScopedPkt() { av_packet_free(&p); } } scopedPkt{pkt};
+
+    bool gotFrame = false;
+    int maxPackets = 40;
+    while (!gotFrame && maxPackets-- > 0)
+    {
+        if (av_read_frame(fmt, pkt) < 0) break;
+        if (pkt->stream_index == vidIdx)
+        {
+            if (avcodec_send_packet(cc, pkt) >= 0)
+            {
+                if (avcodec_receive_frame(cc, frm) >= 0)
+                    gotFrame = true;
+            }
+        }
+        av_packet_unref(pkt);
+    }
+
+    if (!gotFrame)
+    {
+        avcodec_send_packet(cc, nullptr);
+        gotFrame = (avcodec_receive_frame(cc, frm) >= 0);
+    }
+
+    if (!gotFrame || frm->width <= 0 || frm->height <= 0)
+        return false;
+
+    SwsContext* sws = sws_getContext(
+        frm->width, frm->height, (AVPixelFormat)frm->format,
+        dstW, dstH, AV_PIX_FMT_BGRA,
+        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+    if (!sws)
+        return false;
+
+    pixels.resize(static_cast<size_t>(dstW) * dstH * 4);
+    uint8_t* dst[1]    = { pixels.data() };
+    int      dstStride[1] = { dstW * 4 };
+    sws_scale(sws, frm->data, frm->linesize, 0, frm->height, dst, dstStride);
+    sws_freeContext(sws);
+    return true;
+}
+
+void VideoPlayer::InitThumbnailCtx()
+{
+    CleanupThumbnailCtx();
+
+    if (loadedFilename.empty()) return;
+
+    int bufSize = WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string utf8File(bufSize, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, loadedFilename.c_str(), -1, &utf8File[0], bufSize, nullptr, nullptr);
+
+    auto ctx = std::make_unique<ThumbCtx>();
+
+    if (avformat_open_input(&ctx->fmt, utf8File.c_str(), nullptr, nullptr) < 0) return;
+    if (avformat_find_stream_info(ctx->fmt, nullptr) < 0) {
+        avformat_close_input(&ctx->fmt); return;
+    }
+
+    for (unsigned i = 0; i < ctx->fmt->nb_streams; i++) {
+        if (ctx->fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            ctx->vidIdx = i; break;
+        }
+    }
+    if (ctx->vidIdx < 0) { avformat_close_input(&ctx->fmt); return; }
+
+    const AVCodec* codec = avcodec_find_decoder(ctx->fmt->streams[ctx->vidIdx]->codecpar->codec_id);
+    if (!codec) { avformat_close_input(&ctx->fmt); return; }
+
+    ctx->cc = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(ctx->cc, ctx->fmt->streams[ctx->vidIdx]->codecpar);
+    ctx->cc->thread_count = 2;
+    if (avcodec_open2(ctx->cc, codec, nullptr) < 0) {
+        avcodec_free_context(&ctx->cc); avformat_close_input(&ctx->fmt); return;
+    }
+
+    ctx->frm = av_frame_alloc();
+    ctx->pkt = av_packet_alloc();
+    if (!ctx->frm || !ctx->pkt) {
+        av_frame_free(&ctx->frm);
+        av_packet_free(&ctx->pkt);
+        avcodec_free_context(&ctx->cc);
+        avformat_close_input(&ctx->fmt);
+        return;
+    }
+
+    // Compute startTimeOffset (same logic as LoadVideo)
+    double minStart = std::numeric_limits<double>::max();
+    for (unsigned i = 0; i < ctx->fmt->nb_streams; ++i) {
+        AVStream* s = ctx->fmt->streams[i];
+        if (s->start_time != AV_NOPTS_VALUE) {
+            double t = s->start_time * av_q2d(s->time_base);
+            if (t < minStart) minStart = t;
+        }
+    }
+    if (minStart != std::numeric_limits<double>::max())
+        ctx->sto = minStart;
+
+    m_thumbCtx = std::move(ctx);
+}
+
+void VideoPlayer::CleanupThumbnailCtx()
+{
+    if (!m_thumbCtx) return;
+    std::lock_guard<std::mutex> lck(m_thumbCtx->mtx);
+    if (m_thumbCtx->sws) { sws_freeContext(m_thumbCtx->sws); m_thumbCtx->sws = nullptr; }
+    if (m_thumbCtx->frm) { av_frame_free(&m_thumbCtx->frm); }
+    if (m_thumbCtx->pkt) { av_packet_free(&m_thumbCtx->pkt); }
+    if (m_thumbCtx->cc)  { avcodec_free_context(&m_thumbCtx->cc); }
+    if (m_thumbCtx->fmt) { avformat_close_input(&m_thumbCtx->fmt); }
+    m_thumbCtx.reset();
+}
+
+bool VideoPlayer::GetThumbnailPixelsFast(double time, int dstW, int dstH, std::vector<uint8_t>& pixels)
+{
+    if (!m_thumbCtx || dstW <= 0 || dstH <= 0) return false;
+
+    std::lock_guard<std::mutex> lck(m_thumbCtx->mtx);
+    if (!m_thumbCtx->fmt || !m_thumbCtx->cc || !m_thumbCtx->frm || !m_thumbCtx->pkt)
+        return false;
+
+    ThumbCtx* ctx = m_thumbCtx.get();
+    AVStream* vs  = ctx->fmt->streams[ctx->vidIdx];
+
+    double clampedTime = time;
+    if (clampedTime < 0.0) clampedTime = 0.0;
+    const double frameDur = (frameRate > 0.0) ? 1.0 / frameRate : 0.033;
+    if (duration > 0.0 && clampedTime >= duration)
+        clampedTime = duration - frameDur;
+    if (clampedTime < 0.0) clampedTime = 0.0;
+
+    int64_t ts = static_cast<int64_t>((clampedTime + ctx->sto) / av_q2d(vs->time_base));
+    av_seek_frame(ctx->fmt, ctx->vidIdx, ts, AVSEEK_FLAG_BACKWARD);
+    avcodec_flush_buffers(ctx->cc);
+
+    bool gotFrame = false;
+    int maxPackets = 40;
+    while (!gotFrame && maxPackets-- > 0) {
+        av_frame_unref(ctx->frm);
+        if (av_read_frame(ctx->fmt, ctx->pkt) < 0) break;
+        if (ctx->pkt->stream_index == ctx->vidIdx) {
+            if (avcodec_send_packet(ctx->cc, ctx->pkt) >= 0) {
+                if (avcodec_receive_frame(ctx->cc, ctx->frm) >= 0)
+                    gotFrame = true;
+            }
+        }
+        av_packet_unref(ctx->pkt);
+    }
+    if (!gotFrame) {
+        avcodec_send_packet(ctx->cc, nullptr);
+        gotFrame = (avcodec_receive_frame(ctx->cc, ctx->frm) >= 0);
+        avcodec_flush_buffers(ctx->cc);
+    }
+
+    if (!gotFrame || ctx->frm->width <= 0 || ctx->frm->height <= 0) return false;
+
+    // Recreate SwsContext only when dimensions change
+    if (!ctx->sws || ctx->lastDstW != dstW || ctx->lastDstH != dstH) {
+        if (ctx->sws) sws_freeContext(ctx->sws);
+        ctx->sws = sws_getContext(ctx->frm->width, ctx->frm->height, (AVPixelFormat)ctx->frm->format,
+                                   dstW, dstH, AV_PIX_FMT_BGRA,
+                                   SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+        ctx->lastDstW = dstW;
+        ctx->lastDstH = dstH;
+    }
+    if (!ctx->sws) return false;
+
+    pixels.resize(static_cast<size_t>(dstW) * dstH * 4);
+    uint8_t* dstData[1]   = { pixels.data() };
+    int      dstStride[1] = { dstW * 4 };
+    sws_scale(ctx->sws, ctx->frm->data, ctx->frm->linesize, 0, ctx->frm->height, dstData, dstStride);
+    av_frame_unref(ctx->frm);
+    return true;
 }
 
 void VideoPlayer::SetPosition(int x, int y, int width, int height)

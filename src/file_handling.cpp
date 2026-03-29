@@ -3,6 +3,7 @@
 #include "ui_updates.h"
 #include "editing.h"
 #include "options_window.h"
+#include "timeline.h"
 #include <commdlg.h>
 #include <filesystem>
 
@@ -98,6 +99,7 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
 
         UpdateControls();
         UpdateTimeline();
+        TriggerThumbnailPreCache(g_videoPlayer->GetDuration());
 
         // Set bitrate field to the video's average bitrate
         if (g_hEditBitrate && g_videoPlayer && g_videoPlayer->formatContext)

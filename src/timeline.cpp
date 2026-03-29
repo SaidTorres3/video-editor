@@ -1,8 +1,13 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "timeline.h"
 #include "video_player.h"
 #include "ui_updates.h"
+#include "options_window.h"
 #include <windowsx.h>
 #include <cmath>
+#include <limits>
 
 // Forward declarations
 void UpdateControls();
@@ -29,6 +34,132 @@ static HWND g_timecodeTooltipWnd = nullptr;
 static wchar_t g_timecodeTooltipText[32] = {};
 static const wchar_t* TIMECODE_TOOLTIP_CLASS = L"TimelineTimecodeTooltip";
 
+// --- Thumbnail frame preview globals ---
+static double g_timelineHoverTime = -1.0; // Quantized hover time for thumbnail lookup
+
+// Thumbnail popup dimensions
+static const int THUMB_W          = 160;
+static const int THUMB_MAX_H      = 90;
+static const int THUMB_TIMECODE_H = 22;
+
+struct ThumbnailData
+{
+    double               time   = -1.0;
+    int                  width  = 0;
+    int                  height = 0;
+    std::vector<uint8_t> pixels; // BGRA, width*height*4 bytes
+};
+
+static std::mutex                 g_thumbCacheMutex;
+static std::vector<ThumbnailData> g_thumbCache;
+static const int                  THUMB_CACHE_SIZE = 250;
+
+static std::atomic<double>        g_thumbRequestTime{-1.0};
+static std::atomic<bool>          g_thumbThreadExit{false};
+static HANDLE                     g_thumbRequestEvent = nullptr;
+static std::thread                g_thumbThread;
+
+// Pre-cache queue: populated when a video is loaded.
+static std::mutex              g_preCacheMutex;
+static std::vector<double>     g_preCacheTimes;
+
+// Public: call after a new video loads to queue up eager pre-cache work.
+void TriggerThumbnailPreCache(double duration)
+{
+    if (duration <= 0.0) return;
+    // Compute an interval so we generate at most 48 thumbnails, min 0.5 s apart.
+    const int MAX_THUMBS = 200;
+    double interval = duration / MAX_THUMBS;
+    if (interval < 0.25) interval = 0.25;
+
+    {
+        std::lock_guard<std::mutex> lck(g_preCacheMutex);
+        g_preCacheTimes.clear();
+        for (double t = 0.0; t < duration; t += interval)
+            g_preCacheTimes.push_back(t);
+        // Also clear old cache since it belongs to a different video.
+        std::lock_guard<std::mutex> lck2(g_thumbCacheMutex);
+        g_thumbCache.clear();
+    }
+    if (g_thumbRequestEvent)
+        SetEvent(g_thumbRequestEvent);
+}
+
+static void ThumbnailThreadFunc()
+{
+    while (!g_thumbThreadExit.load())
+    {
+        if (WaitForSingleObject(g_thumbRequestEvent, 200) == WAIT_OBJECT_0)
+            ResetEvent(g_thumbRequestEvent);
+        if (g_thumbThreadExit.load()) break;
+
+        // Determine what to decode: priority = hover request, fallback = next pre-cache slot.
+        double reqTime = g_thumbRequestTime.exchange(-1.0);
+        bool isPreCache = false;
+        if (reqTime < 0.0) {
+            std::lock_guard<std::mutex> lck(g_preCacheMutex);
+            if (!g_preCacheTimes.empty()) {
+                reqTime = g_preCacheTimes.front();
+                g_preCacheTimes.erase(g_preCacheTimes.begin());
+                isPreCache = true;
+            }
+        }
+        if (reqTime < 0.0) continue;
+
+        // Skip if already in cache
+        {
+            std::lock_guard<std::mutex> lck(g_thumbCacheMutex);
+            bool found = false;
+            for (const auto& e : g_thumbCache)
+                if (std::fabs(e.time - reqTime) < 0.3) { found = true; break; }
+            if (found) {
+                // Signal again to drain pre-cache queue
+                if (isPreCache && g_thumbRequestEvent) SetEvent(g_thumbRequestEvent);
+                continue;
+            }
+        }
+
+        if (!g_videoPlayer || !g_videoPlayer->IsLoaded()) continue;
+
+        int fw = g_videoPlayer->frameWidth;
+        int fh = g_videoPlayer->frameHeight;
+        int tw = THUMB_W, th = THUMB_MAX_H;
+        if (fw > 0 && fh > 0)
+        {
+            th = (int)((double)THUMB_W * fh / fw);
+            if (th > THUMB_MAX_H) { th = THUMB_MAX_H; tw = (int)((double)THUMB_MAX_H * fw / fh); }
+            if (tw < 1) tw = 1;
+            if (th < 1) th = 1;
+        }
+
+        ThumbnailData td;
+        td.time   = reqTime;
+        td.width  = tw;
+        td.height = th;
+        // Use fast (persistent decoder) path; fall back to slow path if not ready yet.
+        bool ok = g_videoPlayer->GetThumbnailPixelsFast(reqTime, tw, th, td.pixels);
+        if (!ok)
+            ok = g_videoPlayer->GetThumbnailPixels(reqTime, tw, th, td.pixels);
+        if (ok)
+        {
+            {
+                std::lock_guard<std::mutex> lck(g_thumbCacheMutex);
+                if (g_thumbCache.size() >= THUMB_CACHE_SIZE)
+                    g_thumbCache.erase(g_thumbCache.begin());
+                g_thumbCache.push_back(std::move(td));
+            }
+            // Always repaint: pre-cached frames appear immediately on hover
+            if (g_timecodeTooltipWnd)
+                InvalidateRect(g_timecodeTooltipWnd, nullptr, FALSE);
+        }
+        // Keep draining pre-cache queue
+        if (isPreCache && g_thumbRequestEvent)
+            SetEvent(g_thumbRequestEvent);
+    }
+}
+
+
+
 static LRESULT CALLBACK TimecodeTooltipWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -39,17 +170,82 @@ static LRESULT CALLBACK TimecodeTooltipWndProc(HWND hwnd, UINT msg, WPARAM wPara
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        HBRUSH bg = CreateSolidBrush(RGB(40, 40, 40));
+
+        // Dark background
+        HBRUSH bg = CreateSolidBrush(RGB(30, 30, 30));
         FillRect(hdc, &rc, bg);
         DeleteObject(bg);
+
+        if (!g_showVideoPreviewOnHover)
+        {
+            // Timecode-only mode: centre text in the whole window
+            HFONT font = CreateFont(13, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+                                    DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
+            HGDIOBJ oldFont = SelectObject(hdc, font);
+            SetTextColor(hdc, RGB(255, 255, 255));
+            SetBkMode(hdc, TRANSPARENT);
+            DrawTextW(hdc, g_timecodeTooltipText, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, oldFont);
+            DeleteObject(font);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        // Copy the nearest cached thumbnail (any distance) — always show something
+        std::vector<uint8_t> pixels;
+        int thumbW = 0, thumbH = 0;
+        {
+            std::lock_guard<std::mutex> lck(g_thumbCacheMutex);
+            double bestDist = 1e300;
+            for (const auto& e : g_thumbCache)
+            {
+                if (e.pixels.empty()) continue;
+                double d = std::fabs(e.time - g_timelineHoverTime);
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    pixels  = e.pixels;
+                    thumbW  = e.width;
+                    thumbH  = e.height;
+                }
+            }
+        }
+
+        const int tcH      = THUMB_TIMECODE_H;
+        int       thumbAreaH = rc.bottom - tcH;
+
+        if (!pixels.empty() && thumbW > 0 && thumbH > 0)
+        {
+            BITMAPINFO bmi          = {};
+            bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+            bmi.bmiHeader.biWidth       = thumbW;
+            bmi.bmiHeader.biHeight      = -thumbH; // top-down DIB
+            bmi.bmiHeader.biPlanes      = 1;
+            bmi.bmiHeader.biBitCount    = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+            int drawX = (rc.right  - thumbW) / 2;
+            int drawY = (thumbAreaH - thumbH) / 2;
+            SetDIBitsToDevice(hdc, drawX, drawY, thumbW, thumbH,
+                              0, 0, 0, thumbH, pixels.data(), &bmi, DIB_RGB_COLORS);
+        }
+
+        // Separator line
+        HBRUSH sep     = CreateSolidBrush(RGB(60, 60, 60));
+        RECT   sepRect = { 0, thumbAreaH, rc.right, thumbAreaH + 1 };
+        FillRect(hdc, &sepRect, sep);
+        DeleteObject(sep);
+
+        // Timecode text in bottom strip
+        RECT tcRect = { 0, thumbAreaH, rc.right, rc.bottom };
         HFONT font = CreateFont(13, 0, 0, 0, FW_NORMAL, 0, 0, 0,
                                 DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
         HGDIOBJ oldFont = SelectObject(hdc, font);
         SetTextColor(hdc, RGB(255, 255, 255));
         SetBkMode(hdc, TRANSPARENT);
-        DrawTextW(hdc, g_timecodeTooltipText, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(hdc, g_timecodeTooltipText, -1, &tcRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(hdc, oldFont);
         DeleteObject(font);
+
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -138,11 +334,33 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
             TIMECODE_TOOLTIP_CLASS, L"",
             WS_POPUP | WS_BORDER,
-            0, 0, 60, 22,
+            0, 0, THUMB_W, THUMB_MAX_H + THUMB_TIMECODE_H,
             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        // Start background thumbnail decode thread
+        g_thumbThreadExit.store(false);
+        g_thumbRequestTime.store(-1.0);
+        g_thumbRequestEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        g_thumbThread = std::thread(ThumbnailThreadFunc);
         return 0;
     }
     case WM_DESTROY:
+        // Stop thumbnail decode thread before destroying the tooltip window
+        if (g_thumbRequestEvent)
+        {
+            g_thumbThreadExit.store(true);
+            SetEvent(g_thumbRequestEvent);
+        }
+        if (g_thumbThread.joinable())
+            g_thumbThread.join();
+        {
+            std::lock_guard<std::mutex> lck(g_thumbCacheMutex);
+            g_thumbCache.clear();
+        }
+        if (g_thumbRequestEvent)
+        {
+            CloseHandle(g_thumbRequestEvent);
+            g_thumbRequestEvent = nullptr;
+        }
         if (g_timecodeTooltipWnd)
         {
             DestroyWindow(g_timecodeTooltipWnd);
@@ -288,7 +506,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             TrackMouseEvent(&tme);
             g_timelineMouseTracking = true;
         }
-        // Show timecode tooltip popup above the timeline
+        // Show timecode tooltip popup above the timeline (always; size depends on preview setting)
         if (g_timecodeTooltipWnd && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             RECT rc; GetClientRect(hwnd, &rc);
@@ -307,28 +525,67 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     else
                         swprintf(g_timecodeTooltipText, 32, L"%02d:%02d", mins, secs);
 
-                    HDC hdc = GetDC(g_timecodeTooltipWnd);
-                    HFONT font = CreateFont(13, 0, 0, 0, FW_NORMAL, 0, 0, 0,
-                                           DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
-                    HGDIOBJ oldFont = SelectObject(hdc, font);
-                    SIZE sz;
-                    GetTextExtentPoint32W(hdc, g_timecodeTooltipText,
-                                         (int)wcslen(g_timecodeTooltipText), &sz);
-                    SelectObject(hdc, oldFont);
-                    DeleteObject(font);
-                    ReleaseDC(g_timecodeTooltipWnd, hdc);
+                    int tooltipW, tooltipH;
+                    if (g_showVideoPreviewOnHover)
+                    {
+                        // Size to thumbnail + timecode strip
+                        int ttW = THUMB_W, ttH = THUMB_MAX_H;
+                        int fw = g_videoPlayer->frameWidth;
+                        int fh = g_videoPlayer->frameHeight;
+                        if (fw > 0 && fh > 0)
+                        {
+                            ttH = (int)((double)THUMB_W * fh / fw);
+                            if (ttH > THUMB_MAX_H) { ttH = THUMB_MAX_H; ttW = (int)((double)THUMB_MAX_H * fw / fh); }
+                            if (ttW < 60) ttW = 60;
+                            if (ttH < 20) ttH = 20;
+                        }
+                        tooltipW = ttW;
+                        tooltipH = ttH + THUMB_TIMECODE_H;
+                    }
+                    else
+                    {
+                        // Timecode-only: measure text and add small padding
+                        HDC hdc = GetDC(g_timecodeTooltipWnd);
+                        HFONT font = CreateFont(13, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+                                               DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
+                        HGDIOBJ oldFont = SelectObject(hdc, font);
+                        SIZE sz = {};
+                        GetTextExtentPoint32W(hdc, g_timecodeTooltipText,
+                                              (int)wcslen(g_timecodeTooltipText), &sz);
+                        SelectObject(hdc, oldFont);
+                        DeleteObject(font);
+                        ReleaseDC(g_timecodeTooltipWnd, hdc);
+                        const int PAD = 8;
+                        tooltipW = sz.cx + PAD * 2;
+                        tooltipH = sz.cy + PAD;
+                        if (tooltipW < 50) tooltipW = 50;
+                    }
 
-                    const int PAD = 6;
-                    int tw = sz.cx + PAD * 2;
-                    int th = sz.cy + PAD * 2;
                     POINT pt = { g_timelineHoverX, 0 };
                     ClientToScreen(hwnd, &pt);
-                    int sx = pt.x - tw / 2;
-                    int sy = pt.y - th - 2;
-                    SetWindowPos(g_timecodeTooltipWnd, HWND_TOPMOST, sx, sy, tw, th,
+                    int sx = pt.x - tooltipW / 2;
+                    int sy = pt.y - tooltipH - 4;
+                    SetWindowPos(g_timecodeTooltipWnd, HWND_TOPMOST, sx, sy, tooltipW, tooltipH,
                                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
                     InvalidateRect(g_timecodeTooltipWnd, nullptr, FALSE);
-                    UpdateWindow(g_timecodeTooltipWnd);
+
+                    if (g_showVideoPreviewOnHover)
+                    {
+                        // Request thumbnail decode for the current 0.5 s slot
+                        double slotTime = std::floor(hoverTime * 2.0) / 2.0;
+                        g_timelineHoverTime = slotTime;
+                        bool needDecode = true;
+                        {
+                            std::lock_guard<std::mutex> lck(g_thumbCacheMutex);
+                            for (const auto& e : g_thumbCache)
+                                if (std::fabs(e.time - slotTime) < 0.3) { needDecode = false; break; }
+                        }
+                        if (needDecode && g_thumbRequestEvent)
+                        {
+                            g_thumbRequestTime.store(slotTime);
+                            SetEvent(g_thumbRequestEvent);
+                        }
+                    }
                 }
             }
         }
@@ -581,6 +838,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         break;
     case WM_MOUSELEAVE:
         g_timelineHoverX = -1;
+        g_timelineHoverTime = -1.0;
         g_timelineMouseTracking = false;
         if (g_timecodeTooltipWnd)
             ShowWindow(g_timecodeTooltipWnd, SW_HIDE);

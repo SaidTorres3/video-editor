@@ -196,6 +196,23 @@ private:
     double seekRefineTarget;
     std::uint64_t seekRefineGeneration;
 
+    // Persistent thumbnail decoder (kept open for the lifetime of the loaded file).
+    struct ThumbCtx {
+        AVFormatContext* fmt  = nullptr;
+        AVCodecContext*  cc   = nullptr;
+        AVFrame*         frm  = nullptr;
+        AVPacket*        pkt  = nullptr;
+        SwsContext*      sws  = nullptr;
+        int              vidIdx = -1;
+        double           sto    = 0.0;  // startTimeOffset, matches main player
+        int              lastDstW = 0;
+        int              lastDstH = 0;
+        std::mutex       mtx;
+    };
+    std::unique_ptr<ThumbCtx> m_thumbCtx;
+    void InitThumbnailCtx();
+    void CleanupThumbnailCtx();
+
 public:
     VideoPlayer(HWND parent);
     ~VideoPlayer();
@@ -237,6 +254,14 @@ public:
     void SetPosition(int x, int y, int width, int height);
     void Render();
     void ForceRedraw();
+
+    // Decode a single frame at `time` scaled to dstW x dstH, returning BGRA pixels.
+    // Opens a separate AVFormatContext so it is safe to call from a background thread.
+    bool GetThumbnailPixels(double time, int dstW, int dstH, std::vector<uint8_t>& pixels) const;
+
+    // Fast variant: reuses the persistent thumbnail decoder (avoids re-opening the file).
+    // Thread-safe via its own internal mutex.
+    bool GetThumbnailPixelsFast(double time, int dstW, int dstH, std::vector<uint8_t>& pixels);
 
     // Audio track management
     int GetAudioTrackCount() const { return static_cast<int>(audioTracks.size()); }
