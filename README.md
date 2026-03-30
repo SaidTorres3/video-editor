@@ -12,6 +12,7 @@ All source files now reside under the `src/` directory to keep the project organ
 
 - Load and play various video formats (MP4, AVI, MOV, MKV, WMV, FLV, WebM, M4V, 3GP)
 - Play, pause, stop controls
+- Frame preview when mousing over the timeline.
 - **Spacebar toggles play/pause** for quick control
 - **Drag and drop** a video onto the window to load it
 - Optional auto-play when loading videos (configurable in Options)
@@ -20,7 +21,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - Keyboard shortcuts for quick navigation (Left/Right arrows skip 5s, J/L skip 10s, K pauses, ',' and '.' step frames)
 - Frame-by-frame playback control
 - Hardware-accelerated rendering using Direct2D
-- DXVA2 hardware decoding for H.264, HEVC, VP9, and AV1 with automatic software fallback for stability
+- Hardware decoding for H.264, HEVC, VP9, and AV1 with automatic software fallback for stability
 
 ### Audio Playback
 
