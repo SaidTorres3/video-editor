@@ -25,6 +25,8 @@ extern "C"
 #include <rnnoise.h>
 
 #include <vector>
+#include <string>
+#include <map>
 #include <memory>
 #include <thread>
 #include <mutex>
@@ -192,25 +194,26 @@ private:
         double                  startOff  = 0.0;
         double                  fps       = 0.0;
         int                     sw = 0, sh = 0;
-        // Request: decode every frame in [reqLo, reqHi] inclusive
-        int64_t                 reqLo = -1;
-        int64_t                 reqHi = -1;
-        // Result: all decoded frames for the requested range
+
+        // Current target: the background thread tries to ensure 
+        // we have [target - WINDOW, target] in cache.
+        int64_t                 targetFrame = -1;
+
         struct ReadyFrame {
-            int64_t number;
-            double  pts;
+            double               pts;
             std::vector<uint8_t> pixels;
         };
-        std::vector<ReadyFrame> readyQ;   // sorted ascending by frame number
-        uint64_t                readyGen  = UINT64_MAX;
+        // Map of frame number -> Frame data
+        std::map<int64_t, ReadyFrame> cache;
+        
         std::thread             thread;
-        static constexpr int    WINDOW    = 8;
+        static constexpr int    WINDOW = 60; // 2 seconds of fluid backward review - Safe RAM usage
     };
     std::unique_ptr<BwdPrefetch> m_bwdPrefetch;
 
     void   BwdPrefetchThreadFunc();
-    void   RequestBwdPrefetch(int64_t frame);
-    bool   ConsumeBwdPrefetch(int64_t frame);  // returns true + fills buffer if ready
+    void   RequestBwdPrefetch(int64_t frame); 
+    bool   ConsumeBwdPrefetch(int64_t frame);  // Instant lookup from map
     std::thread seekRefineThread;
     std::mutex seekRefineMutex;
     std::condition_variable seekRefineCondition;

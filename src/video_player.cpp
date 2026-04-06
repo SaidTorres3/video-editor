@@ -219,9 +219,8 @@ bool VideoPlayer::LoadVideo(const std::wstring &filename)
         m_bwdPrefetch->fps       = frameRate;
         m_bwdPrefetch->sw        = frameWidth;
         m_bwdPrefetch->sh        = frameHeight;
-        m_bwdPrefetch->reqLo     = -1;
-        m_bwdPrefetch->reqHi     = -1;
-        m_bwdPrefetch->readyQ.clear();
+        m_bwdPrefetch->targetFrame = -1;
+        m_bwdPrefetch->cache.clear();
         m_bwdPrefetch->workGen++;
     }
     m_bwdPrefetch->cv.notify_one();
@@ -258,9 +257,8 @@ void VideoPlayer::UnloadVideo()
     {
         std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx);
         m_bwdPrefetch->fileUtf8.clear();
-        m_bwdPrefetch->reqLo     = -1;
-        m_bwdPrefetch->reqHi     = -1;
-        m_bwdPrefetch->readyQ.clear();
+        m_bwdPrefetch->targetFrame = -1;
+        m_bwdPrefetch->cache.clear();
         m_bwdPrefetch->workGen++;
     }
     m_bwdPrefetch->cv.notify_one();
@@ -475,43 +473,33 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     // Backward navigation
     if (frameNumber < currentFrame)
     {
-        // Try the pre-decoded frame from the background thread (instant).
-        if (ConsumeBwdPrefetch(frameNumber))
+        extern bool g_improveSeekPerformance;
+        if (g_improveSeekPerformance)
         {
-            dropAudioDuringStepping = false;
-            RequestBwdPrefetch(frameNumber - 1);
+            // Try the pre-decoded window from the background thread.
+            if (ConsumeBwdPrefetch(frameNumber))
+            {
+                dropAudioDuringStepping = false;
+                RequestBwdPrefetch(frameNumber - 1);
+            }
+            else 
+            {
+                // Non-blocking request
+                RequestBwdPrefetch(frameNumber);
+            }
             return;
         }
 
-        // Prefetch not ready: hard seek+decode on this thread.
-        double targetTime = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
-        double seekTime   = std::max(0.0, targetTime - 0.5);
-        AVStream *vs = formatContext->streams[videoStreamIndex];
-        int64_t   ts = static_cast<int64_t>((seekTime + startTimeOffset) / av_q2d(vs->time_base));
-        {
-            std::lock_guard<std::mutex> lock(decodeMutex);
-            av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
-            avcodec_flush_buffers(codecContext);
-            for (auto &track : audioTracks)
-                if (track->codecContext) avcodec_flush_buffers(track->codecContext);
-            { std::lock_guard<std::mutex> al(audioMutex); for (auto &tr : audioTracks) tr->buffer.clear(); }
-            const AVIndexEntry *entry =
-                avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
-            if (entry) {
-                currentPts   = entry->timestamp * av_q2d(vs->time_base) - startTimeOffset;
-                currentFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
-            } else {
-                currentPts   = seekTime;
-                currentFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
-            }
-            UpdateCropForTime(currentPts);
-        }
-        while (currentFrame <= frameNumber) {
-            bool last = (currentFrame == frameNumber);
+            // --- OLD BLOCKING BACKWARD SEEK (Memory efficient) ---
+        double seconds = frameRate > 0 ? (frameNumber / frameRate) : 0.0;
+        SeekToTimeInternal(seconds, INT_MAX, false, true);
+        while (currentFrame < frameNumber) {
+            bool last = (currentFrame + 1 >= frameNumber);
             if (!m_decoder->DecodeNextFrame(last, false, last)) break;
             currentFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
         }
         currentFrame = frameNumber;
+        return;
     }
     else
     {
@@ -530,31 +518,42 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 
 void VideoPlayer::RequestBwdPrefetch(int64_t frame)
 {
-    if (!isLoaded || frame < 0) return;
-    int64_t lo = std::max(int64_t(0), frame - BwdPrefetch::WINDOW + 1);
-    int64_t hi = frame;
+    extern bool g_improveSeekPerformance;
+    if (!g_improveSeekPerformance || !isLoaded || frame < 0) return;
     {
         std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx);
-        // Skip if we're already working on (or have) this exact range.
-        if (m_bwdPrefetch->reqLo == lo && m_bwdPrefetch->reqHi == hi) return;
-        m_bwdPrefetch->reqLo = lo;
-        m_bwdPrefetch->reqHi = hi;
-        m_bwdPrefetch->workGen++;
+        m_bwdPrefetch->targetFrame = frame;
     }
     m_bwdPrefetch->cv.notify_one();
 }
 
 bool VideoPlayer::ConsumeBwdPrefetch(int64_t frame)
 {
+    extern bool g_improveSeekPerformance;
+    if (!g_improveSeekPerformance) return false;
+    
     std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx);
-    auto& q = m_bwdPrefetch->readyQ;
-    for (auto it = q.begin(); it != q.end(); ++it) {
-        if (it->number == frame) {
-            if ((int)it->pixels.size() != rgbBufferSize) return false;
-            std::copy(it->pixels.begin(), it->pixels.end(), buffer);
+    auto it = m_bwdPrefetch->cache.find(frame);
+    if (it != m_bwdPrefetch->cache.end()) {
+        const auto& pixels = it->second.pixels;
+        // Fast conversion from RGB24 (cache) back to BGRA (display buffer)
+        // RGB24: [R, G, B, R, G, B, ...]
+        // BGRA:  [B, G, R, A, B, G, R, A, ...]
+        uint8_t* dst = buffer;
+        const uint8_t* src = pixels.data();
+        int count = frameWidth * frameHeight;
+        if ((int)pixels.size() == count * 3) {
+            for (int i = 0; i < count; ++i) {
+                dst[0] = src[2]; // B
+                dst[1] = src[1]; // G
+                dst[2] = src[0]; // R
+                dst[3] = 255;    // A
+                dst += 4;
+                src += 3;
+            }
             currentFrame = frame;
-            currentPts   = it->pts;
-            q.erase(it);
+            currentPts   = it->second.pts;
+            m_bwdPrefetch->targetFrame = frame - 1; 
             UpdateCropForTime(currentPts);
             m_renderer->UpdateDisplay();
             UpdateTimeline();
@@ -590,34 +589,33 @@ void VideoPlayer::BwdPrefetchThreadFunc()
     };
 
     uint64_t lastGen = UINT64_MAX;
+    int64_t lastTarget = -1;
 
     for (;;) {
         std::string lFile; double lOff, lFps; int lW, lH;
-        int64_t lLo, lHi; uint64_t lGen;
+        int64_t lTarget; uint64_t lGen;
         {
             std::unique_lock<std::mutex> lk(m_bwdPrefetch->mtx);
-            m_bwdPrefetch->cv.wait(lk, [&]{
-                return m_bwdPrefetch->exitFlag || m_bwdPrefetch->workGen != lastGen;
+            m_bwdPrefetch->cv.wait_for(lk, std::chrono::milliseconds(20), [&]{
+                return m_bwdPrefetch->exitFlag || m_bwdPrefetch->workGen != lastGen || m_bwdPrefetch->targetFrame != lastTarget;
             });
             if (m_bwdPrefetch->exitFlag) break;
-            lFile = m_bwdPrefetch->fileUtf8;
-            lOff  = m_bwdPrefetch->startOff;
-            lFps  = m_bwdPrefetch->fps;
-            lW    = m_bwdPrefetch->sw;
-            lH    = m_bwdPrefetch->sh;
-            lLo   = m_bwdPrefetch->reqLo;
-            lHi   = m_bwdPrefetch->reqHi;
-            lGen  = m_bwdPrefetch->workGen;
+            lFile   = m_bwdPrefetch->fileUtf8;
+            lOff    = m_bwdPrefetch->startOff;
+            lFps    = m_bwdPrefetch->fps;
+            lW      = m_bwdPrefetch->sw;
+            lH      = m_bwdPrefetch->sh;
+            lTarget = m_bwdPrefetch->targetFrame;
+            lGen    = m_bwdPrefetch->workGen;
         }
-        lastGen = lGen;
 
-        // (Re)open file context when the loaded file changes.
-        if (lFile != openFile) {
+        if (lFile.empty()) { lastGen = lGen; lastTarget = lTarget; continue; }
+
+        if (lFile != openFile || lGen != lastGen) {
             closeCtx();
-            if (lFile.empty()) continue;
             if (avformat_open_input(&pfmt, lFile.c_str(), nullptr, nullptr) < 0) { pfmt = nullptr; continue; }
             if (avformat_find_stream_info(pfmt, nullptr) < 0) { avformat_close_input(&pfmt); continue; }
-            for (unsigned i = 0; i < pfmt->nb_streams; i++)
+            for (unsigned i = 0; i < (unsigned)pfmt->nb_streams; i++)
                 if (pfmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) { pvidIdx = (int)i; break; }
             if (pvidIdx < 0) { avformat_close_input(&pfmt); pfmt = nullptr; continue; }
             AVCodecParameters* cp = pfmt->streams[pvidIdx]->codecpar;
@@ -625,85 +623,104 @@ void VideoPlayer::BwdPrefetchThreadFunc()
             if (!codec) { avformat_close_input(&pfmt); pfmt = nullptr; continue; }
             pcc = avcodec_alloc_context3(codec);
             avcodec_parameters_to_context(pcc, cp);
-            pcc->thread_count = 0; // use all CPU cores
+            pcc->thread_count = 0; 
             if (avcodec_open2(pcc, codec, nullptr) < 0) { avcodec_free_context(&pcc); avformat_close_input(&pfmt); pfmt = nullptr; continue; }
             pfrm = av_frame_alloc(); phw = av_frame_alloc(); ppkt = av_packet_alloc();
-            pbufSz = av_image_get_buffer_size(AV_PIX_FMT_BGRA, lW, lH, 32);
+            
+            // To be extremely light on RAM, we cache as RGB24 (3-byte per pixel)
+            pbufSz = av_image_get_buffer_size(AV_PIX_FMT_RGB24, lW, lH, 1);
             pbuf = (uint8_t*)av_malloc(pbufSz);
             openFile = lFile;
+            lastGen = lGen;
         }
 
-        if (lLo < 0 || lHi < 0 || !pfmt || !pbuf) continue;
+        if (lTarget < 0) { lastTarget = lTarget; continue; }
 
-        // Seek to half a second before the start of our window.
-        double startTime = lFps > 0 ? lLo / lFps : 0.0;
-        double seekTime  = std::max(0.0, startTime - 0.5);
+        int64_t missing = -1;
+        {
+            std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx);
+            // Ultra-aggressive trimming for low memory: 
+            // Keep exactly [lTarget - WINDOW, lTarget + 5]
+            for (auto it = m_bwdPrefetch->cache.begin(); it != m_bwdPrefetch->cache.end(); ) {
+                if (it->first > lTarget + 10 || it->first < lTarget - BwdPrefetch::WINDOW - 10) {
+                    it = m_bwdPrefetch->cache.erase(it);
+                } else ++it;
+            }
+            if ((int)m_bwdPrefetch->cache.size() >= BwdPrefetch::WINDOW) {
+                lastTarget = lTarget;
+                continue;
+            }
+            for (int64_t f = lTarget; f >= lTarget - BwdPrefetch::WINDOW && f >= 0; f--) {
+                if (m_bwdPrefetch->cache.find(f) == m_bwdPrefetch->cache.end()) {
+                    missing = f;
+                    break;
+                }
+            }
+        }
+
+        if (missing < 0) { lastTarget = lTarget; continue; }
+
+        double missingTime = lFps > 0 ? (missing / lFps) : 0.0;
+        double seekTime    = std::max(0.0, missingTime - 0.5); // Tight seek
         AVStream* pvs = pfmt->streams[pvidIdx];
         int64_t   ts  = static_cast<int64_t>((seekTime + lOff) / av_q2d(pvs->time_base));
+        
         av_seek_frame(pfmt, pvidIdx, ts, AVSEEK_FLAG_BACKWARD);
         avcodec_flush_buffers(pcc);
 
-        // Decode packets from seekTime through lHi, collecting every
-        // frame whose number falls within [lLo, lHi].
-        std::vector<BwdPrefetch::ReadyFrame> collected;
-        collected.reserve(lHi - lLo + 1);
-
         while (true) {
-            { std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx); if (m_bwdPrefetch->workGen != lGen) goto prefetch_next; }
+            {
+                std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx);
+                if (m_bwdPrefetch->workGen != lGen) goto prefetch_reset_loop;
+                // If target changed, re-evaluate to avoid decoding deep into the past
+                if (m_bwdPrefetch->targetFrame != lTarget) break;
+            }
+
             if (av_read_frame(pfmt, ppkt) < 0) break;
             if (ppkt->stream_index != pvidIdx) { av_packet_unref(ppkt); continue; }
             if (avcodec_send_packet(pcc, ppkt) < 0) { av_packet_unref(ppkt); continue; }
             av_packet_unref(ppkt);
+
             while (avcodec_receive_frame(pcc, phw) == 0) {
                 double pts = 0.0;
                 if (phw->best_effort_timestamp != AV_NOPTS_VALUE)
                     pts = phw->best_effort_timestamp * av_q2d(pvs->time_base) - lOff;
                 else if (phw->pts != AV_NOPTS_VALUE)
                     pts = phw->pts * av_q2d(pvs->time_base) - lOff;
+                
                 int64_t f = static_cast<int64_t>(pts * lFps + 0.5);
 
-                // Only convert frames that fall in our target range.
-                if (f >= lLo && f <= lHi) {
+                if (f >= lTarget - BwdPrefetch::WINDOW - 5 && f <= lTarget + 10) {
                     AVPixelFormat fmt2 = (AVPixelFormat)phw->format;
                     if (fmt2 != pswsFmt) {
                         if (psws) sws_freeContext(psws);
-                        psws = sws_getContext(lW, lH, fmt2, lW, lH, AV_PIX_FMT_BGRA,
+                        // Convert to RGB24 in background for massive memory saving!
+                        psws = sws_getContext(lW, lH, fmt2, lW, lH, AV_PIX_FMT_RGB24,
                                              SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
                         pswsFmt = fmt2;
                     }
                     if (psws) {
                         uint8_t* d[4]{}; int ls[4]{};
-                        av_image_fill_arrays(d, ls, pbuf, AV_PIX_FMT_BGRA, lW, lH, 32);
+                        av_image_fill_arrays(d, ls, pbuf, AV_PIX_FMT_RGB24, lW, lH, 1);
                         sws_scale(psws, (const uint8_t* const*)phw->data, phw->linesize, 0, lH, d, ls);
+                        
                         BwdPrefetch::ReadyFrame rf;
-                        rf.number = f;
-                        rf.pts    = pts;
+                        rf.pts = pts;
                         rf.pixels.assign(pbuf, pbuf + pbufSz);
-                        collected.push_back(std::move(rf));
+
+                        std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx);
+                        m_bwdPrefetch->cache[f] = std::move(rf);
                     }
                 }
                 av_frame_unref(phw);
-                if (f >= lHi) goto prefetch_done;
+                if (f > lTarget + 10) { goto gop_done_loop; }
             }
         }
-        prefetch_done:
-        if (!collected.empty()) {
-            // Sort ascending and publish.
-            std::sort(collected.begin(), collected.end(),
-                [](const BwdPrefetch::ReadyFrame& a, const BwdPrefetch::ReadyFrame& b){
-                    return a.number < b.number;
-                });
-            std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx);
-            if (m_bwdPrefetch->workGen == lGen) {
-                m_bwdPrefetch->readyQ   = std::move(collected);
-                m_bwdPrefetch->readyGen = lGen;
-            }
-        }
-        prefetch_next:;
+    gop_done_loop:;
+    prefetch_reset_loop:;
     }
     closeCtx();
 }
-
 
 void VideoPlayer::SeekToTime(double seconds, int decodeCount)
 {
@@ -751,7 +768,6 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     if (!smartSeek)
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
-
 
         AVStream *vs = formatContext->streams[videoStreamIndex];
         int64_t ts = static_cast<int64_t>((seconds + startTimeOffset) / av_q2d(vs->time_base));

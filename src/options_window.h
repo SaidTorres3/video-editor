@@ -13,6 +13,7 @@
 #define ID_BUTTON_B2_SETTINGS   1032
 #define ID_CHECKBOX_AUTO_PLAY   1033
 #define ID_CHECKBOX_HOVER_PREVIEW 1034
+#define ID_CHECKBOX_IMPROVE_SEEK  1035
 #define ID_TAB_GENERAL          1040
 #define ID_TAB_ENCODING         1041
 #define ID_TAB_UPLOAD           1042
@@ -52,6 +53,7 @@ extern EncoderSelection g_encoderSelection;
 extern bool g_logToFile;
 extern bool g_autoPlay;
 extern bool g_showVideoPreviewOnHover;
+extern bool g_improveSeekPerformance;
 extern std::wstring g_qualityPreset;
 
 extern std::wstring g_b2KeyId;
