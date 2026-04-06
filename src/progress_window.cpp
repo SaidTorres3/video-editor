@@ -125,13 +125,14 @@ LRESULT CALLBACK ProgressProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         }
 
         case WM_CTLCOLORSTATIC: {
+            static HBRUSH hbr = CreateSolidBrush(DARK_BG);
             HDC hdc = (HDC)wParam;
             
             // Set dark background and light text for static controls
             SetBkColor(hdc, DARK_BG);
             SetTextColor(hdc, DARK_TEXT);
             
-            return (LRESULT)CreateSolidBrush(DARK_BG);
+            return (LRESULT)hbr;
         }
 
         case WM_CLOSE:

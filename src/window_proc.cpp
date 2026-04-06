@@ -303,6 +303,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     break;
 
     case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
     case WM_CTLCOLORBTN:
     case WM_CTLCOLORLISTBOX:
     {

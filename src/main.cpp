@@ -13,6 +13,8 @@
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 
+#pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+
 #include "video_player.h"
 #include "options_window.h"
 #include "progress_window.h"

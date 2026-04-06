@@ -2,6 +2,7 @@
 #include "utils.h"
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <commctrl.h>
 
 static HWND g_hOptionsWnd = nullptr;
 static HWND g_hUploadWnd = nullptr;
@@ -28,6 +29,7 @@ EncoderSelection g_encoderSelection = EncoderSelection::Libx264;
 bool g_logToFile = true;
 bool g_autoPlay = true;
 bool g_showVideoPreviewOnHover = true;
+bool g_improveSeekPerformance = false; // Default off, per user's "enable it" request
 std::wstring g_qualityPreset = L"Medium";
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
@@ -66,6 +68,9 @@ void LoadSettings()
         size = sizeof(val);
         if (RegQueryValueExW(hKey, L"HoverPreview", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
             g_showVideoPreviewOnHover = (val != 0);
+        size = sizeof(val);
+        if (RegQueryValueExW(hKey, L"SeekPerformance", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
+            g_improveSeekPerformance = (val != 0);
 
         wchar_t buf[256];
         DWORD sz = sizeof(buf);
@@ -132,6 +137,8 @@ void SaveSettings()
         RegSetValueExW(hKey, L"AutoPlay", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         val = g_showVideoPreviewOnHover ? 1 : 0;
         RegSetValueExW(hKey, L"HoverPreview", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = g_improveSeekPerformance ? 1 : 0;
+        RegSetValueExW(hKey, L"SeekPerformance", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"B2KeyId", 0, REG_SZ, (const BYTE*)g_b2KeyId.c_str(), (DWORD)((g_b2KeyId.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2AppKey", 0, REG_SZ, (const BYTE*)g_b2AppKey.c_str(), (DWORD)((g_b2AppKey.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2BucketId", 0, REG_SZ, (const BYTE*)g_b2BucketId.c_str(), (DWORD)((g_b2BucketId.size()+1)*sizeof(wchar_t)));
@@ -290,16 +297,47 @@ void ShowOptionsWindow(HWND parent)
                                       (HMENU)ID_CHECKBOX_HOVER_PREVIEW, hInst, nullptr);
     ApplyDarkTheme(hHoverPreview);
 
+    HWND hSeekPerf = CreateWindow(L"BUTTON", L"Improve frame seek performance",
+                                  WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                  20, 134, 250, 22, g_hGeneralPanel,
+                                  (HMENU)ID_CHECKBOX_IMPROVE_SEEK, hInst, nullptr);
+    ApplyDarkTheme(hSeekPerf);
+    SendMessage(hSeekPerf, BM_SETCHECK, g_improveSeekPerformance ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    // Tooltip for seek performance
+    INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_WIN95_CLASSES };
+    InitCommonControlsEx(&icex);
+
+    // Parent to NULL (top-level popup) to avoid message swallowed by child panels
+    HWND hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr,
+                                   WS_POPUP | TTS_ALWAYSTIP | TTS_BALLOON,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                                   nullptr, nullptr, hInst, nullptr);
+    
+    SendMessage(hTooltip, TTM_SETMAXTIPWIDTH, 0, 300);
+
+    TOOLINFO ti = { 0 };
+    ti.cbSize = sizeof(ti);
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = g_hGeneralPanel;
+    ti.uId = (UINT_PTR)hSeekPerf;
+    ti.lpszText = (LPWSTR)L"Increase the ram consumption to ~1.3 gb but improves the speed of frame seeking using the buttons ',' and '.'";
+    
+    SendMessage(hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+    SendMessage(hTooltip, TTM_ACTIVATE, TRUE, 0);
+    SendMessage(hTooltip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
+
     CreateWindow(L"STATIC", L"Logging", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 0, 140, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
+                 0, 175, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
     HWND hLog = CreateWindow(L"BUTTON", L"Enable debug logging",
                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                             20, 168, 250, 22, g_hGeneralPanel,
+                             20, 198, 250, 22, g_hGeneralPanel,
                              (HMENU)ID_CHECKBOX_ENABLE_LOG, hInst, nullptr);
     ApplyDarkTheme(hLog);
     SendMessage(hLog, BM_SETCHECK, g_logToFile ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hAuto, BM_SETCHECK, g_autoPlay ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hHoverPreview, BM_SETCHECK, g_showVideoPreviewOnHover ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hSeekPerf, BM_SETCHECK, g_improveSeekPerformance ? BST_CHECKED : BST_UNCHECKED, 0);
 
     // ===== ENCODING PANEL =====
     g_hEncodingPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
@@ -545,10 +583,12 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hLog = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUTO_PLAY);
             HWND hHoverPrev = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_HOVER_PREVIEW);
+            HWND hSeekPerf = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_IMPROVE_SEEK);
             HWND hAutoUpload = GetDlgItem(g_hUploadPanel, ID_CHECKBOX_AUTO_UPLOAD);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hHoverPrev) g_showVideoPreviewOnHover = SendMessage(hHoverPrev, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hSeekPerf) g_improveSeekPerformance = SendMessage(hSeekPerf, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoUpload = SendMessage(hAutoUpload, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
             // Get exportation settings
@@ -595,9 +635,11 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hLog = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_ENABLE_LOG);
             HWND hAuto = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUTO_PLAY);
             HWND hHoverPrev = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_HOVER_PREVIEW);
+            HWND hSeekPerf = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_IMPROVE_SEEK);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hHoverPrev) g_showVideoPreviewOnHover = SendMessage(hHoverPrev, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hSeekPerf) g_improveSeekPerformance = SendMessage(hSeekPerf, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
             // Get exportation settings
             {

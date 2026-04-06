@@ -25,6 +25,8 @@ extern "C"
 #include <rnnoise.h>
 
 #include <vector>
+#include <string>
+#include <map>
 #include <memory>
 #include <thread>
 #include <mutex>
@@ -181,13 +183,37 @@ private:
     // When true, audio packets are dropped while stepping to avoid stalls
     bool dropAudioDuringStepping;
 
-    struct CachedFrame {
-        int64_t number;
-        double pts;
-        std::vector<uint8_t> pixels;
+    // Background backward-frame prefetch: owns a completely separate
+    // AVFormatContext so it never races with the main player.
+    struct BwdPrefetch {
+        std::mutex              mtx;
+        std::condition_variable cv;
+        bool                    exitFlag  = false;
+        uint64_t                workGen   = 0;
+        std::string             fileUtf8;
+        double                  startOff  = 0.0;
+        double                  fps       = 0.0;
+        int                     sw = 0, sh = 0;
+
+        // Current target: the background thread tries to ensure 
+        // we have [target - WINDOW, target] in cache.
+        int64_t                 targetFrame = -1;
+
+        struct ReadyFrame {
+            double               pts;
+            std::vector<uint8_t> pixels;
+        };
+        // Map of frame number -> Frame data
+        std::map<int64_t, ReadyFrame> cache;
+        
+        std::thread             thread;
+        static constexpr int    WINDOW = 60; // 2 seconds of fluid backward review - Safe RAM usage
     };
-    std::deque<CachedFrame> frameCache;
-    size_t frameCacheLimit;
+    std::unique_ptr<BwdPrefetch> m_bwdPrefetch;
+
+    void   BwdPrefetchThreadFunc();
+    void   RequestBwdPrefetch(int64_t frame); 
+    bool   ConsumeBwdPrefetch(int64_t frame);  // Instant lookup from map
     std::thread seekRefineThread;
     std::mutex seekRefineMutex;
     std::condition_variable seekRefineCondition;
