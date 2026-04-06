@@ -169,9 +169,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         LocalFree(argv);
 
     MSG msg = {};
+    UINT_PTR g_exactSeekTimer = 0;
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
-        if (msg.message == WM_KEYDOWN && g_videoPlayer && g_videoPlayer->IsLoaded())
+        if (msg.message == WM_TIMER && msg.wParam == g_exactSeekTimer && g_exactSeekTimer != 0)
+        {
+            KillTimer(nullptr, g_exactSeekTimer);
+            g_exactSeekTimer = 0;
+            if (g_previewSeekTime >= 0.0 && g_videoPlayer && g_videoPlayer->IsLoaded())
+            {
+                bool wasPlaying = g_videoPlayer->IsPlaying();
+                if (wasPlaying)
+                    g_videoPlayer->Pause();
+                g_videoPlayer->SeekToTimeExact(g_previewSeekTime);
+                if (wasPlaying)
+                    g_videoPlayer->Play();
+                g_previewSeekTime = -1.0;
+            }
+            continue;
+        }
+
+        if ((msg.message == WM_KEYDOWN || msg.message == WM_KEYUP) && g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             HWND focused = GetFocus();
             bool isEdit = false;
@@ -184,158 +202,194 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
             }
             if (!isEdit)
             {
-                double speedMultiplier = (GetKeyState(VK_SHIFT) & 0x8000) ? 10.0 : 1.0;
-
-                bool handled = true;
-                switch (msg.wParam)
+                if (msg.message == WM_KEYUP)
                 {
-                case VK_SPACE:
-                    if (g_videoPlayer->IsPlaying())
-                        g_videoPlayer->Pause();
-                    else
-                        g_videoPlayer->Play();
-                    break;
-                case VK_LEFT:
-                case 'J':
-                case 'j':
-                {
-                    // Use preview time as base if we are currently dragging/throttling
-                    double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
-                    double offset = ((msg.wParam == VK_LEFT) ? 5.0 : 10.0) * speedMultiplier;
-                    double t = currentBase - offset;
-                    if (t < 0.0) t = 0.0;
-
-                    g_previewSeekTime = t;
-                    if (g_hTimeline) {
-                        InvalidateRect(g_hTimeline, NULL, FALSE);
-                        UpdateWindow(g_hTimeline);
-                    }
-                    UpdateControls(); // Force immediate update of time label
-
-                    // Throttle: If another keydown for the same key is pending, skip the seek
-                    MSG nextMsg;
-                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                        if (nextMsg.wParam == msg.wParam) {
-                            continue; // Skip the heavy operation
-                        }
-                    }
-
-                    bool wasPlaying = g_videoPlayer->IsPlaying();
-                    if (wasPlaying)
-                        g_videoPlayer->Pause();
-                    g_videoPlayer->SeekToTime(t);
-                    if (wasPlaying)
-                        g_videoPlayer->Play();
-                    
-                    g_previewSeekTime = -1.0;
-                    break;
-                }
-                case VK_RIGHT:
-                case 'L':
-                case 'l':
-                {
-                    double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
-                    double offset = ((msg.wParam == VK_RIGHT) ? 5.0 : 10.0) * speedMultiplier;
-                    double t = currentBase + offset;
-                    double dur = g_videoPlayer->GetDuration();
-                    if (t > dur) t = dur;
-
-                    g_previewSeekTime = t;
-                    if (g_hTimeline) {
-                        InvalidateRect(g_hTimeline, NULL, FALSE);
-                        UpdateWindow(g_hTimeline);
-                    }
-                    UpdateControls(); // Force immediate update of time label
-
-                    MSG nextMsg;
-                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                        if (nextMsg.wParam == msg.wParam) {
-                            continue;
-                        }
-                    }
-
-                    bool wasPlaying = g_videoPlayer->IsPlaying();
-                    if (wasPlaying)
-                        g_videoPlayer->Pause();
-                    g_videoPlayer->SeekToTime(t);
-                    if (wasPlaying)
-                        g_videoPlayer->Play();
-                    
-                    g_previewSeekTime = -1.0;
-                    break;
-                }
-                case 'K':
-                case 'k':
-                    if (g_videoPlayer->IsPlaying())
-                        g_videoPlayer->Pause();
-                    else
-                        g_videoPlayer->Play();
-                    break;
-                case VK_OEM_COMMA:
-                {
-                    // Frame step should pause playback
-                    if (g_videoPlayer->IsPlaying())
-                        g_videoPlayer->Pause();
-
-                    int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
-                    if (frame < 0) frame = 0;
-
-                    // Throttle: if subsequent keys are waiting, skip this update to remain responsive
-                    MSG nextMsg;
-                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                        if (nextMsg.wParam == msg.wParam) {
-                            continue;
-                        }
-                    }
-
-                    g_videoPlayer->SeekToFrame(frame);
-                    
-                    if (g_hTimeline) {
-                        InvalidateRect(g_hTimeline, NULL, FALSE);
-                    }
-                    UpdateControls();
-                    break;
-                }
-                case VK_OEM_PERIOD:
-                {
-                    // Frame step should pause playback
-                    if (g_videoPlayer->IsPlaying())
-                        g_videoPlayer->Pause();
-
-                    int64_t frame = g_videoPlayer->GetCurrentFrame() + 1;
-                    int64_t total = g_videoPlayer->GetTotalFrames();
-                    if (total > 0)
+                    bool handled = true;
+                    switch (msg.wParam)
                     {
-                        int64_t maxf = total - 1;
-                        if (frame > maxf)
-                            frame = maxf;
-                    }
-
-                    // Throttle: if subsequent keys are waiting, skip this update to remain responsive
-                    MSG nextMsg;
-                    if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                        if (nextMsg.wParam == msg.wParam) {
-                            continue;
+                    case VK_LEFT:
+                    case 'J':
+                    case 'j':
+                    case VK_RIGHT:
+                    case 'L':
+                    case 'l':
+                        if (g_previewSeekTime >= 0.0)
+                        {
+                            if (g_exactSeekTimer != 0)
+                                KillTimer(nullptr, g_exactSeekTimer);
+                            g_exactSeekTimer = SetTimer(nullptr, 0, 150, nullptr);
                         }
+                        break;
+                    default:
+                        handled = false;
+                        break;
                     }
-
-                    g_videoPlayer->SeekToFrame(frame);
-                    
-                    if (g_hTimeline) {
-                        InvalidateRect(g_hTimeline, NULL, FALSE);
-                    }
-                    UpdateControls();
-                    break;
+                    if (handled) continue;
                 }
-                default:
-                    handled = false;
-                    break;
-                }
-                if (handled)
+                else if (msg.message == WM_KEYDOWN)
                 {
-                    // UpdateControls();
-                    // UpdateTimeline();
-                    continue;
+                    double speedMultiplier = (GetKeyState(VK_SHIFT) & 0x8000) ? 10.0 : 1.0;
+
+                    bool handled = true;
+                    switch (msg.wParam)
+                    {
+                    case VK_SPACE:
+                        if (g_videoPlayer->IsPlaying())
+                            g_videoPlayer->Pause();
+                        else
+                            g_videoPlayer->Play();
+                        break;
+                    case VK_LEFT:
+                    case 'J':
+                    case 'j':
+                    {
+                        if (g_exactSeekTimer != 0)
+                        {
+                            KillTimer(nullptr, g_exactSeekTimer);
+                            g_exactSeekTimer = 0;
+                        }
+
+                        int repeatCount = msg.lParam & 0xFFFF;
+                        double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
+                        double offset = ((msg.wParam == VK_LEFT) ? 5.0 : 10.0) * speedMultiplier * repeatCount;
+                        double t = currentBase - offset;
+                        if (t < 0.0) t = 0.0;
+
+                        g_previewSeekTime = t;
+                        if (g_hTimeline) {
+                            InvalidateRect(g_hTimeline, NULL, FALSE);
+                            UpdateWindow(g_hTimeline);
+                        }
+                        UpdateControls(); // Force immediate update of time label
+
+                        // Throttle: If another keydown for the same key is pending, skip the seek
+                        MSG nextMsg;
+                        if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
+                            if (nextMsg.wParam == msg.wParam) {
+                                continue; // Skip the heavy operation
+                            }
+                        }
+
+                        bool wasPlaying = g_videoPlayer->IsPlaying();
+                        if (wasPlaying)
+                            g_videoPlayer->Pause();
+                        g_videoPlayer->SeekToTime(t, 0);
+                        if (wasPlaying)
+                            g_videoPlayer->Play();
+                        
+                        break;
+                    }
+                    case VK_RIGHT:
+                    case 'L':
+                    case 'l':
+                    {
+                        if (g_exactSeekTimer != 0)
+                        {
+                            KillTimer(nullptr, g_exactSeekTimer);
+                            g_exactSeekTimer = 0;
+                        }
+
+                        int repeatCount = msg.lParam & 0xFFFF;
+                        double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
+                        double offset = ((msg.wParam == VK_RIGHT) ? 5.0 : 10.0) * speedMultiplier * repeatCount;
+                        double t = currentBase + offset;
+                        double dur = g_videoPlayer->GetDuration();
+                        if (t > dur) t = dur;
+
+                        g_previewSeekTime = t;
+                        if (g_hTimeline) {
+                            InvalidateRect(g_hTimeline, NULL, FALSE);
+                            UpdateWindow(g_hTimeline);
+                        }
+                        UpdateControls(); // Force immediate update of time label
+
+                        MSG nextMsg;
+                        if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
+                            if (nextMsg.wParam == msg.wParam) {
+                                continue;
+                            }
+                        }
+
+                        bool wasPlaying = g_videoPlayer->IsPlaying();
+                        if (wasPlaying)
+                            g_videoPlayer->Pause();
+                        g_videoPlayer->SeekToTime(t, 0);
+                        if (wasPlaying)
+                            g_videoPlayer->Play();
+                        
+                        break;
+                    }
+                    case 'K':
+                    case 'k':
+                        if (g_videoPlayer->IsPlaying())
+                            g_videoPlayer->Pause();
+                        else
+                            g_videoPlayer->Play();
+                        break;
+                    case VK_OEM_COMMA:
+                    {
+                        // Frame step should pause playback
+                        if (g_videoPlayer->IsPlaying())
+                            g_videoPlayer->Pause();
+
+                        int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
+                        if (frame < 0) frame = 0;
+
+                        // Throttle: if subsequent keys are waiting, skip this update to remain responsive
+                        MSG nextMsg;
+                        if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
+                            if (nextMsg.wParam == msg.wParam) {
+                                continue;
+                            }
+                        }
+
+                        g_videoPlayer->SeekToFrame(frame);
+                        
+                        if (g_hTimeline) {
+                            InvalidateRect(g_hTimeline, NULL, FALSE);
+                        }
+                        UpdateControls();
+                        break;
+                    }
+                    case VK_OEM_PERIOD:
+                    {
+                        // Frame step should pause playback
+                        if (g_videoPlayer->IsPlaying())
+                            g_videoPlayer->Pause();
+
+                        int64_t frame = g_videoPlayer->GetCurrentFrame() + 1;
+                        int64_t total = g_videoPlayer->GetTotalFrames();
+                        if (total > 0)
+                        {
+                            int64_t maxf = total - 1;
+                            if (frame > maxf)
+                                frame = maxf;
+                        }
+
+                        // Throttle: if subsequent keys are waiting, skip this update to remain responsive
+                        MSG nextMsg;
+                        if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
+                            if (nextMsg.wParam == msg.wParam) {
+                                continue;
+                            }
+                        }
+
+                        g_videoPlayer->SeekToFrame(frame);
+                        
+                        if (g_hTimeline) {
+                            InvalidateRect(g_hTimeline, NULL, FALSE);
+                        }
+                        UpdateControls();
+                        break;
+                    }
+                    default:
+                        handled = false;
+                        break;
+                    }
+                    if (handled)
+                    {
+                        continue;
+                    }
                 }
             }
         }

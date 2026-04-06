@@ -692,7 +692,8 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
 
         double delta = seconds - currentPts;
         bool closeToTarget = delta < 0.2 || delta < (frameDuration * 5.0);
-        if (!m_decoder->DecodeNextFrame(false, false, closeToTarget))
+        bool isLastFastFrame = !exactMode && (decoded + 1 >= maxSyncFrames);
+        if (!m_decoder->DecodeNextFrame(false, false, closeToTarget || isLastFastFrame))
             break;
 
         decoded++;
