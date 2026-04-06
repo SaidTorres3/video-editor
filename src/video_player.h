@@ -184,22 +184,27 @@ private:
     // Background backward-frame prefetch: owns a completely separate
     // AVFormatContext so it never races with the main player.
     struct BwdPrefetch {
-        // Communication (always accessed under mtx)
         std::mutex              mtx;
         std::condition_variable cv;
         bool                    exitFlag  = false;
-        uint64_t                workGen   = 0;   // bumped on every new request/load
-        std::string             fileUtf8;         // empty = no file open
+        uint64_t                workGen   = 0;
+        std::string             fileUtf8;
         double                  startOff  = 0.0;
         double                  fps       = 0.0;
-        int                     sw = 0, sh = 0;  // source frame dimensions
-        int64_t                 reqFrame  = -1;
-        // Result (written by prefetch thread, read by main under mtx)
-        int64_t                 readyFrame  = -1;
-        double                  readyPts    = 0.0;
-        std::vector<uint8_t>    readyPixels;
-        uint64_t                readyGen    = UINT64_MAX;
+        int                     sw = 0, sh = 0;
+        // Request: decode every frame in [reqLo, reqHi] inclusive
+        int64_t                 reqLo = -1;
+        int64_t                 reqHi = -1;
+        // Result: all decoded frames for the requested range
+        struct ReadyFrame {
+            int64_t number;
+            double  pts;
+            std::vector<uint8_t> pixels;
+        };
+        std::vector<ReadyFrame> readyQ;   // sorted ascending by frame number
+        uint64_t                readyGen  = UINT64_MAX;
         std::thread             thread;
+        static constexpr int    WINDOW    = 8;
     };
     std::unique_ptr<BwdPrefetch> m_bwdPrefetch;
 
