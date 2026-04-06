@@ -636,6 +636,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         DebugLog("Seek failed", true);
     }
 
+    bool videoKeyframeWritten = false;
+
     AVPacket pkt, outPkt;
 #pragma warning(push)
 #pragma warning(disable: 4996) // Suppress deprecation warning for av_init_packet
@@ -648,8 +650,43 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         bool handled = false;
         AVStream* inStream = inputCtx->streams[pkt.stream_index];
         int64_t pktPtsUs = av_rescale_q(pkt.pts, inStream->time_base, AV_TIME_BASE_Q);
-        if (pktPtsUs < startPts) { av_packet_unref(&pkt); continue; }
+
+        bool isVideoStream = (pkt.stream_index == m_player->videoStreamIndex);
+        bool isPreStart = (pktPtsUs < startPts);
+
+        if (isPreStart && !isVideoStream) {
+            av_packet_unref(&pkt);
+            continue;
+        }
         if (pktPtsUs > endPts) { av_packet_unref(&pkt); break; }
+
+        if (isPreStart && isVideoStream) {
+            if (convertH264 && vDecCtx) {
+                avcodec_send_packet(vDecCtx, &pkt);
+                while (avcodec_receive_frame(vDecCtx, decFrame) == 0) {
+                    av_frame_unref(decFrame); // discard - just warming up decoder
+                }
+            } else if (!convertH264) {
+                if (!videoKeyframeWritten && !(pkt.flags & AV_PKT_FLAG_KEY)) {
+                    av_packet_unref(&pkt);
+                    continue;
+                }
+                if (pkt.flags & AV_PKT_FLAG_KEY)
+                    videoKeyframeWritten = true;
+                if (videoKeyframeWritten && streamMapping[pkt.stream_index] >= 0) {
+                    AVStream* outStream = outputCtx->streams[streamMapping[pkt.stream_index]];
+                    pkt.pts = av_rescale_q(pkt.pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
+                    pkt.dts = av_rescale_q(pkt.dts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
+                    if (pkt.duration > 0)
+                        pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
+                    pkt.pos = -1;
+                    pkt.stream_index = outStream->index;
+                    av_interleaved_write_frame(outputCtx, &pkt);
+                }
+            }
+            av_packet_unref(&pkt);
+            continue;
+        }
 
         if (convertH264 && pkt.stream_index == m_player->videoStreamIndex) {
             avcodec_send_packet(vDecCtx, &pkt);
