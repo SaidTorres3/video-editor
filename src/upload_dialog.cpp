@@ -131,6 +131,16 @@ LRESULT CALLBACK UrlCopyProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             DestroyWindow(hwnd);
         }
         break;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORBTN:
+    {
+        static HBRUSH hbr = CreateSolidBrush(RGB(45, 45, 48));
+        HDC hdc = (HDC)wParam;
+        SetTextColor(hdc, RGB(240, 240, 240));
+        SetBkColor(hdc, RGB(45, 45, 48));
+        return (LRESULT)hbr;
+    }
     case WM_CLOSE:
         DestroyWindow(hwnd);
         break;
@@ -390,11 +400,14 @@ void ShowManualUploadDialog(HWND parent, const std::wstring& exportPath, bool al
 LRESULT CALLBACK ManualUploadProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORBTN:
     {
+        static HBRUSH hbr = CreateSolidBrush(RGB(45, 45, 48));
         HDC hdc = (HDC)wParam;
-        SetTextColor(hdc, RGB(255, 255, 255));
-        SetBkMode(hdc, TRANSPARENT);
-        return (LRESULT)GetStockObject(BLACK_BRUSH);
+        SetTextColor(hdc, RGB(240, 240, 240));
+        SetBkColor(hdc, RGB(45, 45, 48));
+        return (LRESULT)hbr;
     }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
