@@ -2,6 +2,7 @@
 #include "video_player.h"
 #include "utils.h"
 #include <commctrl.h>
+#include <uxtheme.h>
 
 // Forward declarations
 void ApplyDarkTheme(HWND hwnd);
@@ -284,6 +285,7 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_RADIO_H264,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hRadioH264);
+    SetWindowTheme(g_hRadioH264, L"", L"");
     SendMessage(g_hRadioH264, BM_SETCHECK, BST_CHECKED, 0);
 
     g_hRadioCopyCodec = CreateWindow(
@@ -293,6 +295,7 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_RADIO_COPY_CODEC,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hRadioCopyCodec);
+    SetWindowTheme(g_hRadioCopyCodec, L"", L"");
 
     g_hRadioUseBitrate = CreateWindow(
         L"BUTTON", L"Specify Bitrate",
@@ -301,6 +304,7 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_RADIO_USE_BITRATE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hRadioUseBitrate);
+    SetWindowTheme(g_hRadioUseBitrate, L"", L"");
     SendMessage(g_hRadioUseBitrate, BM_SETCHECK, BST_CHECKED, 0);
 
     g_hRadioUseSize = CreateWindow(
@@ -310,6 +314,7 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_RADIO_USE_SIZE,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hRadioUseSize);
+    SetWindowTheme(g_hRadioUseSize, L"", L"");
 
     g_hLabelBitrate = CreateWindow(
         L"STATIC", L"Bitrate KBPS",
