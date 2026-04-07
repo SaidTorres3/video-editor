@@ -183,6 +183,10 @@ private:
     // When true, audio packets are dropped while stepping to avoid stalls
     bool dropAudioDuringStepping;
 
+    // True when ConsumeBwdPrefetch updated currentPts/currentFrame without
+    // seeking the main formatContext (so Play() must resync before decoding).
+    bool m_decoderOutOfSync;
+
     // Background backward-frame prefetch: owns a completely separate
     // AVFormatContext so it never races with the main player.
     struct BwdPrefetch {
@@ -308,7 +312,7 @@ public:
     void OnTimer();
 
 private:
-    bool SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact);
+    bool SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact, bool hardSeek = false);
     std::uint64_t BeginSeekOperation();
     void QueueSeekRefinement(double seconds, std::uint64_t generation);
     void CancelPendingSeekRefinement();

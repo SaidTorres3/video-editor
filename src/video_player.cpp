@@ -41,6 +41,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
             dropAudioDuringStepping(false),
+            m_decoderOutOfSync(false),
             seekRefineThreadExit(false), seekRefinePending(false), seekRefineTarget(0.0),
             seekRefineGeneration(0)
 {
@@ -278,6 +279,19 @@ bool VideoPlayer::Play()
     if (!isLoaded || isPlaying)
         return false;
     CancelPendingSeekRefinement();
+
+    // If backward frame stepping used the prefetch cache, the main formatContext
+    // was never seeked.  Resync it now so the playback thread decodes from the
+    // correct position instead of the old pre-step position.
+    if (m_decoderOutOfSync)
+    {
+        // hardSeek=true bypasses the smartSeek optimisation which would skip
+        // av_seek_frame when seconds==currentPts, leaving the formatContext at
+        // the wrong position when we consumed a prefetch-cache frame.
+        SeekToTimeInternal(currentPts, INT_MAX, false, true, true);
+        // m_decoderOutOfSync is cleared inside SeekToTimeInternal
+    }
+
     isPlaying = true;
 
     masterStartPts = currentPts;
@@ -553,6 +567,7 @@ bool VideoPlayer::ConsumeBwdPrefetch(int64_t frame)
             }
             currentFrame = frame;
             currentPts   = it->second.pts;
+            m_decoderOutOfSync = true;
             m_bwdPrefetch->targetFrame = frame - 1; 
             UpdateCropForTime(currentPts);
             m_renderer->UpdateDisplay();
@@ -738,10 +753,12 @@ void VideoPlayer::SeekToTimeExact(double seconds)
     UpdateCropForTime(currentPts);
 }
 
-bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact)
+bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact, bool hardSeek)
 {
     if (!isLoaded)
         return false;
+
+    m_decoderOutOfSync = false;
 
     std::uint64_t generation = BeginSeekOperation();
 
@@ -761,7 +778,7 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
         double threshold = frameDuration * 100.0;
-        if (seconds >= currentPts && seconds <= currentPts + threshold)
+        if (!hardSeek && seconds >= currentPts && seconds <= currentPts + threshold)
             smartSeek = true;
     }
 
