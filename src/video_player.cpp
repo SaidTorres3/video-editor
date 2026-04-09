@@ -672,10 +672,6 @@ void VideoPlayer::BwdPrefetchThreadFunc()
                     it = m_bwdPrefetch->cache.erase(it);
                 } else ++it;
             }
-            if ((int)m_bwdPrefetch->cache.size() >= BwdPrefetch::WINDOW) {
-                lastTarget = lTarget;
-                continue;
-            }
             for (int64_t f = lTarget; f >= lTarget - BwdPrefetch::WINDOW && f >= 0; f--) {
                 if (m_bwdPrefetch->cache.find(f) == m_bwdPrefetch->cache.end()) {
                     missing = f;
