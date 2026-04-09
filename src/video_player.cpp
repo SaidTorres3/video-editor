@@ -486,7 +486,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     dropAudioDuringStepping = true;
 
     // Forward one frame: just read the next packet, no seek needed.
-    if (frameNumber == currentFrame + 1)
+    if (frameNumber == currentFrame + 1 && !m_decoderOutOfSync)
     {
         m_decoder->DecodeNextFrame(true);
         currentFrame = static_cast<int64_t>(currentPts * frameRate + 0.5);
@@ -769,7 +769,10 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     if (!isLoaded)
         return false;
 
-    m_decoderOutOfSync = false;
+    if (m_decoderOutOfSync) {
+        hardSeek = true;
+        m_decoderOutOfSync = false;
+    }
 
     std::uint64_t generation = BeginSeekOperation();
 
