@@ -219,7 +219,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         {
                             if (g_exactSeekTimer != 0)
                                 KillTimer(nullptr, g_exactSeekTimer);
-                            g_exactSeekTimer = SetTimer(nullptr, 0, 150, nullptr);
+                            g_exactSeekTimer = SetTimer(nullptr, 0, 1, nullptr);
                         }
                         break;
                     default:
@@ -252,6 +252,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         }
 
                         int repeatCount = msg.lParam & 0xFFFF;
+                        bool isRepeated = (msg.lParam & (1 << 30)) != 0;
                         double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
                         double offset = ((msg.wParam == VK_LEFT) ? 5.0 : 10.0) * speedMultiplier * repeatCount;
                         double t = currentBase - offset;
@@ -275,7 +276,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         bool wasPlaying = g_videoPlayer->IsPlaying();
                         if (wasPlaying)
                             g_videoPlayer->Pause();
-                        g_videoPlayer->SeekToTime(t, 0);
+                        g_videoPlayer->SeekToTime(t, 0, isRepeated, !isRepeated);
                         if (wasPlaying)
                             g_videoPlayer->Play();
                         
@@ -292,6 +293,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         }
 
                         int repeatCount = msg.lParam & 0xFFFF;
+                        bool isRepeated = (msg.lParam & (1 << 30)) != 0;
                         double currentBase = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
                         double offset = ((msg.wParam == VK_RIGHT) ? 5.0 : 10.0) * speedMultiplier * repeatCount;
                         double t = currentBase + offset;
@@ -315,7 +317,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         bool wasPlaying = g_videoPlayer->IsPlaying();
                         if (wasPlaying)
                             g_videoPlayer->Pause();
-                        g_videoPlayer->SeekToTime(t, 0);
+                        g_videoPlayer->SeekToTime(t, 0, isRepeated, !isRepeated);
                         if (wasPlaying)
                             g_videoPlayer->Play();
                         

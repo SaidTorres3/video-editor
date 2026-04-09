@@ -259,7 +259,7 @@ public:
     bool IsLoaded() const { return isLoaded; }
 
     void SeekToFrame(int64_t frameNumber);
-    void SeekToTime(double seconds, int decodeCount = 3);
+    void SeekToTime(double seconds, int decodeCount = 3, bool renderFastFrame = true, bool allowAsyncRefine = true);
     void SeekToTimeExact(double seconds);  // Seek to exact timestamp for keyframe editing
 
     double GetDuration() const;
@@ -312,7 +312,7 @@ public:
     void OnTimer();
 
 private:
-    bool SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact, bool hardSeek = false);
+    bool SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact, bool hardSeek = false, bool renderFastFrame = true);
     std::uint64_t BeginSeekOperation();
     void QueueSeekRefinement(double seconds, std::uint64_t generation);
     void CancelPendingSeekRefinement();

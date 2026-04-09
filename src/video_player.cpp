@@ -420,9 +420,20 @@ void VideoPlayer::SeekRefinementThreadFunction()
 
             double delta = target - currentPts;
             bool closeToTarget = delta < 0.2 || delta < (frameDuration * 5.0);
-            if (!m_decoder->DecodeNextFrame(false, false, closeToTarget))
+            
+            if (!closeToTarget)
+                codecContext->skip_frame = AVDISCARD_NONREF;
+            else
+                codecContext->skip_frame = AVDISCARD_DEFAULT;
+
+            dropAudioDuringStepping = true;
+            bool decodeSuccess = m_decoder->DecodeNextFrame(false, false, closeToTarget);
+            dropAudioDuringStepping = false;
+            
+            if (!decodeSuccess)
                 break;
         }
+        codecContext->skip_frame = AVDISCARD_DEFAULT;
 
         bool shouldPresent = false;
         {
@@ -737,9 +748,9 @@ void VideoPlayer::BwdPrefetchThreadFunc()
     closeCtx();
 }
 
-void VideoPlayer::SeekToTime(double seconds, int decodeCount)
+void VideoPlayer::SeekToTime(double seconds, int decodeCount, bool renderFastFrame, bool allowAsyncRefine)
 {
-    SeekToTimeInternal(seconds, decodeCount, true, false);
+    SeekToTimeInternal(seconds, decodeCount, allowAsyncRefine, false, false, renderFastFrame);
 }
 
 void VideoPlayer::SeekToTimeExact(double seconds)
@@ -753,7 +764,7 @@ void VideoPlayer::SeekToTimeExact(double seconds)
     UpdateCropForTime(currentPts);
 }
 
-bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact, bool hardSeek)
+bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact, bool hardSeek, bool renderFastFrame)
 {
     if (!isLoaded)
         return false;
@@ -834,19 +845,34 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
         double delta = seconds - currentPts;
         bool closeToTarget = delta < 0.2 || delta < (frameDuration * 5.0);
         bool isLastFastFrame = !exactMode && (decoded + 1 >= maxSyncFrames);
-        if (!m_decoder->DecodeNextFrame(false, false, closeToTarget || isLastFastFrame))
+        
+        if (!closeToTarget && !isLastFastFrame)
+            codecContext->skip_frame = AVDISCARD_NONREF;
+        else
+            codecContext->skip_frame = AVDISCARD_DEFAULT;
+
+        dropAudioDuringStepping = true;
+        bool decodeSuccess = m_decoder->DecodeNextFrame(false, false, closeToTarget || isLastFastFrame);
+        dropAudioDuringStepping = false;
+        
+        if (!decodeSuccess)
             break;
 
         decoded++;
         needAtLeastOneFrame = false;
     }
+    codecContext->skip_frame = AVDISCARD_DEFAULT;
 
     const bool reachedTarget = currentPts >= seconds - (frameDuration * 0.5);
 
-    m_renderer->UpdateDisplay();
+    if (reachedTarget || forceExact || renderFastFrame)
+    {
+        m_renderer->UpdateDisplay();
+    }
     UpdateTimeline();
 
-    if (!reachedTarget && allowAsyncRefine && !forceExact && !isPlaying)
+    bool willRefineAsync = !reachedTarget && allowAsyncRefine && !forceExact && !isPlaying;
+    if (willRefineAsync)
         QueueSeekRefinement(seconds, generation);
 
     return reachedTarget;
