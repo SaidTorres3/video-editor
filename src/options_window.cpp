@@ -29,7 +29,7 @@ EncoderSelection g_encoderSelection = EncoderSelection::Libx264;
 bool g_logToFile = true;
 bool g_autoPlay = true;
 bool g_showVideoPreviewOnHover = true;
-bool g_improveSeekPerformance = false; // Default off, per user's "enable it" request
+bool g_improveSeekPerformance = true;
 std::wstring g_qualityPreset = L"Medium";
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
