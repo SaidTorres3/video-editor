@@ -276,7 +276,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         bool wasPlaying = g_videoPlayer->IsPlaying();
                         if (wasPlaying)
                             g_videoPlayer->Pause();
-                        g_videoPlayer->SeekToTime(t, 0, isRepeated, !isRepeated);
+                        g_videoPlayer->SeekToTime(t, 0, isRepeated, false);
                         if (wasPlaying)
                             g_videoPlayer->Play();
                         
@@ -317,7 +317,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         bool wasPlaying = g_videoPlayer->IsPlaying();
                         if (wasPlaying)
                             g_videoPlayer->Pause();
-                        g_videoPlayer->SeekToTime(t, 0, isRepeated, !isRepeated);
+                        g_videoPlayer->SeekToTime(t, 0, isRepeated, false);
                         if (wasPlaying)
                             g_videoPlayer->Play();
                         
