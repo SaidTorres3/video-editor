@@ -602,6 +602,8 @@ void VideoPlayer::BwdPrefetchThreadFunc()
     int              pvidIdx = -1;
     std::string      openFile;
     AVPixelFormat    pswsFmt = AV_PIX_FMT_NONE;
+    AVPixelFormat    phwPixelFormat = AV_PIX_FMT_NONE;
+    bool             puseHwAccel = false;
 
     auto closeCtx = [&]() {
         if (psws)  { sws_freeContext(psws); psws = nullptr; pswsFmt = AV_PIX_FMT_NONE; }
@@ -612,6 +614,8 @@ void VideoPlayer::BwdPrefetchThreadFunc()
         if (pcc)   { avcodec_free_context(&pcc); }
         if (pfmt)  { avformat_close_input(&pfmt); }
         pvidIdx = -1; openFile.clear();
+        phwPixelFormat = AV_PIX_FMT_NONE;
+        puseHwAccel = false;
     };
 
     uint64_t lastGen = UINT64_MAX;
@@ -649,7 +653,36 @@ void VideoPlayer::BwdPrefetchThreadFunc()
             if (!codec) { avformat_close_input(&pfmt); pfmt = nullptr; continue; }
             pcc = avcodec_alloc_context3(codec);
             avcodec_parameters_to_context(pcc, cp);
-            pcc->thread_count = 0; 
+            
+            pcc->opaque = &phwPixelFormat;
+            pcc->get_format = [](AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
+                AVPixelFormat* hwFmt = reinterpret_cast<AVPixelFormat*>(ctx->opaque);
+                for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
+                    if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_DXVA2_VLD) {
+                        *hwFmt = *p;
+                        return *p;
+                    }
+                }
+                *hwFmt = pix_fmts[0];
+                return pix_fmts[0];
+            };
+
+            puseHwAccel = false;
+            if (useHwAccel && hwDeviceCtx) {
+                pcc->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+                puseHwAccel = true;
+            }
+
+            if (puseHwAccel) {
+                pcc->thread_count = 1;
+                pcc->thread_type = FF_THREAD_SLICE;
+            } else {
+                int numThreads = std::thread::hardware_concurrency();
+                if (numThreads < 1) numThreads = 1;
+                pcc->thread_count = numThreads;
+                pcc->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+            }
+
             if (avcodec_open2(pcc, codec, nullptr) < 0) { avcodec_free_context(&pcc); avformat_close_input(&pfmt); pfmt = nullptr; continue; }
             pfrm = av_frame_alloc(); phw = av_frame_alloc(); ppkt = av_packet_alloc();
             
@@ -713,7 +746,13 @@ void VideoPlayer::BwdPrefetchThreadFunc()
                 int64_t f = static_cast<int64_t>(pts * lFps + 0.5);
 
                 if (f >= lTarget - BwdPrefetch::WINDOW - 5 && f <= lTarget + 10) {
-                    AVPixelFormat fmt2 = (AVPixelFormat)phw->format;
+                    AVFrame* swFrame = phw;
+                    if (puseHwAccel && phw->format == phwPixelFormat) {
+                        if (av_hwframe_transfer_data(pfrm, phw, 0) >= 0) {
+                            swFrame = pfrm;
+                        }
+                    }
+                    AVPixelFormat fmt2 = (AVPixelFormat)swFrame->format;
                     if (fmt2 != pswsFmt) {
                         if (psws) sws_freeContext(psws);
                         // Convert to RGB24 in background for massive memory saving!
@@ -724,7 +763,7 @@ void VideoPlayer::BwdPrefetchThreadFunc()
                     if (psws) {
                         uint8_t* d[4]{}; int ls[4]{};
                         av_image_fill_arrays(d, ls, pbuf, AV_PIX_FMT_RGB24, lW, lH, 1);
-                        sws_scale(psws, (const uint8_t* const*)phw->data, phw->linesize, 0, lH, d, ls);
+                        sws_scale(psws, (const uint8_t* const*)swFrame->data, swFrame->linesize, 0, lH, d, ls);
                         
                         BwdPrefetch::ReadyFrame rf;
                         rf.pts = pts;
@@ -732,6 +771,9 @@ void VideoPlayer::BwdPrefetchThreadFunc()
 
                         std::lock_guard<std::mutex> lk(m_bwdPrefetch->mtx);
                         m_bwdPrefetch->cache[f] = std::move(rf);
+                    }
+                    if (swFrame != phw) {
+                        av_frame_unref(swFrame);
                     }
                 }
                 av_frame_unref(phw);
@@ -923,7 +965,37 @@ bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vecto
     AVCodecContext* cc = avcodec_alloc_context3(codec);
     struct ScopedCC { AVCodecContext* c; ~ScopedCC() { avcodec_free_context(&c); } } scopedCC{cc};
     avcodec_parameters_to_context(cc, fmt->streams[vidIdx]->codecpar);
-    cc->thread_count = 2;
+    
+    AVPixelFormat hwFmtVal = AV_PIX_FMT_NONE;
+    cc->opaque = &hwFmtVal;
+    cc->get_format = [](AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
+        AVPixelFormat* hwFmt = reinterpret_cast<AVPixelFormat*>(ctx->opaque);
+        for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
+            if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_DXVA2_VLD) {
+                *hwFmt = *p;
+                return *p;
+            }
+        }
+        *hwFmt = pix_fmts[0];
+        return pix_fmts[0];
+    };
+
+    bool ccUseHw = false;
+    if (useHwAccel && hwDeviceCtx) {
+        cc->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+        ccUseHw = true;
+    }
+
+    if (ccUseHw) {
+        cc->thread_count = 1;
+        cc->thread_type = FF_THREAD_SLICE;
+    } else {
+        int numThreads = std::thread::hardware_concurrency();
+        if (numThreads < 1) numThreads = 1;
+        cc->thread_count = numThreads;
+        cc->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+    }
+
     if (avcodec_open2(cc, codec, nullptr) < 0)
         return false;
 
@@ -958,6 +1030,8 @@ bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vecto
 
     AVFrame* frm = av_frame_alloc();
     struct ScopedFrm { AVFrame* f; ~ScopedFrm() { av_frame_free(&f); } } scopedFrm{frm};
+    AVFrame* hwFrm = av_frame_alloc();
+    struct ScopedHwFrm { AVFrame* f; ~ScopedHwFrm() { av_frame_free(&f); } } scopedHwFrm{hwFrm};
     AVPacket* pkt = av_packet_alloc();
     struct ScopedPkt { AVPacket* p; ~ScopedPkt() { av_packet_free(&p); } } scopedPkt{pkt};
 
@@ -970,7 +1044,7 @@ bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vecto
         {
             if (avcodec_send_packet(cc, pkt) >= 0)
             {
-                if (avcodec_receive_frame(cc, frm) >= 0)
+                if (avcodec_receive_frame(cc, ccUseHw ? hwFrm : frm) >= 0)
                     gotFrame = true;
             }
         }
@@ -980,7 +1054,19 @@ bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vecto
     if (!gotFrame)
     {
         avcodec_send_packet(cc, nullptr);
-        gotFrame = (avcodec_receive_frame(cc, frm) >= 0);
+        gotFrame = (avcodec_receive_frame(cc, ccUseHw ? hwFrm : frm) >= 0);
+    }
+
+    if (gotFrame && ccUseHw)
+    {
+        if (hwFrm->format == hwFmtVal) {
+            if (av_hwframe_transfer_data(frm, hwFrm, 0) < 0) {
+                gotFrame = false;
+            }
+        } else {
+            av_frame_unref(frm);
+            av_frame_ref(frm, hwFrm);
+        }
     }
 
     if (!gotFrame || frm->width <= 0 || frm->height <= 0)
@@ -1030,15 +1116,47 @@ void VideoPlayer::InitThumbnailCtx()
 
     ctx->cc = avcodec_alloc_context3(codec);
     avcodec_parameters_to_context(ctx->cc, ctx->fmt->streams[ctx->vidIdx]->codecpar);
-    ctx->cc->thread_count = 2;
+    
+    ctx->useHwAccel = false;
+    ctx->hwPixelFormat = AV_PIX_FMT_NONE;
+    ctx->cc->opaque = ctx.get();
+    ctx->cc->get_format = [](AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
+        ThumbCtx* thumb = reinterpret_cast<ThumbCtx*>(ctx->opaque);
+        for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
+            if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_DXVA2_VLD) {
+                thumb->hwPixelFormat = *p;
+                return *p;
+            }
+        }
+        thumb->hwPixelFormat = pix_fmts[0];
+        return pix_fmts[0];
+    };
+
+    if (useHwAccel && hwDeviceCtx) {
+        ctx->cc->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+        ctx->useHwAccel = true;
+    }
+
+    if (ctx->useHwAccel) {
+        ctx->cc->thread_count = 1;
+        ctx->cc->thread_type = FF_THREAD_SLICE;
+    } else {
+        int numThreads = std::thread::hardware_concurrency();
+        if (numThreads < 1) numThreads = 1;
+        ctx->cc->thread_count = numThreads;
+        ctx->cc->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+    }
+
     if (avcodec_open2(ctx->cc, codec, nullptr) < 0) {
         avcodec_free_context(&ctx->cc); avformat_close_input(&ctx->fmt); return;
     }
 
     ctx->frm = av_frame_alloc();
+    ctx->hwFrm = av_frame_alloc();
     ctx->pkt = av_packet_alloc();
-    if (!ctx->frm || !ctx->pkt) {
+    if (!ctx->frm || !ctx->hwFrm || !ctx->pkt) {
         av_frame_free(&ctx->frm);
+        av_frame_free(&ctx->hwFrm);
         av_packet_free(&ctx->pkt);
         avcodec_free_context(&ctx->cc);
         avformat_close_input(&ctx->fmt);
@@ -1066,6 +1184,7 @@ void VideoPlayer::CleanupThumbnailCtx()
     std::lock_guard<std::mutex> lck(m_thumbCtx->mtx);
     if (m_thumbCtx->sws) { sws_freeContext(m_thumbCtx->sws); m_thumbCtx->sws = nullptr; }
     if (m_thumbCtx->frm) { av_frame_free(&m_thumbCtx->frm); }
+    if (m_thumbCtx->hwFrm) { av_frame_free(&m_thumbCtx->hwFrm); }
     if (m_thumbCtx->pkt) { av_packet_free(&m_thumbCtx->pkt); }
     if (m_thumbCtx->cc)  { avcodec_free_context(&m_thumbCtx->cc); }
     if (m_thumbCtx->fmt) { avformat_close_input(&m_thumbCtx->fmt); }
@@ -1098,22 +1217,39 @@ bool VideoPlayer::GetThumbnailPixelsFast(double time, int dstW, int dstH, std::v
     int maxPackets = 40;
     while (!gotFrame && maxPackets-- > 0) {
         av_frame_unref(ctx->frm);
+        av_frame_unref(ctx->hwFrm);
         if (av_read_frame(ctx->fmt, ctx->pkt) < 0) break;
         if (ctx->pkt->stream_index == ctx->vidIdx) {
             if (avcodec_send_packet(ctx->cc, ctx->pkt) >= 0) {
-                if (avcodec_receive_frame(ctx->cc, ctx->frm) >= 0)
+                if (avcodec_receive_frame(ctx->cc, ctx->useHwAccel ? ctx->hwFrm : ctx->frm) >= 0)
                     gotFrame = true;
             }
         }
         av_packet_unref(ctx->pkt);
     }
     if (!gotFrame) {
+        av_frame_unref(ctx->frm);
+        av_frame_unref(ctx->hwFrm);
         avcodec_send_packet(ctx->cc, nullptr);
-        gotFrame = (avcodec_receive_frame(ctx->cc, ctx->frm) >= 0);
+        gotFrame = (avcodec_receive_frame(ctx->cc, ctx->useHwAccel ? ctx->hwFrm : ctx->frm) >= 0);
         avcodec_flush_buffers(ctx->cc);
     }
 
-    if (!gotFrame || ctx->frm->width <= 0 || ctx->frm->height <= 0) return false;
+    if (gotFrame && ctx->useHwAccel) {
+        if (ctx->hwFrm->format == ctx->hwPixelFormat) {
+            if (av_hwframe_transfer_data(ctx->frm, ctx->hwFrm, 0) < 0) {
+                gotFrame = false;
+            }
+        } else {
+            av_frame_unref(ctx->frm);
+            av_frame_ref(ctx->frm, ctx->hwFrm);
+        }
+    }
+
+    if (!gotFrame) return false;
+
+    AVFrame* swFrame = ctx->frm;
+    if (swFrame->width <= 0 || swFrame->height <= 0) return false;
 
     // Recreate SwsContext only when dimensions change
     if (!ctx->sws || ctx->lastDstW != dstW || ctx->lastDstH != dstH) {
@@ -1130,7 +1266,9 @@ bool VideoPlayer::GetThumbnailPixelsFast(double time, int dstW, int dstH, std::v
     uint8_t* dstData[1]   = { pixels.data() };
     int      dstStride[1] = { dstW * 4 };
     sws_scale(ctx->sws, ctx->frm->data, ctx->frm->linesize, 0, ctx->frm->height, dstData, dstStride);
+    
     av_frame_unref(ctx->frm);
+    av_frame_unref(ctx->hwFrm);
     return true;
 }
 

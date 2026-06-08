@@ -231,12 +231,15 @@ private:
         AVFormatContext* fmt  = nullptr;
         AVCodecContext*  cc   = nullptr;
         AVFrame*         frm  = nullptr;
+        AVFrame*         hwFrm = nullptr;
         AVPacket*        pkt  = nullptr;
         SwsContext*      sws  = nullptr;
         int              vidIdx = -1;
         double           sto    = 0.0;  // startTimeOffset, matches main player
         int              lastDstW = 0;
         int              lastDstH = 0;
+        AVPixelFormat    hwPixelFormat = AV_PIX_FMT_NONE;
+        bool             useHwAccel = false;
         std::mutex       mtx;
     };
     std::unique_ptr<ThumbCtx> m_thumbCtx;
