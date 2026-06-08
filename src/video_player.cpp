@@ -872,7 +872,7 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
 
     const bool exactMode = forceExact || smartSeek;
     const int maxSyncFrames = exactMode ? INT_MAX : std::max(1, decodeCount);
-    const int maxDecodeFrames = 1000;
+    const int maxDecodeFrames = std::max(1000, std::min(maxSyncFrames, 10000));
     int decoded = 0;
     bool needAtLeastOneFrame = !smartSeek;
 
@@ -905,14 +905,14 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     codecContext->skip_frame = AVDISCARD_DEFAULT;
 
     const bool reachedTarget = currentPts >= seconds - (frameDuration * 0.5);
+    bool willRefineAsync = !reachedTarget && allowAsyncRefine && !forceExact && !isPlaying;
 
-    if (reachedTarget || forceExact || renderFastFrame)
+    if (reachedTarget || forceExact || (renderFastFrame && !willRefineAsync))
     {
         m_renderer->UpdateDisplay();
     }
     UpdateTimeline();
 
-    bool willRefineAsync = !reachedTarget && allowAsyncRefine && !forceExact && !isPlaying;
     if (willRefineAsync)
         QueueSeekRefinement(seconds, generation);
 

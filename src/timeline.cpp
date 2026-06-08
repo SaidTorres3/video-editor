@@ -7,6 +7,7 @@
 #include "options_window.h"
 #include <windowsx.h>
 #include <cmath>
+#include <climits>
 #include <limits>
 
 // Forward declarations
@@ -486,7 +487,10 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             InvalidateRect(hwnd, NULL, FALSE);
             UpdateWindow(hwnd); // Force restart of paint cycle to draw line immediately
             
-            g_videoPlayer->SeekToTime(seekTime, 0);
+            if (!g_wasPlayingBeforeDrag)
+                g_videoPlayer->SeekToTime(seekTime, INT_MAX, false, false);
+            else
+                g_videoPlayer->SeekToTime(seekTime, 0);
             // Keep g_previewSeekTime pinned to the target; UpdateTimeline() will
             // clear it automatically once actual currentPts catches up.
 
@@ -729,7 +733,10 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     g_resumePlayAfterSeek = true;
                 // Pin cursor to the drop position during the final refinement pass.
                 g_previewSeekTime = seekTime;
-                g_videoPlayer->SeekToTime(seekTime, 0);
+                if (!g_wasPlayingBeforeDrag)
+                    g_videoPlayer->SeekToTime(seekTime, INT_MAX, false, false);
+                else
+                    g_videoPlayer->SeekToTime(seekTime, 0);
             }
             else if (g_timelineDragMode == DragMode::Keyframe)
             {
