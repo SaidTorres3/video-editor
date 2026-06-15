@@ -1,8 +1,8 @@
-# run_tests.ps1 — Build and run VideoEditorTests
+# run-tests.ps1 — Build and run VideoEditorTests
 #
 # Usage:
-#   pwsh .\run_tests.ps1          # Dynamic build (default)
-#   pwsh .\run_tests.ps1 -Static  # Static build
+#   pwsh .\run-tests.ps1          # Dynamic build (default)
+#   pwsh .\run-tests.ps1 -Static  # Static build
 
 param(
     [switch]$Static,
