@@ -55,9 +55,9 @@ jobs:
           shell: powershell
           command: |
             if ("<<parameters.static>>" -eq "true") {
-              ./run.ps1 -Static
+              ./run-tests.ps1 -Static
             } else {
-              ./run.ps1
+              ./run-tests.ps1
             }
       # // Commented out because it consumes too much space
       # - store_artifacts:
