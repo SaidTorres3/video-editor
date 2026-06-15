@@ -657,9 +657,22 @@ void VideoPlayer::BwdPrefetchThreadFunc()
             pcc->opaque = &phwPixelFormat;
             pcc->get_format = [](AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
                 AVPixelFormat* hwFmt = reinterpret_cast<AVPixelFormat*>(ctx->opaque);
+                if (ctx->hw_device_ctx) {
+                    AVHWDeviceContext *hwctx = (AVHWDeviceContext*)ctx->hw_device_ctx->data;
+                    for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
+                        if (hwctx->type == AV_HWDEVICE_TYPE_D3D11VA && *p == AV_PIX_FMT_D3D11) {
+                            *hwFmt = *p;
+                            return *p;
+                        }
+                        if (hwctx->type == AV_HWDEVICE_TYPE_DXVA2 && *p == AV_PIX_FMT_DXVA2_VLD) {
+                            *hwFmt = *p;
+                            return *p;
+                        }
+                    }
+                }
                 for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-                    if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_DXVA2_VLD) {
-                        *hwFmt = *p;
+                    if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+                        *hwFmt = AV_PIX_FMT_NONE;
                         return *p;
                     }
                 }
@@ -970,9 +983,22 @@ bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vecto
     cc->opaque = &hwFmtVal;
     cc->get_format = [](AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
         AVPixelFormat* hwFmt = reinterpret_cast<AVPixelFormat*>(ctx->opaque);
+        if (ctx->hw_device_ctx) {
+            AVHWDeviceContext *hwctx = (AVHWDeviceContext*)ctx->hw_device_ctx->data;
+            for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
+                if (hwctx->type == AV_HWDEVICE_TYPE_D3D11VA && *p == AV_PIX_FMT_D3D11) {
+                    *hwFmt = *p;
+                    return *p;
+                }
+                if (hwctx->type == AV_HWDEVICE_TYPE_DXVA2 && *p == AV_PIX_FMT_DXVA2_VLD) {
+                    *hwFmt = *p;
+                    return *p;
+                }
+            }
+        }
         for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-            if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_DXVA2_VLD) {
-                *hwFmt = *p;
+            if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+                *hwFmt = AV_PIX_FMT_NONE;
                 return *p;
             }
         }
@@ -1122,9 +1148,22 @@ void VideoPlayer::InitThumbnailCtx()
     ctx->cc->opaque = ctx.get();
     ctx->cc->get_format = [](AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
         ThumbCtx* thumb = reinterpret_cast<ThumbCtx*>(ctx->opaque);
+        if (ctx->hw_device_ctx) {
+            AVHWDeviceContext *hwctx = (AVHWDeviceContext*)ctx->hw_device_ctx->data;
+            for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
+                if (hwctx->type == AV_HWDEVICE_TYPE_D3D11VA && *p == AV_PIX_FMT_D3D11) {
+                    thumb->hwPixelFormat = *p;
+                    return *p;
+                }
+                if (hwctx->type == AV_HWDEVICE_TYPE_DXVA2 && *p == AV_PIX_FMT_DXVA2_VLD) {
+                    thumb->hwPixelFormat = *p;
+                    return *p;
+                }
+            }
+        }
         for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-            if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_DXVA2_VLD) {
-                thumb->hwPixelFormat = *p;
+            if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+                thumb->hwPixelFormat = AV_PIX_FMT_NONE;
                 return *p;
             }
         }

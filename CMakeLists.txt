@@ -216,3 +216,99 @@ if(WIN32 AND NOT USE_STATIC_FFMPEG)
         COMMENT "Copying dynamic FFmpeg DLLs..."
     )
 endif()
+
+# ==== TEST EXECUTABLE ====
+option(BUILD_TESTS "Build the test executable" ON)
+
+if(BUILD_TESTS)
+    # Shared source files (everything except main.cpp which has WinMain)
+    set(SHARED_SOURCES
+        src/window_proc.cpp
+        src/ui_controls.cpp
+        src/file_handling.cpp
+        src/ui_updates.cpp
+        src/timeline.cpp
+        src/editing.cpp
+        src/utils.cpp
+        src/video_decoder.cpp
+        src/audio_player.cpp
+        src/video_renderer.cpp
+        src/video_cutter.cpp
+        src/video_player.cpp
+        src/options_window.cpp
+        src/progress_window.cpp
+        src/b2_upload.cpp
+        src/catbox_upload.cpp
+        src/debug_log.cpp
+        src/upload_dialog.cpp
+    )
+
+    # Test source files
+    set(TEST_SOURCES
+        tests/test_main.cpp
+        tests/test_utils.cpp
+        tests/test_video_loading.cpp
+        tests/test_playback.cpp
+        tests/test_audio.cpp
+        tests/test_crop.cpp
+        tests/test_cutting.cpp
+        tests/test_thumbnail.cpp
+    )
+
+    # Console application (NOT WIN32) so it prints to stdout
+    add_executable(VideoEditorTests ${TEST_SOURCES} ${SHARED_SOURCES})
+
+    target_include_directories(VideoEditorTests PRIVATE
+        src
+        ${FFMPEG_INCLUDE_DIR}
+        ${RNNOISE_INCLUDE_DIR}
+    )
+
+    # Same compile/link options as main executable
+    if(MSVC AND USE_STATIC_FFMPEG)
+        target_compile_options(VideoEditorTests PRIVATE /wd4996)
+        target_link_options(VideoEditorTests PRIVATE
+            /NODEFAULTLIB:MSVCRTD
+            /NODEFAULTLIB:MSVCRT
+            /NODEFAULTLIB:libcmtd
+        )
+        target_link_options(VideoEditorTests PRIVATE
+            /IGNORE:4286
+            /IGNORE:4098
+        )
+        target_link_options(VideoEditorTests PRIVATE "/WHOLEARCHIVE:${AVCODEC_LIBRARY}")
+    elseif(MSVC)
+        target_link_options(VideoEditorTests PRIVATE
+            /NODEFAULTLIB:LIBCMT
+            /NODEFAULTLIB:LIBCMTD
+            /NODEFAULTLIB:MSVCRTD
+        )
+    endif()
+
+    target_link_libraries(VideoEditorTests PRIVATE
+        ${PLATFORM_LIBS}
+        ${FFMPEG_LIBS}
+        ${RNNOISE_LIBRARY}
+        VENDOR_LIBCURL
+        VENDOR_ZLIB
+    )
+
+    if(MSVC AND USE_STATIC_FFMPEG)
+        target_link_libraries(VideoEditorTests PRIVATE
+            libcmt
+            libucrt
+        )
+    endif()
+
+    # Copy DLLs for tests too (dynamic build)
+    if(WIN32 AND NOT USE_STATIC_FFMPEG)
+        add_custom_command(TARGET VideoEditorTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avcodec-62.dll"   "$<TARGET_FILE_DIR:VideoEditorTests>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avformat-62.dll"  "$<TARGET_FILE_DIR:VideoEditorTests>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avutil-60.dll"    "$<TARGET_FILE_DIR:VideoEditorTests>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/swscale-9.dll"    "$<TARGET_FILE_DIR:VideoEditorTests>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/swresample-6.dll" "$<TARGET_FILE_DIR:VideoEditorTests>"
+            COMMENT "Copying dynamic FFmpeg DLLs for tests..."
+        )
+    endif()
+endif()

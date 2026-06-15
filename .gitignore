@@ -8,6 +8,7 @@
 *.pdb
 *.exp
 *.log
+weights_blob.bin
 
 # Visual Studio files
 .vs/

@@ -26,9 +26,22 @@ bool VideoDecoder::Initialize() {
     m_player->codecContext->opaque = m_player;
     m_player->codecContext->get_format = [](AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
         VideoPlayer* vp = reinterpret_cast<VideoPlayer*>(ctx->opaque);
+        if (ctx->hw_device_ctx) {
+            AVHWDeviceContext *hwctx = (AVHWDeviceContext*)ctx->hw_device_ctx->data;
+            for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
+                if (hwctx->type == AV_HWDEVICE_TYPE_D3D11VA && *p == AV_PIX_FMT_D3D11) {
+                    vp->hwPixelFormat = *p;
+                    return *p;
+                }
+                if (hwctx->type == AV_HWDEVICE_TYPE_DXVA2 && *p == AV_PIX_FMT_DXVA2_VLD) {
+                    vp->hwPixelFormat = *p;
+                    return *p;
+                }
+            }
+        }
         for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-            if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_DXVA2_VLD) {
-                vp->hwPixelFormat = *p;
+            if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+                vp->hwPixelFormat = AV_PIX_FMT_NONE;
                 return *p;
             }
         }
