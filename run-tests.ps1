@@ -21,6 +21,53 @@ $scriptDir = $PSScriptRoot
 $buildDir = Join-Path $scriptDir "build"
 $ffmpegRoot = Join-Path $scriptDir "third_party\ffmpeg"
 
+# Auto-download FFmpeg in shared/dynamic mode if not present
+if (-not $Static) {
+    if (-not (Test-Path (Join-Path $ffmpegRoot "bin\ffmpeg.exe"))) {
+        Write-Host "FFmpeg not found. Downloading..." -ForegroundColor Yellow
+        $ffmpegUrl   = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+        $zipPath     = "$env:TEMP\ffmpeg.zip"
+        $extractPath = Join-Path $scriptDir "third_party"
+
+        if (-not (Test-Path $extractPath)) {
+            New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
+        }
+
+        if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+            try {
+                Write-Host "Downloading with Start-BitsTransfer..." -ForegroundColor Cyan
+                & Start-BitsTransfer -Source "$ffmpegUrl" -Destination "$zipPath" -ErrorAction Stop
+            } catch {
+                Write-Host "Fallback to Invoke-WebRequest..." -ForegroundColor Yellow
+                & Invoke-WebRequest -Uri "$ffmpegUrl" -OutFile "$zipPath"
+            }
+        } else {
+            & Invoke-WebRequest -Uri "$ffmpegUrl" -OutFile "$zipPath"
+        }
+
+        & Expand-Archive -Path "$zipPath" -DestinationPath "$extractPath" -Force
+        $extracted = Get-ChildItem -Directory -Path "$extractPath" | Where-Object Name -Like "ffmpeg*" | Select-Object -First 1
+        if ($extracted) {
+            & Move-Item -Path "$extractPath\$($extracted.Name)" -Destination "$ffmpegRoot" -Force
+            & Remove-Item -Path "$zipPath" -Force
+            Write-Host "✅ FFmpeg extracted to $ffmpegRoot" -ForegroundColor Green
+        } else {
+            Write-Host "❌ Error extracting FFmpeg." -ForegroundColor Red
+            exit 1
+        }
+    }
+}
+
+# 0) Clean the build folder if we are switching between static and dynamic modes
+$releaseDir = Join-Path $buildDir "Release"
+if (Test-Path $releaseDir) {
+    $dlls = Get-ChildItem -Path $releaseDir -Filter "*.dll"
+    if (($dlls.Count -gt 0 -and $Static) -or ($dlls.Count -eq 0 -and -not $Static)) {
+        Write-Host "Build mode switch detected. Cleaning build directory..." -ForegroundColor Yellow
+        Remove-Item -Path $buildDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # 1. Ensure build directory exists and is configured
 if (-not (Test-Path $buildDir)) {
     Write-Host "[1/3] Configuring CMake..." -ForegroundColor Yellow
