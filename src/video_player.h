@@ -20,6 +20,7 @@ extern "C"
 #include <libavutil/channel_layout.h>
 #include <libavutil/rational.h>
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 }
 
 #include <rnnoise.h>
