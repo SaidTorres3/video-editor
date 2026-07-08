@@ -1,5 +1,8 @@
 #include "video_cutter.h"
 #include "video_player.h"
+extern "C" {
+#include <libavcodec/version.h>
+}
 #include "options_window.h"
 #include "debug_log.h"
 #include "progress_window.h"
@@ -442,10 +445,16 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                     it.encCtx = avcodec_alloc_context3(aEnc);
                     it.encCtx->sample_rate = 44100;
                     av_channel_layout_default(&it.encCtx->ch_layout, 2);
+#if defined(LIBAVCODEC_VERSION_MAJOR) && LIBAVCODEC_VERSION_MAJOR >= 61
+                    const enum AVSampleFormat *sample_fmts = nullptr;
+                    int ret = avcodec_get_supported_config(nullptr, aEnc, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, (const void **)&sample_fmts, nullptr);
+                    it.encCtx->sample_fmt = (ret >= 0 && sample_fmts && sample_fmts[0] != AV_SAMPLE_FMT_NONE) ? sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+#else
 #pragma warning(push)
 #pragma warning(disable: 4996) // Suppress deprecation warning for sample_fmts
                     it.encCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
 #pragma warning(pop)
+#endif
                     it.encCtx->time_base = {1, it.encCtx->sample_rate};
                     it.encCtx->bit_rate = 128000;
                     if (avcodec_open2(it.encCtx, aEnc, nullptr) < 0) {
@@ -565,10 +574,16 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         }
         aEncCtx->sample_rate = 44100;
         av_channel_layout_default(&aEncCtx->ch_layout, 2);
+#if defined(LIBAVCODEC_VERSION_MAJOR) && LIBAVCODEC_VERSION_MAJOR >= 61
+        const enum AVSampleFormat *sample_fmts = nullptr;
+        int ret = avcodec_get_supported_config(nullptr, aEnc, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, (const void **)&sample_fmts, nullptr);
+        aEncCtx->sample_fmt = (ret >= 0 && sample_fmts && sample_fmts[0] != AV_SAMPLE_FMT_NONE) ? sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+#else
 #pragma warning(push)
 #pragma warning(disable: 4996) // Suppress deprecation warning for sample_fmts
         aEncCtx->sample_fmt = aEnc->sample_fmts ? aEnc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
 #pragma warning(pop)
+#endif
         aEncCtx->time_base = {1, aEncCtx->sample_rate};
         aEncCtx->bit_rate = 128000; // match ffmpeg default
         if (avcodec_open2(aEncCtx, aEnc, nullptr) < 0) {

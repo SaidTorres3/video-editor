@@ -14,6 +14,8 @@
 
 extern "C" {
 #include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libavcodec/version.h>
 }
 
 // Global test state — shared with test files
@@ -238,10 +240,16 @@ static bool GenerateTestVideoAPI(const std::wstring& outputPath) {
     AVCodecContext* acc = avcodec_alloc_context3(aenc);
     acc->sample_rate = 44100;
     av_channel_layout_default(&acc->ch_layout, 2);
+#if defined(LIBAVCODEC_VERSION_MAJOR) && LIBAVCODEC_VERSION_MAJOR >= 61
+    const enum AVSampleFormat *sample_fmts = nullptr;
+    int ret = avcodec_get_supported_config(nullptr, aenc, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, (const void **)&sample_fmts, nullptr);
+    acc->sample_fmt = (ret >= 0 && sample_fmts && sample_fmts[0] != AV_SAMPLE_FMT_NONE) ? sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+#else
 #pragma warning(push)
 #pragma warning(disable: 4996)
     acc->sample_fmt = aenc->sample_fmts ? aenc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
 #pragma warning(pop)
+#endif
     acc->time_base = {1, 44100};
     acc->bit_rate = 128000;
     if (ofmt->oformat->flags & AVFMT_GLOBALHEADER)
