@@ -182,11 +182,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
             {
                 bool wasPlaying = g_videoPlayer->IsPlaying();
                 if (wasPlaying)
-                    g_videoPlayer->Pause();
-                g_videoPlayer->SeekToTimeExact(g_previewSeekTime);
-                if (wasPlaying)
-                    g_videoPlayer->Play();
-                g_previewSeekTime = -1.0;
+                    g_videoPlayer->SeekWhilePlaying(g_previewSeekTime);
+                else
+                {
+                    g_videoPlayer->SeekToTimeExact(g_previewSeekTime);
+                    g_previewSeekTime = -1.0;
+                }
             }
             continue;
         }
@@ -275,10 +276,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 
                         bool wasPlaying = g_videoPlayer->IsPlaying();
                         if (wasPlaying)
-                            g_videoPlayer->Pause();
-                        g_videoPlayer->SeekToTime(t, 0, isRepeated, false);
-                        if (wasPlaying)
-                            g_videoPlayer->Play();
+                            g_videoPlayer->SeekWhilePlaying(t, false);
+                        else
+                            g_videoPlayer->SeekToTime(t, isRepeated ? 1 : 3, true, true);
                         
                         break;
                     }
@@ -316,10 +316,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 
                         bool wasPlaying = g_videoPlayer->IsPlaying();
                         if (wasPlaying)
-                            g_videoPlayer->Pause();
-                        g_videoPlayer->SeekToTime(t, 0, isRepeated, false);
-                        if (wasPlaying)
-                            g_videoPlayer->Play();
+                            g_videoPlayer->SeekWhilePlaying(t, false);
+                        else
+                            g_videoPlayer->SeekToTime(t, isRepeated ? 1 : 3, true, true);
                         
                         break;
                     }
@@ -336,9 +335,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         if (g_videoPlayer->IsPlaying())
                             g_videoPlayer->Pause();
 
-                        int64_t frame = g_videoPlayer->GetCurrentFrame() - 1;
-                        if (frame < 0) frame = 0;
-
                         // Throttle: if subsequent keys are waiting, skip this update to remain responsive
                         MSG nextMsg;
                         if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
@@ -347,7 +343,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             }
                         }
 
-                        g_videoPlayer->SeekToFrame(frame);
+                        g_videoPlayer->StepFrame(-1);
                         
                         if (g_hTimeline) {
                             InvalidateRect(g_hTimeline, NULL, FALSE);
@@ -361,15 +357,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         if (g_videoPlayer->IsPlaying())
                             g_videoPlayer->Pause();
 
-                        int64_t frame = g_videoPlayer->GetCurrentFrame() + 1;
-                        int64_t total = g_videoPlayer->GetTotalFrames();
-                        if (total > 0)
-                        {
-                            int64_t maxf = total - 1;
-                            if (frame > maxf)
-                                frame = maxf;
-                        }
-
                         // Throttle: if subsequent keys are waiting, skip this update to remain responsive
                         MSG nextMsg;
                         if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
@@ -378,7 +365,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             }
                         }
 
-                        g_videoPlayer->SeekToFrame(frame);
+                        g_videoPlayer->StepFrame(1);
                         
                         if (g_hTimeline) {
                             InvalidateRect(g_hTimeline, NULL, FALSE);

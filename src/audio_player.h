@@ -2,6 +2,7 @@
 
 #include "video_player.h"
 #include <chrono>
+#include <mutex>
 
 class VideoPlayer;
 
@@ -15,7 +16,7 @@ public:
     bool InitializeTracks();
     void CleanupTracks();
     void StartThread();
-    void StopThread();
+    void StopThread(bool resetDevice = false);
     void ProcessFrame(AVPacket* packet);
     void SetMasterVolume(float volume);
 
@@ -29,4 +30,5 @@ private:
     int64_t m_framesWritten;
     float m_masterVolume;
     bool m_comInitializedByUs = false;
+    std::mutex m_threadLifecycleMutex;
 };

@@ -143,6 +143,8 @@ public:
     // Threaded playback
     std::thread playbackThread;
     std::atomic<bool> playbackThreadRunning;
+    std::mutex playbackWakeMutex;
+    std::condition_variable playbackWakeCondition;
 
     // Audio components
     std::vector<std::unique_ptr<AudioTrack>> audioTracks;
@@ -188,21 +190,32 @@ private:
     // seeking the main formatContext (so Play() must resync before decoding).
     bool m_decoderOutOfSync;
 
+    // Seeks requested while playing are consumed by the playback thread.
+    // Keeping decoder ownership on that thread avoids pause/join/restart stalls.
+    std::atomic<bool> m_playbackSeekPending;
+    std::atomic<double> m_playbackSeekTarget;
+    std::atomic<bool> m_playbackSeekExact;
+
     // Background backward-frame prefetch: owns a completely separate
     // AVFormatContext so it never races with the main player.
     struct BwdPrefetch {
         std::mutex              mtx;
         std::condition_variable cv;
         bool                    exitFlag  = false;
+        bool                    suspended = false;
         uint64_t                workGen   = 0;
         std::string             fileUtf8;
         double                  startOff  = 0.0;
         double                  fps       = 0.0;
         int                     sw = 0, sh = 0;
 
-        // Current target: the background thread tries to ensure 
+        // Current target: the background thread tries to ensure
         // we have [target - WINDOW, target] in cache.
         int64_t                 targetFrame = -1;
+        // Latest frame requested by repeated ',' input. This advances even
+        // when the displayed frame is waiting for the background decoder.
+        int64_t                 stepTargetFrame = -1;
+        int                     stepDirection = 0;
 
         struct ReadyFrame {
             double               pts;
@@ -217,8 +230,10 @@ private:
     std::unique_ptr<BwdPrefetch> m_bwdPrefetch;
 
     void   BwdPrefetchThreadFunc();
-    void   RequestBwdPrefetch(int64_t frame); 
-    bool   ConsumeBwdPrefetch(int64_t frame);  // Instant lookup from map
+    void   RequestBwdPrefetch(int64_t frame);
+    void   SuspendBwdPrefetch();
+    bool   ConsumeBwdPrefetch(int64_t frame, bool waitForFrame = false);
+    void   OnBwdFrameReady(int64_t frame);
     std::thread seekRefineThread;
     std::mutex seekRefineMutex;
     std::condition_variable seekRefineCondition;
@@ -263,8 +278,10 @@ public:
     bool IsLoaded() const { return isLoaded; }
 
     void SeekToFrame(int64_t frameNumber);
+    void StepFrame(int direction);
     void SeekToTime(double seconds, int decodeCount = 3, bool renderFastFrame = true, bool allowAsyncRefine = true);
     void SeekToTimeExact(double seconds);  // Seek to exact timestamp for keyframe editing
+    void SeekWhilePlaying(double seconds, bool exact = true);
 
     double GetDuration() const;
     double GetCurrentTime() const;
@@ -316,7 +333,9 @@ public:
     void OnTimer();
 
 private:
-    bool SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine, bool forceExact, bool hardSeek = false, bool renderFastFrame = true);
+    bool SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine,
+                            bool forceExact, bool hardSeek = false,
+                            bool renderFastFrame = true, bool abortOnPendingSeek = true);
     std::uint64_t BeginSeekOperation();
     void QueueSeekRefinement(double seconds, std::uint64_t generation);
     void CancelPendingSeekRefinement();

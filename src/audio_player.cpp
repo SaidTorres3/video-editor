@@ -100,6 +100,7 @@ bool AudioPlayer::Initialize() {
 }
 
 void AudioPlayer::Cleanup() {
+    std::lock_guard<std::mutex> lifecycleLock(m_threadLifecycleMutex);
     if (m_player->audioThreadRunning)
     {
         m_player->audioThreadRunning = false;
@@ -261,6 +262,7 @@ void AudioPlayer::CleanupTracks() {
 }
 
 void AudioPlayer::StartThread() {
+    std::lock_guard<std::mutex> lifecycleLock(m_threadLifecycleMutex);
     if (!m_player->audioTracks.empty() && m_player->audioInitialized)
     {
         HRESULT hr = m_player->audioClient->Start();
@@ -274,7 +276,8 @@ void AudioPlayer::StartThread() {
     }
 }
 
-void AudioPlayer::StopThread() {
+void AudioPlayer::StopThread(bool resetDevice) {
+    std::lock_guard<std::mutex> lifecycleLock(m_threadLifecycleMutex);
     if (m_player->audioThreadRunning)
     {
         m_player->audioThreadRunning = false;
@@ -282,6 +285,8 @@ void AudioPlayer::StopThread() {
         if (m_player->audioThread.joinable())
             m_player->audioThread.join();
     }
+    if (resetDevice && m_player->audioClient)
+        m_player->audioClient->Reset();
 }
 
 void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {
