@@ -207,12 +207,15 @@ endif()
 
 # ==== COPY FFmpeg DLLS (dynamic build) ====
 if(WIN32 AND NOT USE_STATIC_FFMPEG)
+    file(GLOB FFMPEG_DLLS 
+        "${FFMPEG_ROOT}/bin/avcodec-*.dll"
+        "${FFMPEG_ROOT}/bin/avformat-*.dll"
+        "${FFMPEG_ROOT}/bin/avutil-*.dll"
+        "${FFMPEG_ROOT}/bin/swscale-*.dll"
+        "${FFMPEG_ROOT}/bin/swresample-*.dll"
+    )
     add_custom_command(TARGET VideoEditor POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avcodec-62.dll"   "$<TARGET_FILE_DIR:VideoEditor>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avformat-62.dll"  "$<TARGET_FILE_DIR:VideoEditor>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avutil-60.dll"    "$<TARGET_FILE_DIR:VideoEditor>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/swscale-9.dll"    "$<TARGET_FILE_DIR:VideoEditor>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/swresample-6.dll" "$<TARGET_FILE_DIR:VideoEditor>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "$<TARGET_FILE_DIR:VideoEditor>"
         COMMENT "Copying dynamic FFmpeg DLLs..."
     )
 endif()
@@ -303,11 +306,7 @@ if(BUILD_TESTS)
     # Copy DLLs for tests too (dynamic build)
     if(WIN32 AND NOT USE_STATIC_FFMPEG)
         add_custom_command(TARGET VideoEditorTests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avcodec-62.dll"   "$<TARGET_FILE_DIR:VideoEditorTests>"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avformat-62.dll"  "$<TARGET_FILE_DIR:VideoEditorTests>"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/avutil-60.dll"    "$<TARGET_FILE_DIR:VideoEditorTests>"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/swscale-9.dll"    "$<TARGET_FILE_DIR:VideoEditorTests>"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFMPEG_ROOT}/bin/swresample-6.dll" "$<TARGET_FILE_DIR:VideoEditorTests>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "$<TARGET_FILE_DIR:VideoEditorTests>"
             COMMENT "Copying dynamic FFmpeg DLLs for tests..."
         )
     endif()
