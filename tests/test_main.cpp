@@ -44,6 +44,7 @@ HWND g_hButtonPlayClip = nullptr, g_hButtonPlayEnd = nullptr;
 HWND g_hLabelCutInfo = nullptr;
 HWND g_hButtonOptions = nullptr;
 HWND g_hButtonTogglePanel = nullptr;
+HWND g_hButtonSpeedDown = nullptr, g_hButtonSpeedUp = nullptr;
 bool g_isPanelVisible = false;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;

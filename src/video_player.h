@@ -7,7 +7,9 @@
 
 #include <string>
 #include <d2d1.h>
+#include <dwrite.h>
 #pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "dwrite.lib")
 
 extern "C"
 {
@@ -137,6 +139,8 @@ public:
     ID2D1Factory* d2dFactory;
     ID2D1HwndRenderTarget* d2dRenderTarget;
     ID2D1Bitmap* d2dBitmap;
+    IDWriteFactory* dwriteFactory;
+    IDWriteTextFormat* speedTextFormat;
 
     // Timer for playback
     UINT_PTR playbackTimer;
@@ -195,6 +199,9 @@ private:
     std::atomic<bool> m_playbackSeekPending;
     std::atomic<double> m_playbackSeekTarget;
     std::atomic<bool> m_playbackSeekExact;
+    std::atomic<double> m_playbackSpeed;
+    std::atomic<bool> m_playbackSpeedChangePending;
+    std::atomic<ULONGLONG> m_speedOverlayDeadline;
 
     // Background backward-frame prefetch: owns a completely separate
     // AVFormatContext so it never races with the main player.
@@ -276,6 +283,10 @@ public:
     bool IsClipPreviewActive() const { return clipPreviewActive; }
     bool IsPlaying() const { return isPlaying; }
     bool IsLoaded() const { return isLoaded; }
+    void SetPlaybackSpeed(double speed);
+    double GetPlaybackSpeed() const { return m_playbackSpeed.load(std::memory_order_acquire); }
+    bool IsPlaybackSpeedOverlayVisible() const;
+    void UpdatePlaybackSpeedOverlay();
 
     void SeekToFrame(int64_t frameNumber);
     void StepFrame(int direction);

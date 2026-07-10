@@ -38,7 +38,8 @@ VideoPlayer::VideoPlayer(HWND parent)
       cropRect{0,0,0,0}, cropTimeline(), hasCrop(false), cropOutputWidth(0), cropOutputHeight(0),
       selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
       videoWindow(nullptr),
-      d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
+      d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr),
+      dwriteFactory(nullptr), speedTextFormat(nullptr), playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioOutputIsFloat(false), audioThreadRunning(false),
@@ -50,6 +51,9 @@ VideoPlayer::VideoPlayer(HWND parent)
             m_playbackSeekPending(false),
             m_playbackSeekTarget(0.0),
             m_playbackSeekExact(true),
+            m_playbackSpeed(1.0),
+            m_playbackSpeedChangePending(false),
+            m_speedOverlayDeadline(0),
             seekRefineThreadExit(false), seekRefinePending(false), seekRefineTarget(0.0),
             seekRefineGeneration(0)
 {
@@ -562,6 +566,38 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 
     dropAudioDuringStepping = false;
     RequestBwdPrefetch(currentFrame - 1);
+}
+
+void VideoPlayer::SetPlaybackSpeed(double speed)
+{
+    speed = std::clamp(std::round(speed * 10.0) / 10.0, 0.1, 4.0);
+    const double previous = m_playbackSpeed.exchange(speed, std::memory_order_acq_rel);
+    if (isPlaying && std::fabs(previous - speed) > 0.0001)
+    {
+        m_playbackSpeedChangePending.store(true, std::memory_order_release);
+        playbackWakeCondition.notify_all();
+    }
+
+    m_speedOverlayDeadline.store(GetTickCount64() + 4000, std::memory_order_release);
+    if (videoWindow)
+        InvalidateRect(videoWindow, nullptr, FALSE);
+}
+
+bool VideoPlayer::IsPlaybackSpeedOverlayVisible() const
+{
+    const ULONGLONG deadline = m_speedOverlayDeadline.load(std::memory_order_acquire);
+    return deadline != 0 && GetTickCount64() < deadline;
+}
+
+void VideoPlayer::UpdatePlaybackSpeedOverlay()
+{
+    ULONGLONG deadline = m_speedOverlayDeadline.load(std::memory_order_acquire);
+    if (deadline != 0 && GetTickCount64() >= deadline &&
+        m_speedOverlayDeadline.compare_exchange_strong(deadline, 0, std::memory_order_acq_rel))
+    {
+        if (videoWindow)
+            InvalidateRect(videoWindow, nullptr, FALSE);
+    }
 }
 
 void VideoPlayer::StepFrame(int direction)
@@ -2140,6 +2176,18 @@ void VideoPlayer::PlaybackThreadFunction()
 
     while (playbackThreadRunning)
     {
+        if (m_playbackSpeedChangePending.exchange(false, std::memory_order_acq_rel))
+        {
+            m_audioPlayer->StopThread(true);
+            startTime = std::chrono::high_resolution_clock::now();
+            startPts = currentPts;
+            masterStartTime = startTime;
+            masterStartPts = startPts;
+            if (playbackThreadRunning && isPlaying)
+                m_audioPlayer->StartThread();
+            continue;
+        }
+
         if (m_playbackSeekPending.exchange(false, std::memory_order_acq_rel))
         {
             // Stop only the audio consumer. The video decoder stays on this
@@ -2179,8 +2227,9 @@ void VideoPlayer::PlaybackThreadFunction()
         // Measure how far behind real-time we are before decoding.
         double elapsed = std::chrono::duration<double>(
             std::chrono::high_resolution_clock::now() - startTime).count();
+        const double speed = GetPlaybackSpeed();
         double videoTime = currentPts - startPts;
-        double lag = elapsed - videoTime;
+        double lag = elapsed * speed - videoTime;
 
         bool generateImage = true;
 
@@ -2213,7 +2262,7 @@ void VideoPlayer::PlaybackThreadFunction()
         if (!generateImage)
             continue;
 
-        double target = currentPts - startPts;
+        double target = (currentPts - startPts) / speed;
         elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
         double delay = target - elapsed;
         if (delay > 0)
@@ -2224,7 +2273,8 @@ void VideoPlayer::PlaybackThreadFunction()
                 std::chrono::duration<double>(delay),
                 [this]() {
                     return !playbackThreadRunning ||
-                           m_playbackSeekPending.load(std::memory_order_acquire);
+                           m_playbackSeekPending.load(std::memory_order_acquire) ||
+                           m_playbackSpeedChangePending.load(std::memory_order_acquire);
                 });
         }
     }

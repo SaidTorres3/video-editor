@@ -464,18 +464,17 @@ void AudioPlayer::AudioThreadFunction() {
             continue;
 
         double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
-        double masterPts = startPts + elapsed;
         UINT64 played = m_framesWritten > padding ? m_framesWritten - padding : 0;
-        double playedPts = played / static_cast<double>(m_player->audioSampleRate);
+        double playedSeconds = played / static_cast<double>(m_player->audioSampleRate);
 
-        if (masterPts < playedPts)
+        if (elapsed < playedSeconds)
         {
             lock.unlock();
             Sleep(1);
             continue;
         }
 
-        UINT64 targetWritten = static_cast<UINT64>((masterPts + 0.1) * m_player->audioSampleRate);
+        UINT64 targetWritten = static_cast<UINT64>((elapsed + 0.1) * m_player->audioSampleRate);
         if (targetWritten < static_cast<UINT64>(m_framesWritten))
             targetWritten = static_cast<UINT64>(m_framesWritten);
 
@@ -501,7 +500,8 @@ void AudioPlayer::AudioThreadFunction() {
         if (FAILED(hr))
             continue;
 
-        double outputPts = m_player->masterStartPts + (double)m_framesWritten / m_player->audioSampleRate;
+        const double speed = m_player->GetPlaybackSpeed();
+        double outputPts = startPts + (double)m_framesWritten * speed / m_player->audioSampleRate;
         MixAudioTracks(pData, framesNeeded, outputPts);
 
         hr = m_player->renderClient->ReleaseBuffer(framesNeeded, 0);
@@ -522,10 +522,11 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
     memset(outputBuffer, 0, static_cast<size_t>(frameCount) * m_player->audioFormat->nBlockAlign);
     int16_t *outInt16 = reinterpret_cast<int16_t*>(outputBuffer);
     float *outFloat = reinterpret_cast<float*>(outputBuffer);
+    const double speed = m_player->GetPlaybackSpeed();
 
     for (int frame = 0; frame < frameCount; ++frame)
     {
-        double samplePts = startPts + frame / static_cast<double>(m_player->audioSampleRate);
+        double samplePts = startPts + frame * speed / static_cast<double>(m_player->audioSampleRate);
         std::vector<int32_t> mix(channels, 0);
         for (auto& track : m_player->audioTracks)
         {
@@ -545,11 +546,9 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
             {
                 for (int ch = 0; ch < channels; ++ch)
                 {
-                    int16_t val = track->buffer.front();
-                    track->buffer.pop_front();
+                    int16_t val = track->buffer[ch];
                     mix[ch] += static_cast<int32_t>(val * track->volume * m_masterVolume);
                 }
-                track->bufferPts += 1.0 / m_player->audioSampleRate;
             }
         }
         for (int ch = 0; ch < channels; ++ch)

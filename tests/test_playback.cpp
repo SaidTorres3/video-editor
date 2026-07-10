@@ -13,6 +13,32 @@ extern HWND g_testHwnd;
 
 void RegisterPlaybackTests(TestSuite& suite) {
 
+    suite.addTest("PlaybackSpeed_AdjustsAndClamps", []() {
+        VideoPlayer player(g_testHwnd);
+        player.SetPlaybackSpeed(1.1);
+        TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 1.1) < 0.001,
+                    "Playback speed should increase by ten percentage points");
+        TEST_ASSERT(player.IsPlaybackSpeedOverlayVisible(),
+                    "Changing speed should show the preview overlay");
+        player.SetPlaybackSpeed(-5.0);
+        TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 0.1) < 0.001,
+                    "Playback speed should clamp to 10%");
+        player.SetPlaybackSpeed(9.0);
+        TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 4.0) < 0.001,
+                    "Playback speed should clamp to 400%");
+    });
+
+    suite.addTest("PlaybackSpeed_AffectsPlaybackTiming", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        player.SetPlaybackSpeed(2.0);
+        player.Play();
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        player.Pause();
+        TEST_ASSERT_GT(player.GetCurrentTime(), 0.8,
+                       "200% speed should advance substantially faster than real time");
+    });
+
     suite.addTest("Play_StartsPlayback", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);

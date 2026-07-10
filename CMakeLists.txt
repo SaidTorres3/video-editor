@@ -167,7 +167,7 @@ endif()
 
 # ==== WINDOWS PLATFORM LIBS ====
 set(PLATFORM_LIBS
-    user32 gdi32 d2d1 comctl32 comdlg32 ole32 winmm
+    user32 gdi32 d2d1 dwrite comctl32 comdlg32 ole32 winmm
     dwmapi uxtheme shell32 ws2_32 bcrypt secur32 mfplat
     mf mfuuid strmiids crypt32 advapi32 iphlpapi wldap32
     normaliz

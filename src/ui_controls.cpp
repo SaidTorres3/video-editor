@@ -36,6 +36,8 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_BUTTON_PLAY_CLIP 1027
 #define ID_BUTTON_PLAY_END 1028
 #define ID_BUTTON_TOGGLE_PANEL 1029
+#define ID_BUTTON_SPEED_DOWN 1030
+#define ID_BUTTON_SPEED_UP 1031
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -53,6 +55,7 @@ extern HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEn
 extern HWND g_hLabelCutInfo;
 extern HWND g_hButtonOptions;
 extern HWND g_hButtonTogglePanel;
+extern HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
 extern bool g_isPanelVisible;
 
 void CreateControls(HWND hwnd)
@@ -94,6 +97,23 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_STOP,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonStop);
+
+    g_hButtonSpeedDown = CreateWindow(
+        L"BUTTON", L"-",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        330, 10, 40, 30,
+        hwnd, (HMENU)ID_BUTTON_SPEED_DOWN,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonSpeedDown);
+
+    g_hButtonSpeedUp = CreateWindow(
+        L"BUTTON", L"+",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        375, 10, 40, 30,
+        hwnd, (HMENU)ID_BUTTON_SPEED_UP,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonSpeedUp);
+
     g_hButtonOptions = CreateWindow(
         L"BUTTON", L"\u2699 Options",
         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
@@ -353,6 +373,8 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hButtonPlay, FALSE);
     EnableWindow(g_hButtonPause, FALSE);
     EnableWindow(g_hButtonStop, FALSE);
+    EnableWindow(g_hButtonSpeedDown, FALSE);
+    EnableWindow(g_hButtonSpeedUp, FALSE);
     EnableWindow(g_hTimeline, FALSE);
     EnableWindow(g_hListBoxAudioTracks, FALSE);
     EnableWindow(g_hButtonMuteTrack, FALSE);
@@ -395,6 +417,8 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonPlay, 120, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonPause, 190, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonStop, 260, mainControlsY, 60, mainControlsHeight, TRUE);
+    MoveWindow(g_hButtonSpeedDown, 330, mainControlsY, 40, mainControlsHeight, TRUE);
+    MoveWindow(g_hButtonSpeedUp, 375, mainControlsY, 40, mainControlsHeight, TRUE);
     int optionsWidth = 80;
     int toggleWidth = 80;
     int optionsX = clientRect.right - optionsWidth - 10;

@@ -37,6 +37,7 @@
 // Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
+HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
 HWND g_hTimeline;
 HWND g_hStatusText;
 HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;

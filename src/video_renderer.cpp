@@ -2,6 +2,8 @@
 #include "video_player.h"
 #include "video_decoder.h"
 #include <algorithm>
+#include <cmath>
+#include <cwchar>
 
 VideoRenderer::VideoRenderer(VideoPlayer* player) : m_player(player) {}
 
@@ -10,10 +12,38 @@ VideoRenderer::~VideoRenderer() {
 }
 
 bool VideoRenderer::Initialize() {
-    return SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &m_player->d2dFactory));
+    HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &m_player->d2dFactory);
+    if (FAILED(hr))
+        return false;
+
+    hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                             reinterpret_cast<IUnknown**>(&m_player->dwriteFactory));
+    if (SUCCEEDED(hr))
+    {
+        hr = m_player->dwriteFactory->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            32.0f, L"en-us", &m_player->speedTextFormat);
+        if (SUCCEEDED(hr))
+        {
+            m_player->speedTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            m_player->speedTextFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        }
+    }
+    return true;
 }
 
 void VideoRenderer::Cleanup() {
+    if (m_player->speedTextFormat)
+    {
+        m_player->speedTextFormat->Release();
+        m_player->speedTextFormat = nullptr;
+    }
+    if (m_player->dwriteFactory)
+    {
+        m_player->dwriteFactory->Release();
+        m_player->dwriteFactory = nullptr;
+    }
     if (m_player->d2dBitmap)
     {
         m_player->d2dBitmap->Release();
@@ -102,6 +132,35 @@ void VideoRenderer::UpdateDisplay() {
         m_player->d2dRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Yellow), &brush);
         m_player->d2dRenderTarget->DrawRectangle(sel, brush, 2.0f);
         if (brush) brush->Release();
+    }
+
+    if (m_player->IsPlaybackSpeedOverlayVisible() && m_player->speedTextFormat)
+    {
+        wchar_t label[64];
+        swprintf_s(label, L"Speed: %d%%", static_cast<int>(std::lround(m_player->GetPlaybackSpeed() * 100.0)));
+
+        const float badgeWidth = std::min(260.0f, std::max(150.0f, drawWidth - 24.0f));
+        const float badgeHeight = 58.0f;
+        const float badgeLeft = offsetX + (drawWidth - badgeWidth) / 2.0f;
+        const float badgeTop = offsetY + 20.0f;
+        const D2D1_ROUNDED_RECT badge = D2D1::RoundedRect(
+            D2D1::RectF(badgeLeft, badgeTop, badgeLeft + badgeWidth, badgeTop + badgeHeight),
+            10.0f, 10.0f);
+
+        ID2D1SolidColorBrush* backgroundBrush = nullptr;
+        ID2D1SolidColorBrush* textBrush = nullptr;
+        m_player->d2dRenderTarget->CreateSolidColorBrush(
+            D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.72f), &backgroundBrush);
+        m_player->d2dRenderTarget->CreateSolidColorBrush(
+            D2D1::ColorF(D2D1::ColorF::White), &textBrush);
+        if (backgroundBrush)
+            m_player->d2dRenderTarget->FillRoundedRectangle(badge, backgroundBrush);
+        if (textBrush)
+            m_player->d2dRenderTarget->DrawTextW(
+                label, static_cast<UINT32>(wcslen(label)), m_player->speedTextFormat,
+                badge.rect, textBrush);
+        if (backgroundBrush) backgroundBrush->Release();
+        if (textBrush) textBrush->Release();
     }
     m_player->d2dRenderTarget->EndDraw();
 }

@@ -109,6 +109,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             RepositionControls(hwnd);
             UpdateControls();
             break;
+        case 1030: // ID_BUTTON_SPEED_DOWN
+            if (g_videoPlayer && g_videoPlayer->IsLoaded())
+                g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() - 0.1);
+            break;
+        case 1031: // ID_BUTTON_SPEED_UP
+            if (g_videoPlayer && g_videoPlayer->IsLoaded())
+                g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() + 0.1);
+            break;
         case 1008: // ID_BUTTON_MUTE_TRACK
             OnMuteTrackClicked();
             break;
@@ -285,6 +293,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_TIMER:
         if (wParam == 1006) // ID_TIMER_UPDATE
         {
+            if (g_videoPlayer)
+                g_videoPlayer->UpdatePlaybackSpeedOverlay();
             UpdateTimeline();
             UpdateControls();
         }
