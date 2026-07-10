@@ -570,7 +570,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 
 void VideoPlayer::SetPlaybackSpeed(double speed)
 {
-    speed = std::clamp(std::round(speed * 10.0) / 10.0, 0.1, 10.0);
+    speed = std::clamp(std::round(speed * 10.0) / 10.0, 0.1, 100.0);
     const double previous = m_playbackSpeed.exchange(speed, std::memory_order_acq_rel);
     if (isPlaying && std::fabs(previous - speed) > 0.0001)
     {

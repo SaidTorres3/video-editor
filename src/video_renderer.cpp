@@ -137,7 +137,11 @@ void VideoRenderer::UpdateDisplay() {
     if (m_player->IsPlaybackSpeedOverlayVisible() && m_player->speedTextFormat)
     {
         wchar_t label[64];
-        swprintf_s(label, L"Speed: %d%%", static_cast<int>(std::lround(m_player->GetPlaybackSpeed() * 100.0)));
+        const double speed = m_player->GetPlaybackSpeed();
+        if (std::fabs(speed - std::round(speed)) < 0.001)
+            swprintf_s(label, L"Speed: %.0fx", speed);
+        else
+            swprintf_s(label, L"Speed: %.1fx", speed);
 
         const float badgeWidth = std::min(260.0f, std::max(150.0f, drawWidth - 24.0f));
         const float badgeHeight = 58.0f;

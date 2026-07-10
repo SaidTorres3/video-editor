@@ -26,9 +26,12 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.SetPlaybackSpeed(9.0);
         TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 9.0) < 0.001,
                     "Playback speed should allow values above 400%");
-        player.SetPlaybackSpeed(12.0);
-        TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 10.0) < 0.001,
-                    "Playback speed should clamp to 1000%");
+        player.SetPlaybackSpeed(50.0);
+        TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 50.0) < 0.001,
+                    "Playback speed should allow values above 10x");
+        player.SetPlaybackSpeed(101.0);
+        TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 100.0) < 0.001,
+                    "Playback speed should clamp to 100x");
     });
 
     suite.addTest("PlaybackSpeed_AffectsPlaybackTiming", []() {
@@ -42,7 +45,7 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "200% speed should advance substantially faster than real time");
     });
 
-    suite.addTest("PlaybackSpeed_1000PercentTracksWallClock", []() {
+    suite.addTest("PlaybackSpeed_10xTracksWallClock", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);
         player.SetPlaybackSpeed(10.0);
@@ -50,9 +53,9 @@ void RegisterPlaybackTests(TestSuite& suite) {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         player.Pause();
         TEST_ASSERT_GT(player.GetCurrentTime(), 2.3,
-                       "1000% speed should advance close to ten video seconds per real second");
+                       "10x speed should advance close to ten video seconds per real second");
         TEST_ASSERT_LT(player.GetCurrentTime(), 3.8,
-                       "1000% playback should not run substantially ahead of its wall clock");
+                       "10x playback should not run substantially ahead of its wall clock");
     });
 
     suite.addTest("Play_StartsPlayback", []() {
