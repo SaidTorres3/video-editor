@@ -45,6 +45,7 @@ HWND g_hLabelCutInfo = nullptr;
 HWND g_hButtonOptions = nullptr;
 HWND g_hButtonTogglePanel = nullptr;
 HWND g_hButtonSpeedDown = nullptr, g_hButtonSpeedUp = nullptr;
+HWND g_hEditPlaybackSpeed = nullptr;
 bool g_isPanelVisible = false;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;

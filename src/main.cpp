@@ -38,6 +38,7 @@
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
 HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
+HWND g_hEditPlaybackSpeed;
 HWND g_hTimeline;
 HWND g_hStatusText;
 HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
@@ -246,10 +247,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     case VK_OEM_MINUS:
                     case VK_SUBTRACT:
                         g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() - 0.1);
+                        UpdateControls();
                         break;
                     case VK_OEM_PLUS:
                     case VK_ADD:
                         g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() + 0.1);
+                        UpdateControls();
                         break;
                     case VK_LEFT:
                     case 'J':
@@ -390,6 +393,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         continue;
                     }
                 }
+            }
+            else if (focused == g_hEditPlaybackSpeed &&
+                     msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN)
+            {
+                // Moving focus commits the value through EN_KILLFOCUS.
+                SetFocus(hwnd);
+                continue;
             }
         }
         TranslateMessage(&msg);

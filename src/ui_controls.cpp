@@ -38,6 +38,7 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_BUTTON_TOGGLE_PANEL 1029
 #define ID_BUTTON_SPEED_DOWN 1030
 #define ID_BUTTON_SPEED_UP 1031
+#define ID_EDIT_PLAYBACK_SPEED 1032
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -56,6 +57,7 @@ extern HWND g_hLabelCutInfo;
 extern HWND g_hButtonOptions;
 extern HWND g_hButtonTogglePanel;
 extern HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
+extern HWND g_hEditPlaybackSpeed;
 extern bool g_isPanelVisible;
 
 void CreateControls(HWND hwnd)
@@ -113,6 +115,14 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_SPEED_UP,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonSpeedUp);
+
+    g_hEditPlaybackSpeed = CreateWindow(
+        L"EDIT", L"1x",
+        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_CENTER | ES_AUTOHSCROLL,
+        375, 10, 64, 30,
+        hwnd, (HMENU)ID_EDIT_PLAYBACK_SPEED,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hEditPlaybackSpeed);
 
     g_hButtonOptions = CreateWindow(
         L"BUTTON", L"\u2699 Options",
@@ -375,6 +385,7 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hButtonStop, FALSE);
     EnableWindow(g_hButtonSpeedDown, FALSE);
     EnableWindow(g_hButtonSpeedUp, FALSE);
+    EnableWindow(g_hEditPlaybackSpeed, FALSE);
     EnableWindow(g_hTimeline, FALSE);
     EnableWindow(g_hListBoxAudioTracks, FALSE);
     EnableWindow(g_hButtonMuteTrack, FALSE);
@@ -417,12 +428,20 @@ void RepositionControls(HWND hwnd)
     MoveWindow(g_hButtonPlay, 120, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonPause, 190, mainControlsY, 60, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonStop, 260, mainControlsY, 60, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonSpeedDown, 330, mainControlsY, 40, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonSpeedUp, 375, mainControlsY, 40, mainControlsHeight, TRUE);
     int optionsWidth = 80;
     int toggleWidth = 80;
     int optionsX = clientRect.right - optionsWidth - 10;
     int toggleX = optionsX - toggleWidth - 5;
+    int speedButtonWidth = 36;
+    int speedEditWidth = 64;
+    int speedGap = 4;
+    int speedGroupWidth = speedButtonWidth * 2 + speedEditWidth + speedGap * 2;
+    int speedDownX = toggleX - speedGroupWidth - 8;
+    MoveWindow(g_hButtonSpeedDown, speedDownX, mainControlsY, speedButtonWidth, mainControlsHeight, TRUE);
+    MoveWindow(g_hEditPlaybackSpeed, speedDownX + speedButtonWidth + speedGap,
+               mainControlsY, speedEditWidth, mainControlsHeight, TRUE);
+    MoveWindow(g_hButtonSpeedUp, speedDownX + speedButtonWidth + speedGap + speedEditWidth + speedGap,
+               mainControlsY, speedButtonWidth, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonOptions, optionsX, mainControlsY, optionsWidth, mainControlsHeight, TRUE);
     MoveWindow(g_hButtonTogglePanel, toggleX, mainControlsY, toggleWidth, mainControlsHeight, TRUE);
     SetWindowTextW(g_hButtonTogglePanel, g_isPanelVisible ? L"\u25BA Panel" : L"\u25C4 Panel");

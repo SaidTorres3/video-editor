@@ -9,6 +9,9 @@
 #include "upload_dialog.h"
 #include "utils.h"
 #include <windowsx.h>
+#include <cmath>
+#include <cstdlib>
+#include <cwchar>
 
 // Forward declarations for functions in other files
 void ApplyDarkTheme(HWND hwnd);
@@ -49,6 +52,7 @@ extern HBRUSH g_hbrBackground;
 extern HFONT g_hFont;
 extern COLORREF g_textColor;
 extern bool g_isPanelVisible;
+extern HWND g_hEditPlaybackSpeed;
 
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -111,11 +115,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case 1030: // ID_BUTTON_SPEED_DOWN
             if (g_videoPlayer && g_videoPlayer->IsLoaded())
+            {
                 g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() - 0.1);
+                UpdateControls();
+            }
             break;
         case 1031: // ID_BUTTON_SPEED_UP
             if (g_videoPlayer && g_videoPlayer->IsLoaded())
+            {
                 g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() + 0.1);
+                UpdateControls();
+            }
             break;
         case 1008: // ID_BUTTON_MUTE_TRACK
             OnMuteTrackClicked();
@@ -159,6 +169,33 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 }
             }
             break;
+        }
+
+        if ((HWND)lParam == g_hEditPlaybackSpeed && HIWORD(wParam) == EN_KILLFOCUS)
+        {
+            wchar_t valueText[32];
+            GetWindowTextW(g_hEditPlaybackSpeed, valueText, 32);
+            for (wchar_t* p = valueText; *p; ++p)
+            {
+                if (*p == L',')
+                    *p = L'.';
+            }
+
+            wchar_t* parseEnd = nullptr;
+            const double requestedSpeed = std::wcstod(valueText, &parseEnd);
+            if (parseEnd != valueText && std::isfinite(requestedSpeed) && g_videoPlayer)
+                g_videoPlayer->SetPlaybackSpeed(requestedSpeed);
+
+            if (g_videoPlayer)
+            {
+                wchar_t normalizedText[32];
+                const double speed = g_videoPlayer->GetPlaybackSpeed();
+                if (std::fabs(speed - std::round(speed)) < 0.001)
+                    swprintf_s(normalizedText, L"%.0fx", speed);
+                else
+                    swprintf_s(normalizedText, L"%.1fx", speed);
+                SetWindowTextW(g_hEditPlaybackSpeed, normalizedText);
+            }
         }
 
         if ((HWND)lParam == g_hEditStartTime && HIWORD(wParam) == EN_KILLFOCUS)
