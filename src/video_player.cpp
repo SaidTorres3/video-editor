@@ -570,7 +570,7 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 
 void VideoPlayer::SetPlaybackSpeed(double speed)
 {
-    speed = std::clamp(std::round(speed * 10.0) / 10.0, 0.1, 4.0);
+    speed = std::clamp(std::round(speed * 10.0) / 10.0, 0.1, 10.0);
     const double previous = m_playbackSpeed.exchange(speed, std::memory_order_acq_rel);
     if (isPlaying && std::fabs(previous - speed) > 0.0001)
     {
@@ -2172,6 +2172,7 @@ void VideoPlayer::PlaybackThreadFunction()
 {
     auto startTime = masterStartTime;
     double startPts = masterStartPts;
+    auto lastPresentedAt = startTime;
     const double frameDur = (frameRate > 0.0) ? (1.0 / frameRate) : (1.0 / 30.0);
 
     while (playbackThreadRunning)
@@ -2180,6 +2181,7 @@ void VideoPlayer::PlaybackThreadFunction()
         {
             m_audioPlayer->StopThread(true);
             startTime = std::chrono::high_resolution_clock::now();
+            lastPresentedAt = startTime;
             startPts = currentPts;
             masterStartTime = startTime;
             masterStartPts = startPts;
@@ -2215,6 +2217,7 @@ void VideoPlayer::PlaybackThreadFunction()
             while (m_playbackSeekPending.exchange(false, std::memory_order_acq_rel));
 
             startTime = std::chrono::high_resolution_clock::now();
+            lastPresentedAt = startTime;
             startPts = currentPts;
             masterStartTime = startTime;
             masterStartPts = startPts;
@@ -2224,31 +2227,70 @@ void VideoPlayer::PlaybackThreadFunction()
             continue;
         }
 
-        // Measure how far behind real-time we are before decoding.
+        // Keep playback tied to the wall clock. At high speeds the decoder
+        // cannot decode every intermediate frame, so jump to the clock target
+        // instead of slowing playback down to the decoder's maximum throughput.
         double elapsed = std::chrono::duration<double>(
             std::chrono::high_resolution_clock::now() - startTime).count();
         const double speed = GetPlaybackSpeed();
+        const double clockTarget = startPts + elapsed * speed;
+
+        double playbackEnd = duration;
+        if (clipPreviewActive)
+            playbackEnd = std::min(playbackEnd, clipPreviewEndTime);
+
+        if (playbackEnd > 0.0 && clockTarget >= playbackEnd)
+        {
+            if (clipPreviewActive)
+            {
+                const double finalFrameTime = std::max(0.0, playbackEnd - frameDur);
+                SeekToTimeInternal(finalFrameTime, INT_MAX, false, true, true, true, false);
+                clipPreviewActive = false;
+                Pause();
+            }
+            else
+            {
+                Stop();
+            }
+            PostMessage(parentWindow, WM_TIMER, 1006, 0);
+            break;
+        }
+
         double videoTime = currentPts - startPts;
         double lag = elapsed * speed - videoTime;
+        // At 4x and above, seeking for every small clock mismatch causes severe
+        // stutter. Allow a short decode runway and only seek a few times per
+        // second; continuous frame presentation fills the intervals smoothly.
+        const bool highSpeedPlayback = speed >= 4.0;
+        const double catchUpThreshold = highSpeedPlayback
+            ? std::max(1.0, speed * 0.25)
+            : std::max(frameDur * 2.0, speed * 0.05);
 
-        bool generateImage = true;
-
-        if (lag > 0.5)
+        if (lag > catchUpThreshold)
         {
-            // Very far behind (>500 ms): resync the clock so playback resumes
-            // smoothly from the current position instead of trying to catch up.
-            startTime = std::chrono::high_resolution_clock::now();
-            startPts = currentPts;
-            lag = 0.0;
-        }
-        else if (lag > frameDur * 2.0)
-        {
-            // Behind by 2+ frames: decode without image conversion to catch up.
-            generateImage = false;
+            SeekToTimeInternal(clockTarget, INT_MAX, false, true, true, true, false);
+            lastPresentedAt = std::chrono::high_resolution_clock::now();
+            continue;
         }
 
-        if (!m_decoder->DecodeNextFrame(false, generateImage, generateImage))
+        // When slightly behind, decode without image conversion. If that is
+        // insufficient, the clock-target seek above skips the missing frames.
+        const auto now = std::chrono::high_resolution_clock::now();
+        const double sinceLastPresentation = std::chrono::duration<double>(
+            now - lastPresentedAt).count();
+        const bool generateImage = lag <= frameDur * 2.0 ||
+                                   (highSpeedPlayback && sinceLastPresentation >= (1.0 / 30.0));
+
+        dropAudioDuringStepping = !generateImage && speed >= 2.0;
+        if (highSpeedPlayback)
+            codecContext->skip_frame = AVDISCARD_NONREF;
+        const bool decoded = m_decoder->DecodeNextFrame(false, generateImage, generateImage);
+        codecContext->skip_frame = AVDISCARD_DEFAULT;
+        dropAudioDuringStepping = false;
+        if (!decoded)
             break;
+        if (generateImage)
+            lastPresentedAt = std::chrono::high_resolution_clock::now();
 
         if (clipPreviewActive && currentPts >= clipPreviewEndTime)
         {

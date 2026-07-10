@@ -243,6 +243,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         else
                             g_videoPlayer->Play();
                         break;
+                    case VK_OEM_MINUS:
+                    case VK_SUBTRACT:
+                        g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() - 0.1);
+                        break;
+                    case VK_OEM_PLUS:
+                    case VK_ADD:
+                        g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() + 0.1);
+                        break;
                     case VK_LEFT:
                     case 'J':
                     case 'j':
@@ -324,7 +332,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         break;
                     }
                     case 'K':
-                    case 'k':
                         if (g_videoPlayer->IsPlaying())
                             g_videoPlayer->Pause();
                         else
