@@ -45,6 +45,40 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "200% speed should advance substantially faster than real time");
     });
 
+    suite.addTest("PlaybackSpeed_OneXStartsPromptlyAndTracksWallClock", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        player.Play();
+
+        auto startupDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(350);
+        while (player.GetCurrentTime() < 0.05 && std::chrono::steady_clock::now() < startupDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        TEST_ASSERT_GT(player.GetCurrentTime(), 0.05,
+                       "1x playback should present frames promptly");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(350));
+        player.Pause();
+        TEST_ASSERT_GT(player.GetCurrentTime(), 0.25,
+                       "1x playback should keep advancing without catch-up seek stalls");
+        TEST_ASSERT_LT(player.GetCurrentTime(), 1.0,
+                       "1x playback should remain close to its wall clock");
+    });
+
+    suite.addTest("Playback_ResumeContinuesWithoutStalling", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        player.Play();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        player.Pause();
+        const double pausedAt = player.GetCurrentTime();
+
+        player.Play();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        player.Pause();
+        TEST_ASSERT_GT(player.GetCurrentTime(), pausedAt + 0.1,
+                       "Playback should resume promptly after WASAPI is reset");
+    });
+
     suite.addTest("PlaybackSpeed_10xTracksWallClock", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);

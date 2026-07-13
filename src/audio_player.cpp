@@ -1,6 +1,8 @@
 #include "audio_player.h"
 #include "video_player.h"
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <mmreg.h>
 #include <ksmedia.h>
@@ -53,7 +55,10 @@ bool AudioPlayer::Initialize() {
     hr = m_player->audioClient->GetDevicePeriod(nullptr, &devicePeriod);
     if (FAILED(hr))
         devicePeriod = 100000; // fall back to 10ms
-    REFERENCE_TIME bufferDuration = devicePeriod * 4; // approx 40ms
+    // Video conversion and GPU readback can occasionally take more than one
+    // device period.  A 100 ms shared-mode buffer absorbs that jitter without
+    // forcing the decoder and WASAPI threads to run in lockstep.
+    REFERENCE_TIME bufferDuration = std::max<REFERENCE_TIME>(devicePeriod * 6, 1000000);
 
     DWORD streamFlags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
     hr = m_player->audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags, bufferDuration, 0, m_player->audioFormat, nullptr);
@@ -265,11 +270,6 @@ void AudioPlayer::StartThread() {
     std::lock_guard<std::mutex> lifecycleLock(m_threadLifecycleMutex);
     if (!m_player->audioTracks.empty() && m_player->audioInitialized)
     {
-        HRESULT hr = m_player->audioClient->Start();
-        if (FAILED(hr))
-        {
-            // Continue without audio or handle error appropriately
-        }
         m_framesWritten = 0;
         m_player->audioThreadRunning = true;
         m_player->audioThread = std::thread(&AudioPlayer::AudioThreadFunction, this);
@@ -449,11 +449,32 @@ void AudioPlayer::AudioThreadFunction() {
     HRESULT hr;
     auto startTime = m_player->masterStartTime;
     double startPts = m_player->masterStartPts;
+    bool deviceStarted = false;
+
+    // Starting an empty WASAPI client produces an immediate underrun.  Wait
+    // for a modest preroll instead; video can begin rendering meanwhile.
+    const int prerollFrames = std::min<int>(
+        static_cast<int>(m_player->bufferFrameCount),
+        std::max(1, m_player->audioSampleRate / 20)); // 50 ms
+    const auto prerollDeadline = std::chrono::high_resolution_clock::now() +
+                                 std::chrono::milliseconds(150);
 
     while (m_player->audioThreadRunning)
     {
         std::unique_lock<std::mutex> lock(m_player->audioMutex);
-        m_player->audioCondition.wait(lock, [this] { return HasBufferedAudio() || !m_player->audioThreadRunning; });
+        if (!deviceStarted)
+        {
+            m_player->audioCondition.wait_until(lock, prerollDeadline, [this, startPts, prerollFrames] {
+                return GetAvailableFrameCount(startPts) >= prerollFrames ||
+                       !m_player->audioThreadRunning;
+            });
+        }
+        else
+        {
+            m_player->audioCondition.wait_for(lock, std::chrono::milliseconds(2), [this] {
+                return HasBufferedAudio() || !m_player->audioThreadRunning;
+            });
+        }
 
         if (!m_player->audioThreadRunning)
             break;
@@ -474,7 +495,9 @@ void AudioPlayer::AudioThreadFunction() {
             continue;
         }
 
-        UINT64 targetWritten = static_cast<UINT64>((elapsed + 0.1) * m_player->audioSampleRate);
+        const double deviceLead = m_player->bufferFrameCount /
+                                  static_cast<double>(m_player->audioSampleRate);
+        UINT64 targetWritten = static_cast<UINT64>((elapsed + deviceLead) * m_player->audioSampleRate);
         if (targetWritten < static_cast<UINT64>(m_framesWritten))
             targetWritten = static_cast<UINT64>(m_framesWritten);
 
@@ -484,7 +507,11 @@ void AudioPlayer::AudioThreadFunction() {
         if (framesNeeded > available)
             framesNeeded = available;
 
-        int buffered = GetAvailableFrameCount();
+        const double speed = m_player->GetPlaybackSpeed();
+        const double outputPts = startPts +
+                                 static_cast<double>(m_framesWritten) * speed /
+                                 m_player->audioSampleRate;
+        int buffered = GetAvailableFrameCount(outputPts);
         if (framesNeeded > static_cast<UINT32>(buffered))
             framesNeeded = static_cast<UINT32>(buffered);
 
@@ -500,8 +527,6 @@ void AudioPlayer::AudioThreadFunction() {
         if (FAILED(hr))
             continue;
 
-        const double speed = m_player->GetPlaybackSpeed();
-        double outputPts = startPts + (double)m_framesWritten * speed / m_player->audioSampleRate;
         MixAudioTracks(pData, framesNeeded, outputPts);
 
         hr = m_player->renderClient->ReleaseBuffer(framesNeeded, 0);
@@ -509,10 +534,19 @@ void AudioPlayer::AudioThreadFunction() {
             continue;
 
         m_framesWritten += framesNeeded;
+        if (!deviceStarted)
+        {
+            hr = m_player->audioClient->Start();
+            if (FAILED(hr))
+                break;
+            deviceStarted = true;
+            startTime = std::chrono::high_resolution_clock::now();
+        }
         lock.unlock();
     }
 
-    m_player->audioClient->Stop();
+    if (deviceStarted)
+        m_player->audioClient->Stop();
     CoUninitialize();
 }
 
@@ -523,11 +557,14 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
     int16_t *outInt16 = reinterpret_cast<int16_t*>(outputBuffer);
     float *outFloat = reinterpret_cast<float*>(outputBuffer);
     const double speed = m_player->GetPlaybackSpeed();
+    const double sampleDuration = 1.0 / m_player->audioSampleRate;
+    const bool normalSpeed = std::fabs(speed - 1.0) < 0.0001;
+    std::vector<int32_t> mix(static_cast<size_t>(channels));
 
     for (int frame = 0; frame < frameCount; ++frame)
     {
-        double samplePts = startPts + frame * speed / static_cast<double>(m_player->audioSampleRate);
-        std::vector<int32_t> mix(channels, 0);
+        const double samplePts = startPts + frame * speed * sampleDuration;
+        std::fill(mix.begin(), mix.end(), 0);
         for (auto& track : m_player->audioTracks)
         {
             if (track->isMuted)
@@ -535,19 +572,41 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
 
             // Drop samples that are earlier than the desired timestamp
             while (!track->buffer.empty() &&
-                   track->bufferPts + 1.0 / m_player->audioSampleRate <= samplePts)
+                   track->bufferPts + sampleDuration <= samplePts)
             {
                 for (int ch = 0; ch < channels && !track->buffer.empty(); ++ch)
                     track->buffer.pop_front();
-                track->bufferPts += 1.0 / m_player->audioSampleRate;
+                track->bufferPts += sampleDuration;
             }
 
-            if (track->buffer.size() >= static_cast<size_t>(channels))
+            // Do not play a future packet early when there is a timestamp gap.
+            if (track->bufferPts > samplePts + sampleDuration * 0.5 ||
+                track->buffer.size() < static_cast<size_t>(channels))
+                continue;
+
+            if (normalSpeed)
             {
                 for (int ch = 0; ch < channels; ++ch)
                 {
-                    int16_t val = track->buffer[ch];
+                    const int16_t val = track->buffer.front();
+                    track->buffer.pop_front();
                     mix[ch] += static_cast<int32_t>(val * track->volume * m_masterVolume);
+                }
+                track->bufferPts += sampleDuration;
+            }
+            else
+            {
+                // Linear interpolation avoids the harsh repeated/dropped-sample
+                // edges produced by nearest-neighbour speed conversion.
+                const double fraction = std::clamp(
+                    (samplePts - track->bufferPts) / sampleDuration, 0.0, 1.0);
+                const bool hasNext = track->buffer.size() >= static_cast<size_t>(channels * 2);
+                for (int ch = 0; ch < channels; ++ch)
+                {
+                    const double first = track->buffer[ch];
+                    const double second = hasNext ? track->buffer[channels + ch] : first;
+                    const double value = first + (second - first) * fraction;
+                    mix[ch] += static_cast<int32_t>(value * track->volume * m_masterVolume);
                 }
             }
         }
@@ -568,25 +627,46 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
 bool AudioPlayer::HasBufferedAudio() const {
     for (const auto& track : m_player->audioTracks)
     {
-        if (!track->buffer.empty())
+        if (!track->isMuted && !track->buffer.empty())
             return true;
     }
     return false;
 }
 
-int AudioPlayer::GetAvailableFrameCount() const {
-    int minFrames = INT_MAX;
+int AudioPlayer::GetAvailableFrameCount(double startPts) const {
+    int maxFrames = 0;
     bool hasTrack = false;
+    const int channels = std::max(1, m_player->audioChannels);
+    const double sampleRate = std::max(1, m_player->audioSampleRate);
+    const double speed = std::max(0.1, m_player->GetPlaybackSpeed());
+
     for (const auto& track : m_player->audioTracks)
     {
         if (track->isMuted)
             continue;
-        int frames = static_cast<int>(track->buffer.size() / m_player->audioChannels);
-        if (frames < minFrames)
-            minFrames = frames;
+
         hasTrack = true;
+        int64_t sourceFrames = static_cast<int64_t>(track->buffer.size() / channels);
+        if (sourceFrames <= 0)
+            continue;
+
+        if (startPts > track->bufferPts)
+        {
+            const int64_t staleFrames = static_cast<int64_t>(
+                std::floor((startPts - track->bufferPts) * sampleRate + 1e-6));
+            sourceFrames = std::max<int64_t>(0, sourceFrames - staleFrames);
+        }
+        if (sourceFrames <= 0)
+            continue;
+
+        int64_t outputFrames = sourceFrames;
+        if (std::fabs(speed - 1.0) >= 0.0001)
+            outputFrames = static_cast<int64_t>(std::floor((sourceFrames - 1) / speed)) + 1;
+
+        outputFrames = std::min<int64_t>(outputFrames, INT_MAX);
+        maxFrames = std::max(maxFrames, static_cast<int>(outputFrames));
     }
-    if (!hasTrack || minFrames == INT_MAX)
+    if (!hasTrack)
         return 0;
-    return minFrames;
+    return maxFrames;
 }

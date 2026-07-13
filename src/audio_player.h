@@ -24,7 +24,7 @@ private:
     void AudioThreadFunction();
     void MixAudioTracks(uint8_t* outputBuffer, int frameCount, double startPts);
     bool HasBufferedAudio() const;
-    int GetAvailableFrameCount() const;
+    int GetAvailableFrameCount(double startPts) const;
 
     VideoPlayer* m_player;
     int64_t m_framesWritten;

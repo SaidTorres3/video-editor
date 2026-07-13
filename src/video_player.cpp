@@ -329,7 +329,9 @@ void VideoPlayer::Pause()
         clipPreviewActive = false;
         m_playbackSeekPending.store(false, std::memory_order_release);
 
-        m_audioPlayer->StopThread();
+        // Reset WASAPI so queued samples from before the pause cannot leak
+        // into the next Play() and make the resumed audio sound dirty.
+        m_audioPlayer->StopThread(true);
 
         if (playbackThreadRunning)
         {
@@ -2262,11 +2264,13 @@ void VideoPlayer::PlaybackThreadFunction()
         // stutter. Allow a short decode runway and only seek a few times per
         // second; continuous frame presentation fills the intervals smoothly.
         const bool highSpeedPlayback = speed >= 4.0;
-        const double catchUpThreshold = highSpeedPlayback
-            ? std::max(1.0, speed * 0.25)
-            : std::max(frameDur * 2.0, speed * 0.05);
+        const double catchUpThreshold = std::max(1.0, speed * 0.25);
 
-        if (lag > catchUpThreshold)
+        // Exact catch-up seeks flush every audio decoder and buffer.  They are
+        // useful when skipping large spans at 4x+, but at normal speed even a
+        // brief two-frame hiccup used to trigger them repeatedly, causing both
+        // the visible stutter and chopped audio.
+        if (highSpeedPlayback && lag > catchUpThreshold)
         {
             SeekToTimeInternal(clockTarget, INT_MAX, false, true, true, true, false);
             lastPresentedAt = std::chrono::high_resolution_clock::now();
@@ -2281,7 +2285,10 @@ void VideoPlayer::PlaybackThreadFunction()
         const bool generateImage = lag <= frameDur * 2.0 ||
                                    (highSpeedPlayback && sinceLastPresentation >= (1.0 / 30.0));
 
-        dropAudioDuringStepping = !generateImage && speed >= 2.0;
+        // At 1x-3x we can skip the expensive image conversion while still
+        // decoding every audio packet. Dropping those packets was audible as
+        // gaps whenever video briefly fell behind.
+        dropAudioDuringStepping = !generateImage && highSpeedPlayback;
         if (highSpeedPlayback)
             codecContext->skip_frame = AVDISCARD_NONREF;
         const bool decoded = m_decoder->DecodeNextFrame(false, generateImage, generateImage);
