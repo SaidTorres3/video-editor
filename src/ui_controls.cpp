@@ -1,6 +1,7 @@
 #include "ui_controls.h"
 #include "video_player.h"
 #include "utils.h"
+#include "options_window.h"
 #include <commctrl.h>
 #include <uxtheme.h>
 
@@ -36,6 +37,12 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_BUTTON_PLAY_CLIP 1027
 #define ID_BUTTON_PLAY_END 1028
 #define ID_BUTTON_TOGGLE_PANEL 1029
+#define ID_BUTTON_ADD_CLIP 1030
+#define ID_BUTTON_CLEAR_CLIPS 1031
+#define ID_LISTBOX_CUT_SEGMENTS 1032
+#define ID_BUTTON_UPDATE_CLIP 1033
+#define ID_BUTTON_REMOVE_CLIP 1034
+#define ID_BUTTON_PLAY_ALL_CLIPS 1035
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
@@ -53,6 +60,8 @@ extern HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEn
 extern HWND g_hLabelCutInfo;
 extern HWND g_hButtonOptions;
 extern HWND g_hButtonTogglePanel;
+extern HWND g_hButtonAddClip, g_hButtonClearClips;
+extern HWND g_hListBoxCutSegments, g_hButtonUpdateClip, g_hButtonRemoveClip, g_hButtonPlayAllClips;
 extern bool g_isPanelVisible;
 
 void CreateControls(HWND hwnd)
@@ -253,6 +262,54 @@ void CreateControls(HWND hwnd)
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonPlayEnd);
 
+    g_hListBoxCutSegments = CreateWindow(
+        L"LISTBOX", nullptr,
+        WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
+        340, 430, 200, 55,
+        hwnd, (HMENU)ID_LISTBOX_CUT_SEGMENTS,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hListBoxCutSegments);
+
+    g_hButtonPlayAllClips = CreateWindow(
+        L"BUTTON", L"Play\nAll",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | BS_MULTILINE,
+        545, 430, 45, 55,
+        hwnd, (HMENU)ID_BUTTON_PLAY_ALL_CLIPS,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonPlayAllClips);
+
+    g_hButtonAddClip = CreateWindow(
+        L"BUTTON", L"Add",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        340, 430, 95, 25,
+        hwnd, (HMENU)ID_BUTTON_ADD_CLIP,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonAddClip);
+
+    g_hButtonUpdateClip = CreateWindow(
+        L"BUTTON", L"Update",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        400, 490, 60, 25,
+        hwnd, (HMENU)ID_BUTTON_UPDATE_CLIP,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonUpdateClip);
+
+    g_hButtonRemoveClip = CreateWindow(
+        L"BUTTON", L"Remove",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        465, 490, 60, 25,
+        hwnd, (HMENU)ID_BUTTON_REMOVE_CLIP,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonRemoveClip);
+
+    g_hButtonClearClips = CreateWindow(
+        L"BUTTON", L"Clear",
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        445, 430, 95, 25,
+        hwnd, (HMENU)ID_BUTTON_CLEAR_CLIPS,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+    ApplyDarkTheme(g_hButtonClearClips);
+
     g_hLabelCutInfo = CreateWindow(
         L"STATIC", L"Cut points not set.",
         WS_VISIBLE | WS_CHILD | SS_LEFT,
@@ -364,6 +421,12 @@ void CreateControls(HWND hwnd)
     EnableWindow(g_hEditEndTime, FALSE);
     EnableWindow(g_hButtonPlayClip, FALSE);
     EnableWindow(g_hButtonPlayEnd, FALSE);
+    EnableWindow(g_hButtonAddClip, FALSE);
+    EnableWindow(g_hButtonClearClips, FALSE);
+    EnableWindow(g_hListBoxCutSegments, FALSE);
+    EnableWindow(g_hButtonUpdateClip, FALSE);
+    EnableWindow(g_hButtonRemoveClip, FALSE);
+    EnableWindow(g_hButtonPlayAllClips, FALSE);
     EnableWindow(g_hButtonCut, FALSE);
     EnableWindow(g_hCheckboxMergeAudio, FALSE);
     EnableWindow(g_hRadioCopyCodec, FALSE);
@@ -409,6 +472,7 @@ void RepositionControls(HWND hwnd)
     int audioControlsY = 50;
 
     int nCmdShow = g_isPanelVisible ? SW_SHOW : SW_HIDE;
+    int multiClipCmdShow = (g_isPanelVisible && g_enableMultiClipEditing) ? SW_SHOW : SW_HIDE;
     ShowWindow(g_hLabelAudioTracks, nCmdShow);
     ShowWindow(g_hListBoxAudioTracks, nCmdShow);
     ShowWindow(g_hButtonMuteTrack, nCmdShow);
@@ -423,6 +487,12 @@ void RepositionControls(HWND hwnd)
     ShowWindow(g_hEditEndTime, nCmdShow);
     ShowWindow(g_hButtonPlayClip, nCmdShow);
     ShowWindow(g_hButtonPlayEnd, nCmdShow);
+    ShowWindow(g_hButtonAddClip, multiClipCmdShow);
+    ShowWindow(g_hButtonClearClips, multiClipCmdShow);
+    ShowWindow(g_hListBoxCutSegments, multiClipCmdShow);
+    ShowWindow(g_hButtonUpdateClip, multiClipCmdShow);
+    ShowWindow(g_hButtonRemoveClip, multiClipCmdShow);
+    ShowWindow(g_hButtonPlayAllClips, multiClipCmdShow);
     ShowWindow(g_hLabelCutInfo, nCmdShow);
     ShowWindow(g_hButtonCut, nCmdShow);
     ShowWindow(g_hCheckboxMergeAudio, nCmdShow);
@@ -432,17 +502,17 @@ void RepositionControls(HWND hwnd)
     if (g_isPanelVisible)
     {
         MoveWindow(g_hLabelAudioTracks, audioControlsX, audioControlsY, 200, 20, TRUE);
-        MoveWindow(g_hListBoxAudioTracks, audioControlsX, audioControlsY + 25, 200, 100, TRUE);
-        MoveWindow(g_hButtonMuteTrack, audioControlsX, audioControlsY + 135, 100, 25, TRUE);
+        MoveWindow(g_hListBoxAudioTracks, audioControlsX, audioControlsY + 25, 200, 70, TRUE);
+        MoveWindow(g_hButtonMuteTrack, audioControlsX, audioControlsY + 100, 100, 25, TRUE);
 
-        MoveWindow(g_hLabelTrackVolume, audioControlsX, audioControlsY + 170, 200, 20, TRUE);
-        MoveWindow(g_hSliderTrackVolume, audioControlsX, audioControlsY + 195, 200, 30, TRUE);
+        MoveWindow(g_hLabelTrackVolume, audioControlsX, audioControlsY + 135, 200, 20, TRUE);
+        MoveWindow(g_hSliderTrackVolume, audioControlsX, audioControlsY + 155, 200, 30, TRUE);
 
-        MoveWindow(g_hLabelMasterVolume, audioControlsX, audioControlsY + 235, 200, 20, TRUE);
-        MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 260, 200, 30, TRUE);
+        MoveWindow(g_hLabelMasterVolume, audioControlsX, audioControlsY + 190, 200, 20, TRUE);
+        MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 210, 200, 30, TRUE);
 
         // Editing controls (below audio)
-        int editingControlsY = audioControlsY + 260 + 40;
+        int editingControlsY = audioControlsY + 245;
         MoveWindow(g_hLabelEditing, audioControlsX, editingControlsY, 200, 20, TRUE);
         MoveWindow(g_hButtonSetStart, audioControlsX, editingControlsY + 25, 95, 25, TRUE);
         MoveWindow(g_hButtonSetEnd, audioControlsX + 105, editingControlsY + 25, 95, 25, TRUE);
@@ -450,17 +520,30 @@ void RepositionControls(HWND hwnd)
         MoveWindow(g_hEditEndTime, audioControlsX + 105, editingControlsY + 55, 95, 20, TRUE);
         MoveWindow(g_hButtonPlayClip, audioControlsX + 200, editingControlsY + 55, 20, 20, TRUE);
         MoveWindow(g_hButtonPlayEnd, audioControlsX + 225, editingControlsY + 55, 20, 20, TRUE);
-        MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 80, 200, 40, TRUE);
-        MoveWindow(g_hButtonCut, audioControlsX, editingControlsY + 125, 200, 30, TRUE);
-        MoveWindow(g_hCheckboxMergeAudio, audioControlsX, editingControlsY + 160, 200, 25, TRUE);
-        MoveWindow(g_hRadioH264, audioControlsX, editingControlsY + 190, 120, 20, TRUE);
-        MoveWindow(g_hRadioCopyCodec, audioControlsX + 120, editingControlsY + 190, 100, 20, TRUE);
-        MoveWindow(g_hRadioUseBitrate, audioControlsX, editingControlsY + 215, 100, 20, TRUE);
-        MoveWindow(g_hRadioUseSize, audioControlsX + 105, editingControlsY + 215, 100, 20, TRUE);
-        MoveWindow(g_hLabelBitrate, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
-        MoveWindow(g_hEditBitrate, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
-        MoveWindow(g_hLabelTargetSize, audioControlsX, editingControlsY + 240, 200, 20, TRUE);
-        MoveWindow(g_hEditTargetSize, audioControlsX, editingControlsY + 260, 200, 20, TRUE);
+        int exportControlsY;
+        if (g_enableMultiClipEditing) {
+            MoveWindow(g_hListBoxCutSegments, audioControlsX, editingControlsY + 80, 200, 55, TRUE);
+            MoveWindow(g_hButtonPlayAllClips, audioControlsX + 205, editingControlsY + 80, 40, 55, TRUE);
+            MoveWindow(g_hButtonAddClip, audioControlsX, editingControlsY + 140, 55, 25, TRUE);
+            MoveWindow(g_hButtonUpdateClip, audioControlsX + 60, editingControlsY + 140, 60, 25, TRUE);
+            MoveWindow(g_hButtonRemoveClip, audioControlsX + 125, editingControlsY + 140, 60, 25, TRUE);
+            MoveWindow(g_hButtonClearClips, audioControlsX + 190, editingControlsY + 140, 55, 25, TRUE);
+            MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 170, 240, 25, TRUE);
+            exportControlsY = editingControlsY + 195;
+        } else {
+            MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 80, 240, 40, TRUE);
+            exportControlsY = editingControlsY + 125;
+        }
+        MoveWindow(g_hButtonCut, audioControlsX, exportControlsY, 200, 30, TRUE);
+        MoveWindow(g_hCheckboxMergeAudio, audioControlsX, exportControlsY + 35, 200, 25, TRUE);
+        MoveWindow(g_hRadioH264, audioControlsX, exportControlsY + 65, 120, 20, TRUE);
+        MoveWindow(g_hRadioCopyCodec, audioControlsX + 120, exportControlsY + 65, 100, 20, TRUE);
+        MoveWindow(g_hRadioUseBitrate, audioControlsX, exportControlsY + 90, 100, 20, TRUE);
+        MoveWindow(g_hRadioUseSize, audioControlsX + 105, exportControlsY + 90, 100, 20, TRUE);
+        MoveWindow(g_hLabelBitrate, audioControlsX, exportControlsY + 115, 200, 20, TRUE);
+        MoveWindow(g_hEditBitrate, audioControlsX, exportControlsY + 135, 200, 20, TRUE);
+        MoveWindow(g_hLabelTargetSize, audioControlsX, exportControlsY + 115, 200, 20, TRUE);
+        MoveWindow(g_hEditTargetSize, audioControlsX, exportControlsY + 135, 200, 20, TRUE);
     }
 
     // Video area (takes up remaining space)

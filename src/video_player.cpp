@@ -479,10 +479,53 @@ void VideoPlayer::PlayClip(double startTime, double endTime)
     if (isPlaying)
         Pause();
 
+    clipPreviewSegments.clear();
+    clipPreviewSegmentIndex = 0;
     clipPreviewEndTime = endTime;
     clipPreviewActive = true;
     SeekToTimeExact(startTime);
     Play();
+}
+
+void VideoPlayer::PlayClips(const std::vector<ClipSegment>& segments)
+{
+    if (!isLoaded)
+        return;
+
+    std::vector<ClipSegment> validSegments;
+    for (auto segment : segments) {
+        segment.start = std::clamp(segment.start, 0.0, duration);
+        segment.end = std::clamp(segment.end, 0.0, duration);
+        if (segment.end > segment.start)
+            validSegments.push_back(segment);
+    }
+    std::sort(validSegments.begin(), validSegments.end(), [](const ClipSegment& a, const ClipSegment& b) {
+        return a.start < b.start;
+    });
+    if (validSegments.empty())
+        return;
+
+    if (isPlaying)
+        Pause();
+
+    clipPreviewSegments = std::move(validSegments);
+    clipPreviewSegmentIndex = 0;
+    clipPreviewEndTime = clipPreviewSegments.front().end;
+    clipPreviewActive = true;
+    SeekToTimeExact(clipPreviewSegments.front().start);
+    Play();
+}
+
+bool VideoPlayer::AdvanceClipPreview()
+{
+    if (!clipPreviewActive || clipPreviewSegments.empty() ||
+        clipPreviewSegmentIndex + 1 >= clipPreviewSegments.size())
+        return false;
+
+    ++clipPreviewSegmentIndex;
+    clipPreviewEndTime = clipPreviewSegments[clipPreviewSegmentIndex].end;
+    SeekWhilePlaying(clipPreviewSegments[clipPreviewSegmentIndex].start, true);
+    return true;
 }
 
 void VideoPlayer::CancelClipPreview()
@@ -1962,9 +2005,11 @@ void VideoPlayer::OnTimer()
         m_decoder->DecodeNextFrame(true);
         if (clipPreviewActive && currentPts >= clipPreviewEndTime)
         {
-            clipPreviewActive = false;
-            Pause();
-            UpdateControls();
+            if (!AdvanceClipPreview()) {
+                clipPreviewActive = false;
+                Pause();
+                UpdateControls();
+            }
         }
     }
 }
@@ -2203,6 +2248,8 @@ void VideoPlayer::PlaybackThreadFunction()
 
         if (clipPreviewActive && currentPts >= clipPreviewEndTime)
         {
+            if (AdvanceClipPreview())
+                continue;
             clipPreviewActive = false;
             Pause();
             PostMessage(parentWindow, WM_TIMER, 1006, 0);
@@ -2236,6 +2283,15 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            std::atomic<bool>* cancelFlag)
 {
     return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, encoder, qualityPreset, maxBitrate, progressBar, cancelFlag);
+}
+
+bool VideoPlayer::CutVideo(const std::wstring &outputFilename, const std::vector<ClipSegment>& segments,
+                           bool mergeAudio, bool convertH264, EncoderSelection encoder,
+                           const std::wstring& qualityPreset, int maxBitrate, HWND progressBar,
+                           std::atomic<bool>* cancelFlag)
+{
+    return m_cutter->CutVideo(outputFilename, segments, mergeAudio, convertH264, encoder,
+                              qualityPreset, maxBitrate, progressBar, cancelFlag);
 }
 
 LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)

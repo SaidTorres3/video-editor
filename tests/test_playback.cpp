@@ -384,6 +384,26 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Pause();
     });
 
+    suite.addTest("PlayClips_AdvancesAcrossSegments", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        std::vector<ClipSegment> segments = {{0.0, 0.15}, {1.0, 1.6}};
+        player.PlayClips(segments);
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (player.GetCurrentTime() < 0.9 && std::chrono::steady_clock::now() < deadline) {
+            MSG msg;
+            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        TEST_ASSERT_GT(player.GetCurrentTime(), 0.9, "Preview should jump to the next selected clip");
+        player.CancelClipPreview();
+    });
+
     suite.addTest("CancelClipPreview", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);

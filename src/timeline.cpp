@@ -5,6 +5,7 @@
 #include "video_player.h"
 #include "ui_updates.h"
 #include "options_window.h"
+#include "editing.h"
 #include <windowsx.h>
 #include <cmath>
 #include <climits>
@@ -999,6 +1000,20 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             double dur = g_videoPlayer->GetDuration();
+            HBRUSH segmentBrush = CreateSolidBrush(RGB(35, 145, 95));
+            HBRUSH selectedSegmentBrush = CreateSolidBrush(RGB(70, 210, 135));
+            for (size_t i = 0; g_enableMultiClipEditing && i < g_cutSegments.size(); ++i)
+            {
+                const auto& segment = g_cutSegments[i];
+                int sx = TimeToPixel(segment.start, rc, dur);
+                int ex = TimeToPixel(segment.end, rc, dur);
+                RECT segmentRect = { sx, std::max(0L, rc.bottom - 8), std::max(sx + 1, ex), rc.bottom };
+                FillRect(hdc, &segmentRect,
+                         static_cast<int>(i) == g_selectedCutSegment ? selectedSegmentBrush : segmentBrush);
+            }
+            DeleteObject(segmentBrush);
+            DeleteObject(selectedSegmentBrush);
+
             double cur = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
             int x = TimeToPixel(cur, rc, dur);
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(200,0,0));

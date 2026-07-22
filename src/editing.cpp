@@ -7,6 +7,7 @@
 #include <thread>
 #include <string>
 #include <filesystem>
+#include <algorithm>
 #include "b2_upload.h"
 #include "catbox_upload.h"
 #include "file_handling.h"
@@ -14,6 +15,7 @@
 // Forward declarations
 void UpdateCutInfoLabel(HWND hwnd);
 void UpdateCutTimeEdits();
+void UpdateTimeline();
 
 // Build the resolved output path from exportation settings.
 // Returns the full path including .mp4 extension.
@@ -63,7 +65,31 @@ bool g_catboxUploadSuccess = false;
 bool g_b2UploadSuccess = false;
 bool g_uploadSuccess = false;
 bool g_lastOperationWasExport = false;
+bool g_isExporting = false;
 std::wstring g_lastOutputFile;
+
+static std::vector<ClipSegment> NormalizeSegments(std::vector<ClipSegment> segments, double duration)
+{
+    for (auto& segment : segments) {
+        segment.start = std::clamp(segment.start, 0.0, duration);
+        segment.end = std::clamp(segment.end, 0.0, duration);
+    }
+    segments.erase(std::remove_if(segments.begin(), segments.end(), [](const ClipSegment& segment) {
+        return segment.end <= segment.start;
+    }), segments.end());
+    std::sort(segments.begin(), segments.end(), [](const ClipSegment& a, const ClipSegment& b) {
+        return a.start < b.start;
+    });
+
+    std::vector<ClipSegment> normalized;
+    for (const auto& segment : segments) {
+        if (!normalized.empty() && segment.start <= normalized.back().end + 0.001)
+            normalized.back().end = normalized.back().end > segment.end ? normalized.back().end : segment.end;
+        else
+            normalized.push_back(segment);
+    }
+    return normalized;
+}
 
 void OnSetStartClicked(HWND hwnd)
 {
@@ -75,6 +101,7 @@ void OnSetStartClicked(HWND hwnd)
     }
     UpdateCutInfoLabel(hwnd);
     UpdateCutTimeEdits();
+    UpdateTimeline();
 }
 
 void OnSetEndClicked(HWND hwnd)
@@ -89,6 +116,128 @@ void OnSetEndClicked(HWND hwnd)
     g_cutEndTime = currentTime;
     UpdateCutInfoLabel(hwnd);
     UpdateCutTimeEdits();
+    UpdateTimeline();
+}
+
+void OnAddClipClicked(HWND hwnd)
+{
+    if (!g_enableMultiClipEditing)
+        return;
+    if (!g_videoPlayer || g_cutStartTime < 0 || g_cutEndTime <= g_cutStartTime) {
+        MessageBoxW(hwnd, L"Set a valid start and end point before adding a clip.", L"Invalid Clip", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    g_cutSegments.push_back({g_cutStartTime, g_cutEndTime});
+    g_cutSegments = NormalizeSegments(std::move(g_cutSegments), g_videoPlayer->GetDuration());
+    g_selectedCutSegment = -1;
+    g_cutStartTime = -1.0;
+    g_cutEndTime = -1.0;
+    RefreshCutSegmentList();
+    UpdateCutInfoLabel(hwnd);
+    UpdateCutTimeEdits();
+    UpdateTimeline();
+}
+
+void OnUpdateClipClicked(HWND hwnd)
+{
+    if (!g_enableMultiClipEditing)
+        return;
+    if (!g_videoPlayer || g_selectedCutSegment < 0 ||
+        g_selectedCutSegment >= static_cast<int>(g_cutSegments.size()) ||
+        g_cutStartTime < 0 || g_cutEndTime <= g_cutStartTime) {
+        MessageBoxW(hwnd, L"Select a clip and set valid start and end points before updating it.",
+                    L"Invalid Clip", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    const double midpoint = (g_cutStartTime + g_cutEndTime) * 0.5;
+    g_cutSegments[g_selectedCutSegment] = {g_cutStartTime, g_cutEndTime};
+    g_cutSegments = NormalizeSegments(std::move(g_cutSegments), g_videoPlayer->GetDuration());
+    g_selectedCutSegment = -1;
+    for (size_t i = 0; i < g_cutSegments.size(); ++i) {
+        if (midpoint >= g_cutSegments[i].start && midpoint <= g_cutSegments[i].end) {
+            g_selectedCutSegment = static_cast<int>(i);
+            break;
+        }
+    }
+    if (g_selectedCutSegment >= 0) {
+        g_cutStartTime = g_cutSegments[g_selectedCutSegment].start;
+        g_cutEndTime = g_cutSegments[g_selectedCutSegment].end;
+    }
+    RefreshCutSegmentList();
+    UpdateCutInfoLabel(hwnd);
+    UpdateCutTimeEdits();
+    UpdateTimeline();
+}
+
+void OnRemoveClipClicked(HWND hwnd)
+{
+    if (!g_enableMultiClipEditing)
+        return;
+    if (g_selectedCutSegment < 0 || g_selectedCutSegment >= static_cast<int>(g_cutSegments.size()))
+        return;
+    g_cutSegments.erase(g_cutSegments.begin() + g_selectedCutSegment);
+    g_selectedCutSegment = -1;
+    g_cutStartTime = -1.0;
+    g_cutEndTime = -1.0;
+    RefreshCutSegmentList();
+    UpdateCutInfoLabel(hwnd);
+    UpdateCutTimeEdits();
+    UpdateTimeline();
+}
+
+void OnClearClipsClicked(HWND hwnd)
+{
+    if (!g_enableMultiClipEditing)
+        return;
+    g_cutSegments.clear();
+    g_selectedCutSegment = -1;
+    g_cutStartTime = -1.0;
+    g_cutEndTime = -1.0;
+    RefreshCutSegmentList();
+    UpdateCutInfoLabel(hwnd);
+    UpdateCutTimeEdits();
+    UpdateTimeline();
+}
+
+void OnPlayAllClipsClicked(HWND hwnd)
+{
+    if (!g_enableMultiClipEditing)
+        return;
+    if (!g_videoPlayer || g_cutSegments.empty()) {
+        MessageBoxW(hwnd, L"Add at least one clip before previewing the sequence.",
+                    L"No Clips", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    g_videoPlayer->PlayClips(g_cutSegments);
+    UpdateControls();
+}
+
+void OnCutSegmentSelectionChanged(HWND hwnd)
+{
+    if (!g_enableMultiClipEditing)
+        return;
+    extern HWND g_hListBoxCutSegments;
+    int selected = static_cast<int>(SendMessage(g_hListBoxCutSegments, LB_GETCURSEL, 0, 0));
+    if (selected == LB_ERR || selected < 0 || selected >= static_cast<int>(g_cutSegments.size())) {
+        g_selectedCutSegment = -1;
+        UpdateControls();
+        return;
+    }
+
+    g_selectedCutSegment = selected;
+    g_cutStartTime = g_cutSegments[selected].start;
+    g_cutEndTime = g_cutSegments[selected].end;
+    if (g_videoPlayer && g_videoPlayer->IsLoaded()) {
+        if (g_videoPlayer->IsPlaying())
+            g_videoPlayer->SeekWhilePlaying(g_cutStartTime);
+        else
+            g_videoPlayer->SeekToTimeExact(g_cutStartTime);
+    }
+    UpdateCutInfoLabel(hwnd);
+    UpdateCutTimeEdits();
+    UpdateTimeline();
 }
 
 void OnPlayClipClicked(HWND hwnd)
@@ -122,10 +271,28 @@ void OnPlayEndClipClicked(HWND hwnd)
 
 void OnCutClicked(HWND hwnd)
 {
+    if (g_isExporting)
+        return;
     g_lastOperationWasExport = false;
-    if (!g_videoPlayer || g_cutStartTime < 0 || g_cutEndTime <= g_cutStartTime)
+    if (!g_videoPlayer)
     {
-        MessageBoxW(hwnd, L"Please set valid start and end points for the cut.", L"Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    std::vector<ClipSegment> segments = g_enableMultiClipEditing
+                                        ? g_cutSegments
+                                        : std::vector<ClipSegment>{};
+    if (g_cutStartTime >= 0 && g_cutEndTime > g_cutStartTime) {
+        if (g_enableMultiClipEditing && g_selectedCutSegment >= 0 &&
+            g_selectedCutSegment < static_cast<int>(segments.size()))
+            segments[g_selectedCutSegment] = {g_cutStartTime, g_cutEndTime};
+        else
+            segments.push_back({g_cutStartTime, g_cutEndTime});
+    }
+    segments = NormalizeSegments(std::move(segments), g_videoPlayer->GetDuration());
+    if (segments.empty())
+    {
+        MessageBoxW(hwnd, L"Please add at least one valid clip.", L"Error", MB_OK | MB_ICONERROR);
         return;
     }
 
@@ -172,11 +339,12 @@ void OnCutClicked(HWND hwnd)
     }
 
     {
-        SetWindowTextW(g_hStatusText, L"Cutting video... Please wait.");
-        EnableWindow(hwnd, FALSE); // Disable UI during cut
+        SetWindowTextW(g_hStatusText, L"Cutting video... You can keep using the editor.");
 
         bool mergeAudio = IsDlgButtonChecked(hwnd, 1014) == BST_CHECKED; // ID_CHECKBOX_MERGE_AUDIO
         bool convertH264 = SendMessage(GetDlgItem(hwnd, 1016), BM_GETCHECK, 0, 0) == BST_CHECKED; // ID_RADIO_H264
+        if (segments.size() > 1)
+            convertH264 = true;
         wchar_t bitrateText[32];
         GetWindowTextW(GetDlgItem(hwnd, 1017), bitrateText, 32); // ID_EDIT_BITRATE
         int bitrate = _wtoi(bitrateText);
@@ -187,11 +355,12 @@ void OnCutClicked(HWND hwnd)
 
         bool useSize = SendMessage(GetDlgItem(hwnd, 1025), BM_GETCHECK, 0, 0) == BST_CHECKED; // ID_RADIO_USE_SIZE
 
-        double startTime = g_cutStartTime;
-        double endTime = g_cutEndTime;
+        double selectedDuration = 0.0;
+        for (const auto& segment : segments)
+            selectedDuration += segment.end - segment.start;
 
         if (convertH264 && useSize && targetSize > 0) {
-            double duration = endTime - startTime;
+            double duration = selectedDuration;
             int audioKbps = 0;
             if (mergeAudio) {
                 audioKbps = 128; // single AAC track
@@ -207,16 +376,18 @@ void OnCutClicked(HWND hwnd)
             bitrate = totalKbps > audioKbps ? (totalKbps - audioKbps) : totalKbps / 2;
         }
 
+        g_isExporting = true;
+        UpdateControls();
         ShowProgressWindow(hwnd);
         UpdateProgressStatus(L"Preparing to cut video...");
         std::wstring outFile = resolvedPath;
-        std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, startTime, endTime]() {
+        std::thread([hwnd, outFile, mergeAudio, convertH264, bitrate, segments]() {
             g_uploadSuccess = false;
             g_catboxUploadSuccess = false;
             g_b2UploadSuccess = false;
             g_catboxUploadedUrl.clear();
             g_b2UploadedUrl.clear();
-            bool ok = g_videoPlayer->CutVideo(outFile, startTime, endTime,
+            bool ok = g_videoPlayer->CutVideo(outFile, segments,
                                              mergeAudio, convertH264, g_encoderSelection, g_qualityPreset,
                                              bitrate, g_hProgressBar, &g_cancelExport);
             g_lastOutputFile = ok ? outFile : L"";
@@ -257,6 +428,8 @@ void OnCutClicked(HWND hwnd)
 
 void OnExportClicked(HWND hwnd)
 {
+    if (g_isExporting)
+        return;
     g_lastOperationWasExport = true;
     if (!g_videoPlayer)
         return;
@@ -304,8 +477,7 @@ void OnExportClicked(HWND hwnd)
     }
 
     {
-        SetWindowTextW(g_hStatusText, L"Exporting video... Please wait.");
-        EnableWindow(hwnd, FALSE);
+        SetWindowTextW(g_hStatusText, L"Exporting video... You can keep using the editor.");
 
         bool mergeAudio = IsDlgButtonChecked(hwnd, 1014) == BST_CHECKED;
         bool convertH264 = SendMessage(GetDlgItem(hwnd, 1016), BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -339,6 +511,8 @@ void OnExportClicked(HWND hwnd)
             bitrate = totalKbps > audioKbps ? (totalKbps - audioKbps) : totalKbps / 2;
         }
 
+        g_isExporting = true;
+        UpdateControls();
         ShowProgressWindow(hwnd);
         UpdateProgressStatus(L"Preparing to export video...");
         std::wstring outFile = resolvedPath;

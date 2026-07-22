@@ -49,19 +49,59 @@ void FillBlackYuv420(AVFrame* frame)
     }
 }
 
+int FindSegmentForTime(int64_t sourceUs, const std::vector<int64_t>& starts,
+                       const std::vector<int64_t>& ends)
+{
+    for (size_t i = 0; i < starts.size(); ++i) {
+        if (sourceUs >= starts[i] && sourceUs < ends[i])
+            return static_cast<int>(i);
+        if (sourceUs < starts[i])
+            break;
+    }
+    return -1;
+}
+
+int64_t MapOutputTime(int64_t sourceUs, int segmentIndex,
+                      const std::vector<int64_t>& starts,
+                      const std::vector<int64_t>& outputStarts)
+{
+    return outputStarts[segmentIndex] + sourceUs - starts[segmentIndex];
+}
+
+int64_t RebasePacketTimestamp(int64_t timestamp, AVRational timeBase, int segmentIndex,
+                              const std::vector<int64_t>& starts,
+                              const std::vector<int64_t>& outputStarts)
+{
+    if (timestamp == AV_NOPTS_VALUE)
+        return AV_NOPTS_VALUE;
+    int64_t sourceUs = av_rescale_q(timestamp, timeBase, AV_TIME_BASE_Q);
+    int64_t mappedUs = MapOutputTime(sourceUs, segmentIndex, starts, outputStarts);
+    return av_rescale_q(mappedUs, AV_TIME_BASE_Q, timeBase);
+}
+
 }
 
 VideoCutter::VideoCutter(VideoPlayer* player) : m_player(player), m_lastDisplayedPercent(-1) {}
 
 VideoCutter::~VideoCutter() {}
 
+bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
+                           double endTime, bool mergeAudio, bool convertH264,
+                           EncoderSelection encoder, const std::wstring& qualityPreset, int maxBitrate,
+                           HWND progressBar, std::atomic<bool>* cancelFlag)
+{
+    return CutVideo(outputFilename, std::vector<ClipSegment>{{startTime, endTime}},
+                    mergeAudio, convertH264, encoder, qualityPreset, maxBitrate,
+                    progressBar, cancelFlag);
+}
+
 void VideoCutter::ResetProgressTracking() {
     m_lastDisplayedPercent = -1;
     m_lastUpdateTime = std::chrono::high_resolution_clock::now();
 }
 
-bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
-                           double endTime, bool mergeAudio, bool convertH264,
+bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector<ClipSegment>& selectedSegments,
+                           bool mergeAudio, bool convertH264,
                            EncoderSelection encoder, const std::wstring& qualityPreset, int maxBitrate, HWND progressBar,
                            std::atomic<bool>* cancelFlag)
 {
@@ -72,9 +112,55 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         return false;
     }
 
+    std::vector<ClipSegment> segments = selectedSegments;
+    for (auto& segment : segments) {
+        segment.start = std::clamp(segment.start, 0.0, m_player->duration);
+        segment.end = std::clamp(segment.end, 0.0, m_player->duration);
+    }
+    segments.erase(std::remove_if(segments.begin(), segments.end(), [](const ClipSegment& segment) {
+        return segment.end <= segment.start;
+    }), segments.end());
+    std::sort(segments.begin(), segments.end(), [](const ClipSegment& a, const ClipSegment& b) {
+        return a.start < b.start;
+    });
+    std::vector<ClipSegment> normalized;
+    for (const auto& segment : segments) {
+        if (!normalized.empty() && segment.start <= normalized.back().end + 0.001)
+            normalized.back().end = std::max(normalized.back().end, segment.end);
+        else
+            normalized.push_back(segment);
+    }
+    segments = std::move(normalized);
+    if (segments.empty()) {
+        DebugLog("CutVideo called without a valid segment", true);
+        return false;
+    }
+
+    const double startTime = segments.front().start;
+    const double endTime = segments.back().end;
+    double selectedDuration = 0.0;
+    for (const auto& segment : segments)
+        selectedDuration += segment.end - segment.start;
+    if (segments.size() > 1)
+        convertH264 = true;
+
+    std::vector<int64_t> segmentStartsUs;
+    std::vector<int64_t> segmentEndsUs;
+    std::vector<int64_t> segmentOutputStartsUs;
+    int64_t accumulatedOutputUs = 0;
+    for (const auto& segment : segments) {
+        int64_t segmentStartUs = static_cast<int64_t>(std::llround(segment.start * AV_TIME_BASE));
+        int64_t segmentEndUs = static_cast<int64_t>(std::llround(segment.end * AV_TIME_BASE));
+        segmentStartsUs.push_back(segmentStartUs);
+        segmentEndsUs.push_back(segmentEndUs);
+        segmentOutputStartsUs.push_back(accumulatedOutputUs);
+        accumulatedOutputUs += segmentEndUs - segmentStartUs;
+    }
+
     {
         std::ostringstream oss;
-        oss << "CutVideo start start=" << startTime << " end=" << endTime
+        oss << "CutVideo segments=" << segments.size() << " start=" << startTime << " end=" << endTime
+            << " selectedDuration=" << selectedDuration
             << " mergeAudio=" << mergeAudio
             << " convertH264=" << convertH264
             << " encoder=" << static_cast<int>(encoder)
@@ -660,20 +746,35 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
     av_init_packet(&outPkt); // ensure fields are zeroed before use
 #pragma warning(pop)
     int64_t audioPts = 0;
+    int64_t lastVideoEncoderPts = AV_NOPTS_VALUE;
     while (av_read_frame(inputCtx, &pkt) >= 0) {
         if (cancelFlag && *cancelFlag) { success = false; goto cleanup; }
         bool handled = false;
         AVStream* inStream = inputCtx->streams[pkt.stream_index];
-        int64_t pktPtsUs = av_rescale_q(pkt.pts, inStream->time_base, AV_TIME_BASE_Q);
+        int64_t packetTimestamp = pkt.pts != AV_NOPTS_VALUE ? pkt.pts : pkt.dts;
+        if (packetTimestamp == AV_NOPTS_VALUE) {
+            av_packet_unref(&pkt);
+            continue;
+        }
+        int64_t pktPtsUs = av_rescale_q(packetTimestamp, inStream->time_base, AV_TIME_BASE_Q);
 
         bool isVideoStream = (pkt.stream_index == m_player->videoStreamIndex);
         bool isPreStart = (pktPtsUs < startPts);
+        int packetSegment = FindSegmentForTime(pktPtsUs, segmentStartsUs, segmentEndsUs);
+        bool isSelectedPacket = packetSegment >= 0;
 
         if (isPreStart && !isVideoStream) {
             av_packet_unref(&pkt);
             continue;
         }
         if (pktPtsUs > endPts) { av_packet_unref(&pkt); break; }
+
+        // Video decoding must continue across omitted gaps so inter-frame codecs
+        // remain valid. Other streams can skip packets outside selected clips.
+        if (!isSelectedPacket && !(isVideoStream && (convertH264 || isPreStart))) {
+            av_packet_unref(&pkt);
+            continue;
+        }
 
         if (isPreStart && isVideoStream) {
             if (convertH264 && vDecCtx) {
@@ -706,15 +807,21 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
         if (convertH264 && pkt.stream_index == m_player->videoStreamIndex) {
             avcodec_send_packet(vDecCtx, &pkt);
             while (avcodec_receive_frame(vDecCtx, decFrame) == 0) {
+                int64_t frameTimestamp = decFrame->best_effort_timestamp != AV_NOPTS_VALUE
+                    ? decFrame->best_effort_timestamp : decFrame->pts;
+                if (frameTimestamp == AV_NOPTS_VALUE) {
+                    av_frame_unref(decFrame);
+                    continue;
+                }
+                int64_t frameSourceUs = av_rescale_q(frameTimestamp, inStream->time_base, AV_TIME_BASE_Q);
+                int frameSegment = FindSegmentForTime(frameSourceUs, segmentStartsUs, segmentEndsUs);
+                if (frameSegment < 0) {
+                    av_frame_unref(decFrame);
+                    continue;
+                }
                 if (timelineHasCrop)
                 {
-                    double rawTime = 0.0;
-                    if (decFrame->best_effort_timestamp != AV_NOPTS_VALUE)
-                        rawTime = decFrame->best_effort_timestamp * av_q2d(inStream->time_base);
-                    else if (decFrame->pts != AV_NOPTS_VALUE)
-                        rawTime = decFrame->pts * av_q2d(inStream->time_base);
-                    else
-                        rawTime = pktPtsUs / (double)AV_TIME_BASE;
+                    double rawTime = frameSourceUs / static_cast<double>(AV_TIME_BASE);
 
                     double frameTime = rawTime - m_player->startTimeOffset;
                     if (frameTime < 0.0)
@@ -784,7 +891,11 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                     dstData[2] += chromaOffsetY * dstLinesize[2] + chromaOffsetX;
 
                 sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, decFrame->height, dstData, dstLinesize);
-                encFrame->pts = av_rescale_q(decFrame->pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, vEncCtx->time_base);
+                int64_t mappedPts = av_rescale_q(MapOutputTime(frameSourceUs, frameSegment, segmentStartsUs, segmentOutputStartsUs), AV_TIME_BASE_Q, vEncCtx->time_base);
+                if (lastVideoEncoderPts != AV_NOPTS_VALUE && mappedPts <= lastVideoEncoderPts)
+                    mappedPts = lastVideoEncoderPts + 1;
+                encFrame->pts = mappedPts;
+                lastVideoEncoderPts = mappedPts;
                 avcodec_send_frame(vEncCtx, encFrame);
                 while (avcodec_receive_packet(vEncCtx, &outPkt) == 0) {
                     av_packet_rescale_ts(&outPkt, vEncCtx->time_base, outputCtx->streams[streamMapping[pkt.stream_index]]->time_base);
@@ -916,8 +1027,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, double startTime,
                 continue;
             }
             AVStream* outStream = outputCtx->streams[streamMapping[pkt.stream_index]];
-            pkt.pts = av_rescale_q(pkt.pts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
-            pkt.dts = av_rescale_q(pkt.dts - av_rescale_q(startPts, AV_TIME_BASE_Q, inStream->time_base), inStream->time_base, outStream->time_base);
+            pkt.pts = av_rescale_q(RebasePacketTimestamp(pkt.pts, inStream->time_base, packetSegment, segmentStartsUs, segmentOutputStartsUs), inStream->time_base, outStream->time_base);
+            pkt.dts = av_rescale_q(RebasePacketTimestamp(pkt.dts, inStream->time_base, packetSegment, segmentStartsUs, segmentOutputStartsUs), inStream->time_base, outStream->time_base);
             if (pkt.duration > 0)
                 pkt.duration = av_rescale_q(pkt.duration, inStream->time_base, outStream->time_base);
             pkt.pos = -1;
