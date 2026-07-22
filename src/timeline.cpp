@@ -775,10 +775,42 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             RECT rc; GetClientRect(hwnd, &rc);
             int x = GET_X_LPARAM(lParam);
+            int y = GET_Y_LPARAM(lParam);
             if (x < 0) x = 0; if (x > rc.right) x = rc.right;
             double dur = g_videoPlayer->GetDuration();
             if (dur > 0.0 && rc.right > 0)
             {
+                if (g_enableMultiClipEditing && y >= std::max(0L, rc.bottom - 10))
+                {
+                    int selectedSegment = -1;
+                    for (size_t i = 0; i < g_cutSegments.size(); ++i)
+                    {
+                        int sx = TimeToPixel(g_cutSegments[i].start, rc, dur);
+                        int ex = TimeToPixel(g_cutSegments[i].end, rc, dur);
+                        int left = std::max(0, sx);
+                        int right = std::min(static_cast<int>(rc.right), std::max(sx + 1, ex));
+                        if (right >= 0 && left <= rc.right && x >= left && x <= right)
+                        {
+                            selectedSegment = static_cast<int>(i);
+                            break;
+                        }
+                    }
+
+                    if (selectedSegment >= 0)
+                    {
+                        POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                        ClientToScreen(hwnd, &pt);
+                        HMENU menu = CreatePopupMenu();
+                        AppendMenuW(menu, MF_STRING, 10, L"Edit");
+                        int cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                                 pt.x, pt.y, 0, hwnd, nullptr);
+                        DestroyMenu(menu);
+                        if (cmd == 10)
+                            SelectCutSegmentForEditing(GetParent(hwnd), selectedSegment);
+                        return 0;
+                    }
+                }
+
                 auto keys = g_videoPlayer->GetCropKeyframes();
                 double selectedTime = -1.0;
                 for (const auto& key : keys)

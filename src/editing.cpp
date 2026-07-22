@@ -226,9 +226,20 @@ void OnCutSegmentSelectionChanged(HWND hwnd)
         return;
     }
 
-    g_selectedCutSegment = selected;
-    g_cutStartTime = g_cutSegments[selected].start;
-    g_cutEndTime = g_cutSegments[selected].end;
+    SelectCutSegmentForEditing(hwnd, selected);
+}
+
+void SelectCutSegmentForEditing(HWND hwnd, int segmentIndex)
+{
+    if (!g_enableMultiClipEditing || segmentIndex < 0 ||
+        segmentIndex >= static_cast<int>(g_cutSegments.size()))
+        return;
+
+    extern HWND g_hListBoxCutSegments;
+    g_selectedCutSegment = segmentIndex;
+    g_cutStartTime = g_cutSegments[segmentIndex].start;
+    g_cutEndTime = g_cutSegments[segmentIndex].end;
+    SendMessage(g_hListBoxCutSegments, LB_SETCURSEL, segmentIndex, 0);
     if (g_videoPlayer && g_videoPlayer->IsLoaded()) {
         if (g_videoPlayer->IsPlaying())
             g_videoPlayer->SeekWhilePlaying(g_cutStartTime);

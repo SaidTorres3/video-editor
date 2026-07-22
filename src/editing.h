@@ -15,6 +15,7 @@ void OnRemoveClipClicked(HWND hwnd);
 void OnClearClipsClicked(HWND hwnd);
 void OnPlayAllClipsClicked(HWND hwnd);
 void OnCutSegmentSelectionChanged(HWND hwnd);
+void SelectCutSegmentForEditing(HWND hwnd, int segmentIndex);
 void OnCutClicked(HWND hwnd);
 void OnExportClicked(HWND hwnd);
 
