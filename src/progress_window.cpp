@@ -25,7 +25,7 @@ void ShowProgressWindow(HWND parent) {
     }
 
     g_hProgressWindow = CreateWindowEx(
-        WS_EX_TOPMOST, L"ProgressClass", L"Processing Video",
+        WS_EX_TOOLWINDOW, L"ProgressClass", L"Processing Video",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
         CW_USEDEFAULT, CW_USEDEFAULT, WINDOW_WIDTH, WINDOW_HEIGHT,
         parent, nullptr, GetModuleHandle(nullptr), nullptr);

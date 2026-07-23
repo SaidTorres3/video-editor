@@ -11,3 +11,4 @@ void OnTrackVolumeChanged();
 void OnMasterVolumeChanged();
 void UpdateCutInfoLabel(HWND hwnd);
 void UpdateCutTimeEdits();
+void RefreshCutSegmentList();

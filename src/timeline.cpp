@@ -5,6 +5,7 @@
 #include "video_player.h"
 #include "ui_updates.h"
 #include "options_window.h"
+#include "editing.h"
 #include <windowsx.h>
 #include <cmath>
 #include <climits>
@@ -774,10 +775,42 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             RECT rc; GetClientRect(hwnd, &rc);
             int x = GET_X_LPARAM(lParam);
+            int y = GET_Y_LPARAM(lParam);
             if (x < 0) x = 0; if (x > rc.right) x = rc.right;
             double dur = g_videoPlayer->GetDuration();
             if (dur > 0.0 && rc.right > 0)
             {
+                if (g_enableMultiClipEditing && y >= std::max(0L, rc.bottom - 10))
+                {
+                    int selectedSegment = -1;
+                    for (size_t i = 0; i < g_cutSegments.size(); ++i)
+                    {
+                        int sx = TimeToPixel(g_cutSegments[i].start, rc, dur);
+                        int ex = TimeToPixel(g_cutSegments[i].end, rc, dur);
+                        int left = std::max(0, sx);
+                        int right = std::min(static_cast<int>(rc.right), std::max(sx + 1, ex));
+                        if (right >= 0 && left <= rc.right && x >= left && x <= right)
+                        {
+                            selectedSegment = static_cast<int>(i);
+                            break;
+                        }
+                    }
+
+                    if (selectedSegment >= 0)
+                    {
+                        POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                        ClientToScreen(hwnd, &pt);
+                        HMENU menu = CreatePopupMenu();
+                        AppendMenuW(menu, MF_STRING, 10, L"Edit");
+                        int cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                                 pt.x, pt.y, 0, hwnd, nullptr);
+                        DestroyMenu(menu);
+                        if (cmd == 10)
+                            SelectCutSegmentForEditing(GetParent(hwnd), selectedSegment);
+                        return 0;
+                    }
+                }
+
                 auto keys = g_videoPlayer->GetCropKeyframes();
                 double selectedTime = -1.0;
                 for (const auto& key : keys)
@@ -999,6 +1032,20 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             double dur = g_videoPlayer->GetDuration();
+            HBRUSH segmentBrush = CreateSolidBrush(RGB(35, 145, 95));
+            HBRUSH selectedSegmentBrush = CreateSolidBrush(RGB(70, 210, 135));
+            for (size_t i = 0; g_enableMultiClipEditing && i < g_cutSegments.size(); ++i)
+            {
+                const auto& segment = g_cutSegments[i];
+                int sx = TimeToPixel(segment.start, rc, dur);
+                int ex = TimeToPixel(segment.end, rc, dur);
+                RECT segmentRect = { sx, std::max(0L, rc.bottom - 8), std::max(sx + 1, ex), rc.bottom };
+                FillRect(hdc, &segmentRect,
+                         static_cast<int>(i) == g_selectedCutSegment ? selectedSegmentBrush : segmentBrush);
+            }
+            DeleteObject(segmentBrush);
+            DeleteObject(selectedSegmentBrush);
+
             double cur = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
             int x = TimeToPixel(cur, rc, dur);
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(200,0,0));

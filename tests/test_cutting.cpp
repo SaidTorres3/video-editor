@@ -282,6 +282,23 @@ void RegisterCuttingTests(TestSuite& suite) {
         TEST_ASSERT_NEAR(info.duration, dur, 1.0, "Output duration should match input");
     });
 
+    // ---- Multiple disjoint clips joined into one output ----
+    suite.addTest("Cut_MultipleSegments", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        std::wstring out = MakeOutputPath(L"cut_multiple_segments.mp4");
+        std::atomic<bool> cancel{false};
+        std::vector<ClipSegment> segments = {{0.25, 1.25}, {2.5, 3.75}};
+        bool result = player.CutVideo(out, segments, false, true,
+                                       EncoderSelection::Libx264, L"Medium", 0, nullptr, &cancel);
+        TEST_ASSERT(result, "Multi-segment cut should succeed");
+
+        OutputInfo info = InspectOutputFile(out);
+        TEST_ASSERT(info.valid, "Multi-segment output should be valid");
+        TEST_ASSERT_NEAR(info.duration, 2.25, 0.5, "Output should contain the joined clip durations");
+        TEST_ASSERT(CanDecodeAllFrames(out, 300), "Joined output should decode without corruption");
+    });
+
     // ---- Cancel Midway ----
     suite.addTest("Cut_CancelMidway", []() {
         VideoPlayer player(g_testHwnd);

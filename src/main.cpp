@@ -25,6 +25,7 @@
 #include "utils.h"
 #include "file_handling.h"
 #include "ui_updates.h"
+#include "clip_segment.h"
 
 #include <string>
 #include <cstdlib>
@@ -52,9 +53,13 @@ HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd;
 HWND g_hLabelCutInfo;
 HWND g_hButtonOptions;
 HWND g_hButtonTogglePanel;
+HWND g_hButtonAddClip, g_hButtonClearClips;
+HWND g_hListBoxCutSegments, g_hButtonUpdateClip, g_hButtonRemoveClip, g_hButtonPlayAllClips;
 bool g_isPanelVisible = true;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
+std::vector<ClipSegment> g_cutSegments;
+int g_selectedCutSegment = -1;
 bool g_isTimelineDragging = false;
 bool g_wasPlayingBeforeDrag = false;
 bool g_resumePlayAfterSeek = false;

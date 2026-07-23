@@ -37,6 +37,7 @@ extern "C"
 #include <chrono>
 #include <limits>
 #include <cstdint>
+#include "clip_segment.h"
 
 enum class EncoderSelection : int;
 
@@ -112,6 +113,8 @@ public:
     double startTimeOffset;
     bool clipPreviewActive;
     double clipPreviewEndTime;
+    std::vector<ClipSegment> clipPreviewSegments;
+    size_t clipPreviewSegmentIndex = 0;
 
     // Crop selection
     struct CropKeyframe {
@@ -272,6 +275,7 @@ public:
     void Pause();
     void Stop();
     void PlayClip(double startTime, double endTime);
+    void PlayClips(const std::vector<ClipSegment>& segments);
     void CancelClipPreview();
     bool IsClipPreviewActive() const { return clipPreviewActive; }
     bool IsPlaying() const { return isPlaying; }
@@ -327,6 +331,9 @@ public:
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, EncoderSelection encoder, const std::wstring& qualityPreset,
                   int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
+    bool CutVideo(const std::wstring& outputFilename, const std::vector<ClipSegment>& segments,
+                  bool mergeAudio, bool convertH264, EncoderSelection encoder, const std::wstring& qualityPreset,
+                  int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
 
     // Timer callback
     static void CALLBACK TimerProc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD time);
@@ -344,4 +351,5 @@ private:
     void PlaybackThreadFunction();
     static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     void RecomputeCropOutputDimensionsLocked();
+    bool AdvanceClipPreview();
 };

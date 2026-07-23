@@ -94,6 +94,9 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         }
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
+        g_cutSegments.clear();
+        g_selectedCutSegment = -1;
+        RefreshCutSegmentList();
         UpdateCutInfoLabel(hwnd);
         UpdateCutTimeEdits();
 
