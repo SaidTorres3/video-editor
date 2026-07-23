@@ -336,6 +336,11 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
                 vEncCtx->time_base = inStream->time_base;
             }
             vEncCtx->pix_fmt = AV_PIX_FMT_YUV420P;
+            // Let FFmpeg/x264 use all available worker threads.  Explicitly
+            // setting the automatic mode is important for statically linked
+            // builds, where codec defaults are not always applied uniformly.
+            vEncCtx->thread_count = 0;
+            vEncCtx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
             vEncCtx->max_b_frames = 2;
             vEncCtx->gop_size = 12;
             if (maxBitrate > 0) {
@@ -420,6 +425,8 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
                 avformat_close_input(&inputCtx);
                 return false;
             }
+            vDecCtx->thread_count = 0;
+            vDecCtx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
             if (avcodec_open2(vDecCtx, avcodec_find_decoder(inStream->codecpar->codec_id), nullptr) < 0) {
                 DebugLog("Failed to open video decoder", true);
                 avcodec_free_context(&vEncCtx);
@@ -747,6 +754,9 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
 #pragma warning(pop)
     int64_t audioPts = 0;
     int64_t lastVideoEncoderPts = AV_NOPTS_VALUE;
+    size_t activeSegmentIndex = 0;
+    bool advanceSegmentAfterPacket = false;
+    bool finishAfterPacket = false;
     while (av_read_frame(inputCtx, &pkt) >= 0) {
         if (cancelFlag && *cancelFlag) { success = false; goto cleanup; }
         bool handled = false;
@@ -759,15 +769,15 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
         int64_t pktPtsUs = av_rescale_q(packetTimestamp, inStream->time_base, AV_TIME_BASE_Q);
 
         bool isVideoStream = (pkt.stream_index == m_player->videoStreamIndex);
-        bool isPreStart = (pktPtsUs < startPts);
+        bool isPreStart = (pktPtsUs < segmentStartsUs[activeSegmentIndex]);
         int packetSegment = FindSegmentForTime(pktPtsUs, segmentStartsUs, segmentEndsUs);
-        bool isSelectedPacket = packetSegment >= 0;
+        bool isSelectedPacket = packetSegment == static_cast<int>(activeSegmentIndex);
 
         if (isPreStart && !isVideoStream) {
             av_packet_unref(&pkt);
             continue;
         }
-        if (pktPtsUs > endPts) { av_packet_unref(&pkt); break; }
+        if (pktPtsUs > endPts && !convertH264) { av_packet_unref(&pkt); break; }
 
         // Video decoding must continue across omitted gaps so inter-frame codecs
         // remain valid. Other streams can skip packets outside selected clips.
@@ -815,7 +825,13 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
                 }
                 int64_t frameSourceUs = av_rescale_q(frameTimestamp, inStream->time_base, AV_TIME_BASE_Q);
                 int frameSegment = FindSegmentForTime(frameSourceUs, segmentStartsUs, segmentEndsUs);
-                if (frameSegment < 0) {
+                if (frameSegment != static_cast<int>(activeSegmentIndex)) {
+                    if (frameSourceUs >= segmentEndsUs[activeSegmentIndex] &&
+                        activeSegmentIndex + 1 < segmentStartsUs.size()) {
+                        advanceSegmentAfterPacket = true;
+                    } else if (frameSourceUs >= segmentEndsUs[activeSegmentIndex]) {
+                        finishAfterPacket = true;
+                    }
                     av_frame_unref(decFrame);
                     continue;
                 }
@@ -838,65 +854,86 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
                         av_frame_apply_cropping(decFrame, 0);
                     }
                 }
-                double widthScale = static_cast<double>(vEncCtx->width) / std::max(1, decFrame->width);
-                double heightScale = static_cast<double>(vEncCtx->height) / std::max(1, decFrame->height);
-                double scale = std::min(widthScale, heightScale);
-                int scaledWidth = std::max(1, static_cast<int>(std::lround(decFrame->width * scale)));
-                int scaledHeight = std::max(1, static_cast<int>(std::lround(decFrame->height * scale)));
-                if (scaledWidth > vEncCtx->width)
-                    scaledWidth = vEncCtx->width;
-                if (scaledHeight > vEncCtx->height)
-                    scaledHeight = vEncCtx->height;
+                int64_t mappedPts = av_rescale_q(MapOutputTime(frameSourceUs, frameSegment, segmentStartsUs, segmentOutputStartsUs), AV_TIME_BASE_Q, vEncCtx->time_base);
+                if (lastVideoEncoderPts != AV_NOPTS_VALUE && mappedPts <= lastVideoEncoderPts)
+                    mappedPts = lastVideoEncoderPts + 1;
+                lastVideoEncoderPts = mappedPts;
 
-                if (!swsCtx || decFrame->width != swsInWidth || decFrame->height != swsInHeight ||
-                    scaledWidth != swsOutWidth || scaledHeight != swsOutHeight) {
-                    if (swsCtx)
-                        sws_freeContext(swsCtx);
-                    swsCtx = sws_getContext(decFrame->width, decFrame->height,
-                                            (AVPixelFormat)decFrame->format,
-                                            scaledWidth, scaledHeight,
-                                            vEncCtx->pix_fmt, SWS_BILINEAR,
-                                            nullptr, nullptr, nullptr);
-                    if (!swsCtx) {
-                        DebugLog("Failed to create scaling context", true);
+                // Most H.264 sources already decode to the exact format and
+                // dimensions required by the encoder.  Passing those frames
+                // through directly avoids a full-frame, single-threaded
+                // swscale copy (and an additional black-frame clear) for every
+                // exported frame.
+                const bool canEncodeDecodedFrameDirectly =
+                    !timelineHasCrop &&
+                    decFrame->width == vEncCtx->width &&
+                    decFrame->height == vEncCtx->height &&
+                    decFrame->format == vEncCtx->pix_fmt &&
+                    decFrame->crop_left == 0 && decFrame->crop_top == 0 &&
+                    decFrame->crop_right == 0 && decFrame->crop_bottom == 0;
+
+                AVFrame* frameToEncode = decFrame;
+                if (canEncodeDecodedFrameDirectly) {
+                    decFrame->pts = mappedPts;
+                    // Frame type decisions belong to the new encoder. Keeping
+                    // the source I/P/B hint makes x264 force an inefficient
+                    // GOP instead of using its own lookahead.
+                    decFrame->pict_type = AV_PICTURE_TYPE_NONE;
+                } else {
+                    double widthScale = static_cast<double>(vEncCtx->width) / std::max(1, decFrame->width);
+                    double heightScale = static_cast<double>(vEncCtx->height) / std::max(1, decFrame->height);
+                    double scale = std::min(widthScale, heightScale);
+                    int scaledWidth = std::clamp(static_cast<int>(std::lround(decFrame->width * scale)), 1, vEncCtx->width);
+                    int scaledHeight = std::clamp(static_cast<int>(std::lround(decFrame->height * scale)), 1, vEncCtx->height);
+
+                    if (!swsCtx || decFrame->width != swsInWidth || decFrame->height != swsInHeight ||
+                        scaledWidth != swsOutWidth || scaledHeight != swsOutHeight) {
+                        if (swsCtx)
+                            sws_freeContext(swsCtx);
+                        swsCtx = sws_getContext(decFrame->width, decFrame->height,
+                                                (AVPixelFormat)decFrame->format,
+                                                scaledWidth, scaledHeight,
+                                                vEncCtx->pix_fmt, SWS_BILINEAR,
+                                                nullptr, nullptr, nullptr);
+                        if (!swsCtx) {
+                            DebugLog("Failed to create scaling context", true);
+                            av_packet_unref(&pkt);
+                            success = false;
+                            goto cleanup;
+                        }
+                        swsInWidth = decFrame->width;
+                        swsInHeight = decFrame->height;
+                        swsOutWidth = scaledWidth;
+                        swsOutHeight = scaledHeight;
+                    }
+
+                    if (av_frame_make_writable(encFrame) < 0) {
+                        DebugLog("Failed to make encoder frame writable", true);
                         av_packet_unref(&pkt);
                         success = false;
                         goto cleanup;
                     }
-                    swsInWidth = decFrame->width;
-                    swsInHeight = decFrame->height;
-                    swsOutWidth = scaledWidth;
-                    swsOutHeight = scaledHeight;
+
+                    const int offsetX = (vEncCtx->width - scaledWidth) / 2;
+                    const int offsetY = (vEncCtx->height - scaledHeight) / 2;
+                    if (offsetX != 0 || offsetY != 0)
+                        FillBlackYuv420(encFrame);
+                    uint8_t* dstData[4] = { encFrame->data[0], encFrame->data[1], encFrame->data[2], encFrame->data[3] };
+                    int dstLinesize[4] = { encFrame->linesize[0], encFrame->linesize[1], encFrame->linesize[2], encFrame->linesize[3] };
+                    dstData[0] += offsetY * dstLinesize[0] + offsetX;
+                    const int chromaOffsetX = offsetX / 2;
+                    const int chromaOffsetY = offsetY / 2;
+                    if (dstData[1])
+                        dstData[1] += chromaOffsetY * dstLinesize[1] + chromaOffsetX;
+                    if (dstData[2])
+                        dstData[2] += chromaOffsetY * dstLinesize[2] + chromaOffsetX;
+
+                    sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, decFrame->height, dstData, dstLinesize);
+                    encFrame->pts = mappedPts;
+                    frameToEncode = encFrame;
                 }
 
-                if (av_frame_make_writable(encFrame) < 0) {
-                    DebugLog("Failed to make encoder frame writable", true);
-                    av_packet_unref(&pkt);
-                    success = false;
-                    goto cleanup;
-                }
-
-                FillBlackYuv420(encFrame);
-
-                int offsetX = (vEncCtx->width - scaledWidth) / 2;
-                int offsetY = (vEncCtx->height - scaledHeight) / 2;
-                uint8_t* dstData[4] = { encFrame->data[0], encFrame->data[1], encFrame->data[2], encFrame->data[3] };
-                int dstLinesize[4] = { encFrame->linesize[0], encFrame->linesize[1], encFrame->linesize[2], encFrame->linesize[3] };
-                dstData[0] += offsetY * dstLinesize[0] + offsetX;
-                int chromaOffsetX = offsetX / 2;
-                int chromaOffsetY = offsetY / 2;
-                if (dstData[1])
-                    dstData[1] += chromaOffsetY * dstLinesize[1] + chromaOffsetX;
-                if (dstData[2])
-                    dstData[2] += chromaOffsetY * dstLinesize[2] + chromaOffsetX;
-
-                sws_scale(swsCtx, decFrame->data, decFrame->linesize, 0, decFrame->height, dstData, dstLinesize);
-                int64_t mappedPts = av_rescale_q(MapOutputTime(frameSourceUs, frameSegment, segmentStartsUs, segmentOutputStartsUs), AV_TIME_BASE_Q, vEncCtx->time_base);
-                if (lastVideoEncoderPts != AV_NOPTS_VALUE && mappedPts <= lastVideoEncoderPts)
-                    mappedPts = lastVideoEncoderPts + 1;
-                encFrame->pts = mappedPts;
-                lastVideoEncoderPts = mappedPts;
-                avcodec_send_frame(vEncCtx, encFrame);
+                avcodec_send_frame(vEncCtx, frameToEncode);
                 while (avcodec_receive_packet(vEncCtx, &outPkt) == 0) {
                     av_packet_rescale_ts(&outPkt, vEncCtx->time_base, outputCtx->streams[streamMapping[pkt.stream_index]]->time_base);
                     outPkt.stream_index = streamMapping[pkt.stream_index];
@@ -1021,6 +1058,28 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
             }
         }
 
+        if (advanceSegmentAfterPacket) {
+            av_packet_unref(&pkt);
+            advanceSegmentAfterPacket = false;
+            ++activeSegmentIndex;
+            const int64_t nextStart = segmentStartsUs[activeSegmentIndex];
+            if (av_seek_frame(inputCtx, -1, nextStart, AVSEEK_FLAG_BACKWARD) < 0) {
+                DebugLog("Failed to seek to the next selected clip", true);
+                success = false;
+                goto cleanup;
+            }
+            avcodec_flush_buffers(vDecCtx);
+            for (auto& mt : mergeTracks)
+                avcodec_flush_buffers(mt.decCtx);
+            for (auto& it : isoTracks)
+                avcodec_flush_buffers(it.decCtx);
+            continue;
+        }
+        if (finishAfterPacket) {
+            av_packet_unref(&pkt);
+            break;
+        }
+
         if (!handled) {
             if (pkt.stream_index >= (int)streamMapping.size() || streamMapping[pkt.stream_index] < 0) {
                 av_packet_unref(&pkt);
@@ -1123,7 +1182,11 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
             }
         }
 
-        double progress = (pktPtsUs - startPts) / double(endPts - startPts);
+        const int64_t progressUs = segmentOutputStartsUs[activeSegmentIndex] +
+            std::clamp(pktPtsUs - segmentStartsUs[activeSegmentIndex],
+                       int64_t{0},
+                       segmentEndsUs[activeSegmentIndex] - segmentStartsUs[activeSegmentIndex]);
+        double progress = progressUs / static_cast<double>(accumulatedOutputUs);
         progress = std::max(0.0, std::min(1.0, progress));
         int progressPercent = (int)(progress * 100.0);
         
