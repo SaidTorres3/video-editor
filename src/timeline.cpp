@@ -7,6 +7,7 @@
 #include "options_window.h"
 #include "editing.h"
 #include <windowsx.h>
+#include <algorithm>
 #include <cmath>
 #include <climits>
 #include <limits>
@@ -18,6 +19,7 @@ void UpdateCutTimeEdits();
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
+extern HWND g_hTimeline;
 extern double g_cutStartTime, g_cutEndTime;
 extern bool g_isTimelineDragging;
 extern bool g_wasPlayingBeforeDrag;
@@ -60,6 +62,27 @@ static std::atomic<double>        g_thumbRequestTime{-1.0};
 static std::atomic<bool>          g_thumbThreadExit{false};
 static HANDLE                     g_thumbRequestEvent = nullptr;
 static std::thread                g_thumbThread;
+
+// --- Audio waveform preview globals ---
+// A fixed-size envelope is enough to render cleanly at any normal window width,
+// while keeping the cache and repaint cost very small.
+static const int                  WAVEFORM_BIN_COUNT = 4096;
+static const UINT                 WM_AUDIO_WAVEFORM_READY = WM_APP + 20;
+struct AudioWaveformTrack
+{
+    int streamIndex = -1;
+    std::vector<float> samples;
+};
+static std::mutex                 g_waveformCacheMutex;
+static std::vector<AudioWaveformTrack> g_waveformCache;
+static std::mutex                 g_waveformRequestMutex;
+static std::wstring               g_waveformRequestFile;
+static double                     g_waveformRequestDuration = 0.0;
+static std::uint64_t              g_waveformRequestGeneration = 0;
+static std::atomic<std::uint64_t> g_waveformGeneration{0};
+static std::atomic<bool>          g_waveformThreadExit{false};
+static HANDLE                     g_waveformRequestEvent = nullptr;
+static std::thread                g_waveformThread;
 
 // Pre-cache queue: populated when a video is loaded.
 static std::mutex              g_preCacheMutex;
@@ -158,6 +181,323 @@ static void ThumbnailThreadFunc()
         if (isPreCache && g_thumbRequestEvent)
             SetEvent(g_thumbRequestEvent);
     }
+}
+
+static double ReadNormalizedAudioSample(const AVFrame* frame, int channel, int sample)
+{
+    if (!frame || !frame->extended_data)
+        return 0.0;
+
+    const AVSampleFormat format = static_cast<AVSampleFormat>(frame->format);
+    const AVSampleFormat packedFormat = av_get_packed_sample_fmt(format);
+    const bool planar = av_sample_fmt_is_planar(format) != 0;
+    const int channels = std::max(1, frame->ch_layout.nb_channels);
+    const int plane = planar ? channel : 0;
+    const int index = planar ? sample : (sample * channels + channel);
+    const uint8_t* data = frame->extended_data[plane];
+    if (!data)
+        return 0.0;
+
+    switch (packedFormat)
+    {
+    case AV_SAMPLE_FMT_U8:
+        return (static_cast<double>(reinterpret_cast<const uint8_t*>(data)[index]) - 128.0) / 128.0;
+    case AV_SAMPLE_FMT_S16:
+        return static_cast<double>(reinterpret_cast<const int16_t*>(data)[index]) / 32768.0;
+    case AV_SAMPLE_FMT_S32:
+        return static_cast<double>(reinterpret_cast<const int32_t*>(data)[index]) / 2147483648.0;
+    case AV_SAMPLE_FMT_FLT:
+        return static_cast<double>(reinterpret_cast<const float*>(data)[index]);
+    case AV_SAMPLE_FMT_DBL:
+        return reinterpret_cast<const double*>(data)[index];
+    case AV_SAMPLE_FMT_S64:
+        return static_cast<double>(reinterpret_cast<const int64_t*>(data)[index]) / 9223372036854775808.0;
+    default:
+        return 0.0;
+    }
+}
+
+static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
+                                std::uint64_t generation,
+                                std::vector<AudioWaveformTrack>& result)
+{
+    if (filename.empty() || duration <= 0.0)
+        return false;
+
+    int utf8Size = WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (utf8Size <= 0)
+        return false;
+    std::string utf8Filename(static_cast<size_t>(utf8Size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1,
+                        utf8Filename.data(), utf8Size, nullptr, nullptr);
+
+    AVFormatContext* formatContext = nullptr;
+    if (avformat_open_input(&formatContext, utf8Filename.c_str(), nullptr, nullptr) < 0)
+        return false;
+    if (avformat_find_stream_info(formatContext, nullptr) < 0)
+    {
+        avformat_close_input(&formatContext);
+        return false;
+    }
+
+    struct WaveformDecoder
+    {
+        int streamIndex = -1;
+        AVCodecContext* codecContext = nullptr;
+        double nextTime = 0.0;
+        std::vector<double> energy;
+        std::vector<std::uint64_t> sampleCounts;
+    };
+    std::vector<WaveformDecoder> decoders;
+
+    double startTimeOffset = 0.0;
+    double minStart = std::numeric_limits<double>::max();
+    for (unsigned i = 0; i < formatContext->nb_streams; ++i)
+    {
+        AVStream* stream = formatContext->streams[i];
+        if (stream->start_time != AV_NOPTS_VALUE)
+            minStart = std::min(minStart, stream->start_time * av_q2d(stream->time_base));
+
+        if (stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+            continue;
+
+        const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+        if (!codec)
+            continue;
+
+        AVCodecContext* codecContext = avcodec_alloc_context3(codec);
+        if (!codecContext)
+            continue;
+        if (avcodec_parameters_to_context(codecContext, stream->codecpar) < 0 ||
+            avcodec_open2(codecContext, codec, nullptr) < 0)
+        {
+            avcodec_free_context(&codecContext);
+            continue;
+        }
+
+        WaveformDecoder decoder;
+        decoder.streamIndex = static_cast<int>(i);
+        decoder.codecContext = codecContext;
+        decoder.energy.assign(WAVEFORM_BIN_COUNT, 0.0);
+        decoder.sampleCounts.assign(WAVEFORM_BIN_COUNT, 0);
+        decoders.push_back(decoder);
+    }
+    if (minStart != std::numeric_limits<double>::max())
+        startTimeOffset = minStart;
+
+    if (decoders.empty())
+    {
+        avformat_close_input(&formatContext);
+        return false;
+    }
+
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* audioFrame = av_frame_alloc();
+    bool cancelled = !packet || !audioFrame;
+
+    auto consumeFrames = [&](WaveformDecoder& decoder, AVPacket* inputPacket)
+    {
+        if (avcodec_send_packet(decoder.codecContext, inputPacket) < 0)
+            return;
+
+        while (!cancelled && avcodec_receive_frame(decoder.codecContext, audioFrame) == 0)
+        {
+            if (g_waveformThreadExit.load() || g_waveformGeneration.load() != generation)
+            {
+                cancelled = true;
+                break;
+            }
+
+            AVStream* stream = formatContext->streams[decoder.streamIndex];
+            int sampleRate = audioFrame->sample_rate > 0
+                                 ? audioFrame->sample_rate
+                                 : decoder.codecContext->sample_rate;
+            int channels = std::max(1, audioFrame->ch_layout.nb_channels);
+            if (sampleRate <= 0 || audioFrame->nb_samples <= 0)
+            {
+                av_frame_unref(audioFrame);
+                continue;
+            }
+
+            int64_t timestamp = audioFrame->best_effort_timestamp;
+            if (timestamp == AV_NOPTS_VALUE)
+                timestamp = audioFrame->pts;
+            double frameStart = timestamp == AV_NOPTS_VALUE
+                                    ? decoder.nextTime
+                                    : timestamp * av_q2d(stream->time_base) - startTimeOffset;
+            decoder.nextTime = frameStart + audioFrame->nb_samples / static_cast<double>(sampleRate);
+
+            // About 48 measurements per bin preserve transients without doing
+            // unnecessary per-sample work on long recordings.
+            int stride = std::max(1, static_cast<int>(
+                (duration * sampleRate) / (WAVEFORM_BIN_COUNT * 48.0)));
+            for (int sample = 0; sample < audioFrame->nb_samples; sample += stride)
+            {
+                double time = frameStart + sample / static_cast<double>(sampleRate);
+                if (time < 0.0 || time >= duration)
+                    continue;
+
+                double channelEnergy = 0.0;
+                for (int channel = 0; channel < channels; ++channel)
+                {
+                    double value = ReadNormalizedAudioSample(audioFrame, channel, sample);
+                    channelEnergy += value * value;
+                }
+                channelEnergy /= channels;
+
+                int bin = std::clamp(static_cast<int>(
+                    time * WAVEFORM_BIN_COUNT / duration), 0, WAVEFORM_BIN_COUNT - 1);
+                decoder.energy[bin] += channelEnergy;
+                decoder.sampleCounts[bin]++;
+            }
+            av_frame_unref(audioFrame);
+        }
+    };
+
+    while (!cancelled && av_read_frame(formatContext, packet) >= 0)
+    {
+        if (g_waveformThreadExit.load() || g_waveformGeneration.load() != generation)
+        {
+            cancelled = true;
+            av_packet_unref(packet);
+            break;
+        }
+
+        for (auto& decoder : decoders)
+        {
+            if (decoder.streamIndex == packet->stream_index)
+            {
+                consumeFrames(decoder, packet);
+                break;
+            }
+        }
+        av_packet_unref(packet);
+    }
+
+    if (!cancelled)
+    {
+        for (auto& decoder : decoders)
+            consumeFrames(decoder, nullptr);
+    }
+
+    if (cancelled)
+    {
+        av_frame_free(&audioFrame);
+        av_packet_free(&packet);
+        for (auto& decoder : decoders)
+            avcodec_free_context(&decoder.codecContext);
+        avformat_close_input(&formatContext);
+        return false;
+    }
+
+    result.clear();
+    result.reserve(decoders.size());
+    for (auto& decoder : decoders)
+    {
+        AudioWaveformTrack track;
+        track.streamIndex = decoder.streamIndex;
+        track.samples.assign(WAVEFORM_BIN_COUNT, 0.0f);
+
+        std::vector<float> nonSilent;
+        nonSilent.reserve(WAVEFORM_BIN_COUNT);
+        for (int i = 0; i < WAVEFORM_BIN_COUNT; ++i)
+        {
+            if (decoder.sampleCounts[i] == 0)
+                continue;
+            track.samples[i] = static_cast<float>(
+                std::sqrt(decoder.energy[i] / decoder.sampleCounts[i]));
+            if (track.samples[i] > 0.00001f)
+                nonSilent.push_back(track.samples[i]);
+        }
+
+        if (!nonSilent.empty())
+        {
+            std::sort(nonSilent.begin(), nonSilent.end());
+            size_t percentileIndex = static_cast<size_t>((nonSilent.size() - 1) * 0.95);
+            float referenceLevel = std::max(0.00001f, nonSilent[percentileIndex]);
+            for (float& value : track.samples)
+            {
+                float normalized = std::min(1.0f, value / (referenceLevel * 1.15f));
+                value = std::sqrt(normalized);
+            }
+
+            // A short smoothing pass keeps compact, one-pixel traces readable.
+            std::vector<float> smoothed(track.samples.size(), 0.0f);
+            for (size_t i = 0; i < track.samples.size(); ++i)
+            {
+                float previous = i > 0 ? track.samples[i - 1] : track.samples[i];
+                float next = i + 1 < track.samples.size() ? track.samples[i + 1] : track.samples[i];
+                smoothed[i] = previous * 0.25f + track.samples[i] * 0.5f + next * 0.25f;
+            }
+            track.samples.swap(smoothed);
+        }
+
+        result.push_back(std::move(track));
+    }
+
+    av_frame_free(&audioFrame);
+    av_packet_free(&packet);
+    for (auto& decoder : decoders)
+        avcodec_free_context(&decoder.codecContext);
+    avformat_close_input(&formatContext);
+    return true;
+}
+
+static void WaveformThreadFunc()
+{
+    while (!g_waveformThreadExit.load())
+    {
+        if (WaitForSingleObject(g_waveformRequestEvent, INFINITE) != WAIT_OBJECT_0)
+            continue;
+        if (g_waveformThreadExit.load())
+            break;
+
+        std::wstring filename;
+        double duration = 0.0;
+        std::uint64_t generation = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_waveformRequestMutex);
+            filename = g_waveformRequestFile;
+            duration = g_waveformRequestDuration;
+            generation = g_waveformRequestGeneration;
+        }
+
+        std::vector<AudioWaveformTrack> waveforms;
+        bool built = BuildAudioWaveforms(filename, duration, generation, waveforms);
+        if (built && !g_waveformThreadExit.load() &&
+            g_waveformGeneration.load() == generation)
+        {
+            {
+                std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+                g_waveformCache = std::move(waveforms);
+            }
+            if (g_hTimeline)
+                PostMessage(g_hTimeline, WM_AUDIO_WAVEFORM_READY, 0, 0);
+        }
+    }
+}
+
+void RefreshAudioWaveformPreview()
+{
+    std::uint64_t generation = g_waveformGeneration.fetch_add(1) + 1;
+    {
+        std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+        g_waveformCache.clear();
+    }
+    if (g_hTimeline)
+        InvalidateRect(g_hTimeline, nullptr, FALSE);
+
+    if (!g_showAudioWaveform || !g_videoPlayer || !g_videoPlayer->IsLoaded() ||
+        g_videoPlayer->GetAudioTrackCount() <= 0 || !g_waveformRequestEvent)
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock(g_waveformRequestMutex);
+        g_waveformRequestFile = g_videoPlayer->loadedFilename;
+        g_waveformRequestDuration = g_videoPlayer->GetDuration();
+        g_waveformRequestGeneration = generation;
+    }
+    SetEvent(g_waveformRequestEvent);
 }
 
 
@@ -343,9 +683,28 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_thumbRequestTime.store(-1.0);
         g_thumbRequestEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         g_thumbThread = std::thread(ThumbnailThreadFunc);
+        g_waveformThreadExit.store(false);
+        g_waveformRequestEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (g_waveformRequestEvent)
+            g_waveformThread = std::thread(WaveformThreadFunc);
         return 0;
     }
     case WM_DESTROY:
+        g_waveformGeneration.fetch_add(1);
+        g_waveformThreadExit.store(true);
+        if (g_waveformRequestEvent)
+            SetEvent(g_waveformRequestEvent);
+        if (g_waveformThread.joinable())
+            g_waveformThread.join();
+        if (g_waveformRequestEvent)
+        {
+            CloseHandle(g_waveformRequestEvent);
+            g_waveformRequestEvent = nullptr;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+            g_waveformCache.clear();
+        }
         // Stop thumbnail decode thread before destroying the tooltip window
         if (g_thumbRequestEvent)
         {
@@ -368,6 +727,9 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             DestroyWindow(g_timecodeTooltipWnd);
             g_timecodeTooltipWnd = nullptr;
         }
+        return 0;
+    case WM_AUDIO_WAVEFORM_READY:
+        InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_LBUTTONDOWN:
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
@@ -972,12 +1334,26 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     }
+    case WM_ERASEBKGND:
+        // WM_PAINT redraws the complete control from an off-screen buffer.
+        // Suppressing the separate erase pass prevents playback flicker.
+        return 1;
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        HDC paintDC = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
+        if (rc.right <= 0 || rc.bottom <= 0)
+        {
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        HDC hdc = CreateCompatibleDC(paintDC);
+        HBITMAP bufferBitmap = CreateCompatibleBitmap(paintDC, rc.right, rc.bottom);
+        HGDIOBJ oldBitmap = SelectObject(hdc, bufferBitmap);
+
         HBRUSH bg = CreateSolidBrush(RGB(70,70,70));
         FillRect(hdc, &rc, bg);
         DeleteObject(bg);
@@ -1032,6 +1408,93 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (g_videoPlayer && g_videoPlayer->IsLoaded())
         {
             double dur = g_videoPlayer->GetDuration();
+
+            if (g_showAudioWaveform && dur > 0.0)
+            {
+                std::vector<AudioWaveformTrack> waveforms;
+                {
+                    std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+                    waveforms = g_waveformCache;
+                }
+
+                int trackCount = g_videoPlayer->GetAudioTrackCount();
+                if (!waveforms.empty() && trackCount > 0)
+                {
+                    const int left = g_timelineZoomLevel > 1.0 ? ARROW_WIDTH : 0;
+                    const int right = g_timelineZoomLevel > 1.0 ? rc.right - ARROW_WIDTH : rc.right;
+                    const COLORREF trackColors[] = {
+                        RGB(94, 169, 154),
+                        RGB(213, 116, 101),
+                        RGB(111, 143, 207),
+                        RGB(190, 163, 91),
+                        RGB(159, 119, 184),
+                        RGB(108, 173, 104)
+                    };
+
+                    for (int trackIndex = 0; trackIndex < trackCount; ++trackIndex)
+                    {
+                        if (g_videoPlayer->IsAudioTrackMuted(trackIndex))
+                            continue;
+
+                        float volume = g_videoPlayer->GetAudioTrackVolume(trackIndex);
+                        if (volume <= 0.0f)
+                            continue;
+
+                        int streamIndex = g_videoPlayer->audioTracks[trackIndex]->streamIndex;
+                        auto waveformIt = std::find_if(
+                            waveforms.begin(), waveforms.end(),
+                            [streamIndex](const AudioWaveformTrack& waveform) {
+                                return waveform.streamIndex == streamIndex;
+                            });
+                        if (waveformIt == waveforms.end() || waveformIt->samples.empty())
+                            continue;
+
+                        // Keep tracks in stable, compact lanes. Muting a track
+                        // removes its trace without shifting the remaining ones.
+                        int laneTop = static_cast<int>(
+                            static_cast<long long>(rc.bottom) * trackIndex / trackCount);
+                        int laneBottom = static_cast<int>(
+                            static_cast<long long>(rc.bottom) * (trackIndex + 1) / trackCount);
+                        int centerY = (laneTop + laneBottom) / 2;
+                        int maxAmplitude = std::max(1, (laneBottom - laneTop - 2) / 2);
+
+                        std::vector<POINT> points;
+                        points.reserve(static_cast<size_t>(std::max(0, right - left) / 2 + 2));
+                        for (int px = left; px < right; px += 2)
+                        {
+                            double time = PixelToTime(px, rc, dur);
+                            int sampleIndex = std::clamp(static_cast<int>(
+                                time * waveformIt->samples.size() / dur),
+                                0, static_cast<int>(waveformIt->samples.size()) - 1);
+                            float scaled = std::min(1.0f, waveformIt->samples[sampleIndex] * volume);
+                            int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
+                            points.push_back({ px, centerY - amplitude });
+                        }
+                        if (!points.empty() && points.back().x != right - 1)
+                        {
+                            double time = PixelToTime(right - 1, rc, dur);
+                            int sampleIndex = std::clamp(static_cast<int>(
+                                time * waveformIt->samples.size() / dur),
+                                0, static_cast<int>(waveformIt->samples.size()) - 1);
+                            float scaled = std::min(1.0f, waveformIt->samples[sampleIndex] * volume);
+                            int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
+                            points.push_back({ right - 1, centerY - amplitude });
+                        }
+
+                        if (points.size() >= 2)
+                        {
+                            HPEN waveformPen = CreatePen(
+                                PS_SOLID, 1,
+                                trackColors[trackIndex % _countof(trackColors)]);
+                            HGDIOBJ oldPen = SelectObject(hdc, waveformPen);
+                            Polyline(hdc, points.data(), static_cast<int>(points.size()));
+                            SelectObject(hdc, oldPen);
+                            DeleteObject(waveformPen);
+                        }
+                    }
+                }
+            }
+
             HBRUSH segmentBrush = CreateSolidBrush(RGB(35, 145, 95));
             HBRUSH selectedSegmentBrush = CreateSolidBrush(RGB(70, 210, 135));
             for (size_t i = 0; g_enableMultiClipEditing && i < g_cutSegments.size(); ++i)
@@ -1125,6 +1588,10 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
         }
 
+        BitBlt(paintDC, 0, 0, rc.right, rc.bottom, hdc, 0, 0, SRCCOPY);
+        SelectObject(hdc, oldBitmap);
+        DeleteObject(bufferBitmap);
+        DeleteDC(hdc);
         EndPaint(hwnd, &ps);
         return 0;
     }

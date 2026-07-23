@@ -15,6 +15,7 @@
 #define ID_CHECKBOX_HOVER_PREVIEW 1034
 #define ID_CHECKBOX_IMPROVE_SEEK  1035
 #define ID_CHECKBOX_MULTI_CLIP     1036
+#define ID_CHECKBOX_AUDIO_WAVEFORM 1037
 #define ID_TAB_GENERAL          1040
 #define ID_TAB_ENCODING         1041
 #define ID_TAB_UPLOAD           1042
@@ -56,6 +57,7 @@ extern bool g_autoPlay;
 extern bool g_showVideoPreviewOnHover;
 extern bool g_improveSeekPerformance;
 extern bool g_enableMultiClipEditing;
+extern bool g_showAudioWaveform;
 extern std::wstring g_qualityPreset;
 
 extern std::wstring g_b2KeyId;

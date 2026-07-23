@@ -2,6 +2,7 @@
 #include "utils.h"
 #include "ui_controls.h"
 #include "ui_updates.h"
+#include "timeline.h"
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <commctrl.h>
@@ -33,6 +34,7 @@ bool g_autoPlay = true;
 bool g_showVideoPreviewOnHover = true;
 bool g_improveSeekPerformance = true;
 bool g_enableMultiClipEditing = false;
+bool g_showAudioWaveform = true;
 std::wstring g_qualityPreset = L"Medium";
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
@@ -77,6 +79,9 @@ void LoadSettings()
         size = sizeof(val);
         if (RegQueryValueExW(hKey, L"EnableMultiClipEditing", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
             g_enableMultiClipEditing = (val != 0);
+        size = sizeof(val);
+        if (RegQueryValueExW(hKey, L"ShowAudioWaveform", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
+            g_showAudioWaveform = (val != 0);
 
         wchar_t buf[256];
         DWORD sz = sizeof(buf);
@@ -147,6 +152,8 @@ void SaveSettings()
         RegSetValueExW(hKey, L"SeekPerformance", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         val = g_enableMultiClipEditing ? 1 : 0;
         RegSetValueExW(hKey, L"EnableMultiClipEditing", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = g_showAudioWaveform ? 1 : 0;
+        RegSetValueExW(hKey, L"ShowAudioWaveform", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"B2KeyId", 0, REG_SZ, (const BYTE*)g_b2KeyId.c_str(), (DWORD)((g_b2KeyId.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2AppKey", 0, REG_SZ, (const BYTE*)g_b2AppKey.c_str(), (DWORD)((g_b2AppKey.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2BucketId", 0, REG_SZ, (const BYTE*)g_b2BucketId.c_str(), (DWORD)((g_b2BucketId.size()+1)*sizeof(wchar_t)));
@@ -335,19 +342,25 @@ void ShowOptionsWindow(HWND parent)
     SendMessage(hTooltip, TTM_ACTIVATE, TRUE, 0);
     SendMessage(hTooltip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
 
+    HWND hAudioWaveform = CreateWindow(L"BUTTON", L"Show audio waveform on timeline",
+                                       WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                       20, 162, 300, 22, g_hGeneralPanel,
+                                       (HMENU)ID_CHECKBOX_AUDIO_WAVEFORM, hInst, nullptr);
+    ApplyDarkTheme(hAudioWaveform);
+
     CreateWindow(L"STATIC", L"Editing", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 0, 175, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
+                 0, 199, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
     HWND hMultiClip = CreateWindow(L"BUTTON", L"Enable multiple clip editing",
                                    WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                   20, 198, 250, 22, g_hGeneralPanel,
+                                   20, 222, 250, 22, g_hGeneralPanel,
                                    (HMENU)ID_CHECKBOX_MULTI_CLIP, hInst, nullptr);
     ApplyDarkTheme(hMultiClip);
 
     CreateWindow(L"STATIC", L"Logging", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 0, 235, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
+                 0, 259, contentWidth, 22, g_hGeneralPanel, nullptr, hInst, nullptr);
     HWND hLog = CreateWindow(L"BUTTON", L"Enable debug logging",
                              WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                             20, 258, 250, 22, g_hGeneralPanel,
+                             20, 282, 250, 22, g_hGeneralPanel,
                              (HMENU)ID_CHECKBOX_ENABLE_LOG, hInst, nullptr);
     ApplyDarkTheme(hLog);
     SendMessage(hLog, BM_SETCHECK, g_logToFile ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -355,6 +368,7 @@ void ShowOptionsWindow(HWND parent)
     SendMessage(hHoverPreview, BM_SETCHECK, g_showVideoPreviewOnHover ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hSeekPerf, BM_SETCHECK, g_improveSeekPerformance ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hMultiClip, BM_SETCHECK, g_enableMultiClipEditing ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hAudioWaveform, BM_SETCHECK, g_showAudioWaveform ? BST_CHECKED : BST_UNCHECKED, 0);
 
     // ===== ENCODING PANEL =====
     g_hEncodingPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
@@ -602,12 +616,14 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hHoverPrev = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_HOVER_PREVIEW);
             HWND hSeekPerf = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_IMPROVE_SEEK);
             HWND hMultiClip = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_MULTI_CLIP);
+            HWND hAudioWaveform = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUDIO_WAVEFORM);
             HWND hAutoUpload = GetDlgItem(g_hUploadPanel, ID_CHECKBOX_AUTO_UPLOAD);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hHoverPrev) g_showVideoPreviewOnHover = SendMessage(hHoverPrev, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hSeekPerf) g_improveSeekPerformance = SendMessage(hSeekPerf, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hMultiClip) g_enableMultiClipEditing = SendMessage(hMultiClip, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hAudioWaveform) g_showAudioWaveform = SendMessage(hAudioWaveform, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoUpload = SendMessage(hAutoUpload, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
             // Get exportation settings
@@ -627,6 +643,7 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
 
             SaveSettings();
+            RefreshAudioWaveformPreview();
             HWND owner = GetWindow(hwnd, GW_OWNER);
             DestroyWindow(hwnd);
             if (owner) {
@@ -662,11 +679,13 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hHoverPrev = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_HOVER_PREVIEW);
             HWND hSeekPerf = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_IMPROVE_SEEK);
             HWND hMultiClip = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_MULTI_CLIP);
+            HWND hAudioWaveform = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUDIO_WAVEFORM);
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hHoverPrev) g_showVideoPreviewOnHover = SendMessage(hHoverPrev, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hSeekPerf) g_improveSeekPerformance = SendMessage(hSeekPerf, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hMultiClip) g_enableMultiClipEditing = SendMessage(hMultiClip, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hAudioWaveform) g_showAudioWaveform = SendMessage(hAudioWaveform, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
             // Get exportation settings
             {
@@ -685,6 +704,7 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
 
             SaveSettings();
+            RefreshAudioWaveformPreview();
             HWND owner = GetWindow(hwnd, GW_OWNER);
             DestroyWindow(hwnd);
             if (owner) {

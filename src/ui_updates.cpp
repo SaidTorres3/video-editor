@@ -257,6 +257,7 @@ void OnMuteTrackClicked()
         UpdateAudioTrackList();
         SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, selectedIndex, 0);
         OnAudioTrackSelectionChanged();
+        InvalidateRect(g_hTimeline, nullptr, FALSE);
     }
 }
 
@@ -300,6 +301,7 @@ void OnTrackVolumeChanged()
         else
             swprintf_s(buf, L"Track Volume: 0.0 dB");
         SetWindowTextW(g_hLabelTrackVolume, buf);
+        InvalidateRect(g_hTimeline, nullptr, FALSE);
     }
 }
 

@@ -103,6 +103,7 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         UpdateControls();
         UpdateTimeline();
         TriggerThumbnailPreCache(g_videoPlayer->GetDuration());
+        RefreshAudioWaveformPreview();
 
         // Set bitrate field to the video's average bitrate
         if (g_hEditBitrate && g_videoPlayer && g_videoPlayer->formatContext)
