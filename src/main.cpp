@@ -39,6 +39,7 @@
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
 HWND g_hTimeline;
+HWND g_hTimelineResizeBar;
 HWND g_hStatusText;
 HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
 HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
@@ -96,6 +97,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     twc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     twc.hbrBackground = nullptr; // custom paint
     RegisterClass(&twc);
+
+    WNDCLASS trc = {};
+    trc.lpfnWndProc = TimelineResizeBarProc;
+    trc.hInstance = hInstance;
+    trc.lpszClassName = L"TimelineResizeBarClass";
+    trc.hCursor = LoadCursor(nullptr, IDC_SIZENS);
+    trc.hbrBackground = nullptr; // custom paint
+    RegisterClass(&trc);
 
     WNDCLASS owc = {};
     owc.lpfnWndProc = OptionsProc;

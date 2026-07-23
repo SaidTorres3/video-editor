@@ -2,8 +2,10 @@
 #include "video_player.h"
 #include "utils.h"
 #include "options_window.h"
+#include "timeline.h"
 #include <commctrl.h>
 #include <uxtheme.h>
+#include <algorithm>
 
 // Forward declarations
 void ApplyDarkTheme(HWND hwnd);
@@ -14,6 +16,7 @@ void ApplyDarkTheme(HWND hwnd);
 #define ID_BUTTON_PAUSE 1003
 #define ID_BUTTON_STOP 1004
 #define ID_TIMELINE 1005
+#define ID_TIMELINE_RESIZE_BAR 1036
 #define ID_LISTBOX_AUDIO_TRACKS 1007
 #define ID_BUTTON_MUTE_TRACK 1008
 #define ID_SLIDER_TRACK_VOLUME 1009
@@ -48,6 +51,7 @@ void ApplyDarkTheme(HWND hwnd);
 extern VideoPlayer *g_videoPlayer;
 extern HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
 extern HWND g_hTimeline;
+extern HWND g_hTimelineResizeBar;
 extern HWND g_hStatusText;
 extern HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
 extern HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
@@ -118,6 +122,15 @@ void CreateControls(HWND hwnd)
         hwnd, (HMENU)ID_BUTTON_TOGGLE_PANEL,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hButtonTogglePanel);
+
+    // Dedicated resize bar above the timeline. Keeping this separate prevents
+    // resize gestures from colliding with waveform and marker interactions.
+    g_hTimelineResizeBar = CreateWindow(
+        L"TimelineResizeBarClass", nullptr,
+        WS_CHILD | WS_VISIBLE,
+        10, 360, 600, 10, // Placeholder position
+        hwnd, (HMENU)ID_TIMELINE_RESIZE_BAR,
+        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
 
     // Timeline
     g_hTimeline = CreateWindow(
@@ -546,23 +559,51 @@ void RepositionControls(HWND hwnd)
         MoveWindow(g_hEditTargetSize, audioControlsX, exportControlsY + 135, 200, 20, TRUE);
     }
 
+    RepositionTimelineArea(hwnd);
+
+    // Redraw all controls after a regular window/panel layout. Timeline-only
+    // drag updates use RepositionTimelineArea directly and avoid this full erase.
+    InvalidateRect(hwnd, NULL, TRUE);
+}
+
+void RepositionTimelineArea(HWND hwnd)
+{
+    if (!g_videoPlayer) return;
+
+    RECT clientRect;
+    GetClientRect(hwnd, &clientRect);
+
     // Video area (takes up remaining space)
+    const int mainControlsY = 10;
+    const int mainControlsHeight = 30;
+    const int audioControlsWidth = 250;
     int panelReserved = g_isPanelVisible ? (audioControlsWidth + 30) : 10;
-    int videoSectionWidth = clientRect.right - panelReserved - 10;
-    int bottomControlsHeight = 100;
+    int videoSectionWidth = (std::max)(
+        0, static_cast<int>(clientRect.right) - panelReserved - 10);
+    const int videoTop = mainControlsY + mainControlsHeight + 10;
+    const int statusY = clientRect.bottom - 50;
+    const int timelineBottom = statusY - 10;
+    const int resizeBarHeight = 10;
+    const int minimumVideoHeight = 100;
+    const int maximumTimelineHeight = (std::max)(
+        30, timelineBottom - videoTop - resizeBarHeight - minimumVideoHeight);
+    const int timelineHeight = (std::min)(
+        GetPreferredTimelineHeight(), maximumTimelineHeight);
+    const int timelineY = timelineBottom - timelineHeight;
+    const int resizeBarY = timelineY - resizeBarHeight;
 
     g_videoPlayer->SetPosition(
         10,
-        mainControlsY + mainControlsHeight + 10,
+        videoTop,
         videoSectionWidth,
-        clientRect.bottom - (mainControlsY + mainControlsHeight + 10) - bottomControlsHeight
+        (std::max)(0, resizeBarY - videoTop)
     );
 
-    // Bottom controls
-    int bottomControlsY = clientRect.bottom - 90;
-    MoveWindow(g_hTimeline, 10, bottomControlsY, videoSectionWidth, 30, TRUE);
-    MoveWindow(g_hStatusText, 10, bottomControlsY + 40, videoSectionWidth, 20, TRUE);
-
-    // Redraw all controls
-    InvalidateRect(hwnd, NULL, TRUE);
+    MoveWindow(
+        g_hTimelineResizeBar,
+        10, resizeBarY, videoSectionWidth, resizeBarHeight, TRUE);
+    MoveWindow(g_hTimeline, 10, timelineY, videoSectionWidth, timelineHeight, TRUE);
+    MoveWindow(g_hStatusText, 10, statusY, videoSectionWidth, 20, TRUE);
+    UpdateWindow(g_hTimelineResizeBar);
+    UpdateWindow(g_hTimeline);
 }

@@ -28,6 +28,7 @@ HWND g_testHwnd = nullptr;
 // We provide stub values so linking succeeds.
 HWND g_hButtonOpen = nullptr, g_hButtonPlay = nullptr, g_hButtonPause = nullptr, g_hButtonStop = nullptr;
 HWND g_hTimeline = nullptr;
+HWND g_hTimelineResizeBar = nullptr;
 HWND g_hStatusText = nullptr;
 HWND g_hListBoxAudioTracks = nullptr, g_hButtonMuteTrack = nullptr;
 HWND g_hSliderTrackVolume = nullptr, g_hSliderMasterVolume = nullptr;

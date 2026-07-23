@@ -4,6 +4,7 @@
 #include "timeline.h"
 #include "video_player.h"
 #include "ui_updates.h"
+#include "ui_controls.h"
 #include "options_window.h"
 #include "editing.h"
 #include <windowsx.h>
@@ -32,9 +33,94 @@ double g_previewSeekTime = -1.0; // For immediate timeline feedback
 // Hover tooltip tracking
 static int g_timelineHoverX = -1;
 static bool g_timelineMouseTracking = false;
+static constexpr int TIMELINE_MIN_HEIGHT = 30;
+static int g_preferredTimelineHeight = TIMELINE_MIN_HEIGHT;
+static bool g_isTimelineHeightDragging = false;
+static int g_timelineResizeStartScreenY = 0;
+static int g_timelineResizeStartHeight = TIMELINE_MIN_HEIGHT;
+static HWND g_timecodeTooltipWnd = nullptr;
+
+int GetPreferredTimelineHeight()
+{
+    return g_preferredTimelineHeight;
+}
+
+LRESULT CALLBACK TimelineResizeBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_SETCURSOR:
+        SetCursor(LoadCursor(nullptr, IDC_SIZENS));
+        return TRUE;
+    case WM_LBUTTONDOWN:
+    {
+        POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ClientToScreen(hwnd, &pt);
+        g_isTimelineHeightDragging = true;
+        g_timelineResizeStartScreenY = pt.y;
+        g_timelineResizeStartHeight = g_preferredTimelineHeight;
+        SetCapture(hwnd);
+        if (g_timecodeTooltipWnd)
+            ShowWindow(g_timecodeTooltipWnd, SW_HIDE);
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (g_isTimelineHeightDragging)
+        {
+            POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ClientToScreen(hwnd, &pt);
+            RECT parentRect{};
+            GetClientRect(GetParent(hwnd), &parentRect);
+            const int maximumHeight = (std::max)(
+                TIMELINE_MIN_HEIGHT, static_cast<int>(parentRect.bottom) - 220);
+            const int requestedHeight = g_timelineResizeStartHeight
+                + g_timelineResizeStartScreenY - static_cast<int>(pt.y);
+            g_preferredTimelineHeight = std::clamp(
+                requestedHeight, TIMELINE_MIN_HEIGHT, maximumHeight);
+            RepositionTimelineArea(GetParent(hwnd));
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (g_isTimelineHeightDragging)
+        {
+            g_isTimelineHeightDragging = false;
+            if (GetCapture() == hwnd)
+                ReleaseCapture();
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        g_isTimelineHeightDragging = false;
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH background = CreateSolidBrush(RGB(45, 45, 48));
+        FillRect(hdc, &rc, background);
+        DeleteObject(background);
+
+        const int centerY = rc.bottom / 2;
+        const int centerX = static_cast<int>(rc.right) / 2;
+        const int gripLeft = (std::max)(0, centerX - 28);
+        const int gripRight = (std::min)(static_cast<int>(rc.right), centerX + 28);
+        HPEN linePen = CreatePen(PS_SOLID, 1, RGB(92, 92, 96));
+        HGDIOBJ oldPen = SelectObject(hdc, linePen);
+        MoveToEx(hdc, gripLeft, centerY, nullptr);
+        LineTo(hdc, gripRight, centerY);
+        SelectObject(hdc, oldPen);
+        DeleteObject(linePen);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
 
 // Timecode tooltip popup window
-static HWND g_timecodeTooltipWnd = nullptr;
 static wchar_t g_timecodeTooltipText[32] = {};
 static const wchar_t* TIMECODE_TOOLTIP_CLASS = L"TimelineTimecodeTooltip";
 

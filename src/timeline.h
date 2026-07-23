@@ -3,6 +3,11 @@
 #include <windows.h>
 
 LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK TimelineResizeBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+// User-adjustable timeline height. The layout may temporarily clamp this when
+// the main window is too small, while preserving the preferred height.
+int GetPreferredTimelineHeight();
 
 // Timeline zoom variables
 extern double g_timelineZoomLevel;
