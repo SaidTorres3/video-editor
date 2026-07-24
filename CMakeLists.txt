@@ -10,7 +10,10 @@ if(POLICY CMP0111)
     cmake_policy(SET CMP0111 NEW)
 endif()
 
-project(VideoEditor CXX)
+project(VideoEditor C CXX)
+
+# Lightweight, non-neural WebRTC voice activity detector.
+add_subdirectory(third_party/libfvad EXCLUDE_FROM_ALL)
 
 if(USE_STATIC_FFMPEG)
     message(STATUS "🔗 Linking FFmpeg statically")
@@ -193,6 +196,7 @@ target_link_libraries(VideoEditor PRIVATE
     ${PLATFORM_LIBS}
     ${FFMPEG_LIBS}
     ${RNNOISE_LIBRARY}
+    fvad
     VENDOR_LIBCURL
     VENDOR_ZLIB
 )
@@ -292,6 +296,7 @@ if(BUILD_TESTS)
         ${PLATFORM_LIBS}
         ${FFMPEG_LIBS}
         ${RNNOISE_LIBRARY}
+        fvad
         VENDOR_LIBCURL
         VENDOR_ZLIB
     )

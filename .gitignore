@@ -1,6 +1,7 @@
 # CMake build files
 /build/
-/third_party
+/third_party/*
+!/third_party/libfvad/
 *.exe
 *.dll
 *.obj

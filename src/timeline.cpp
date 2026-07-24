@@ -7,6 +7,7 @@
 #include "ui_controls.h"
 #include "options_window.h"
 #include "editing.h"
+#include <fvad.h>
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
@@ -158,6 +159,9 @@ struct AudioWaveformTrack
 {
     int streamIndex = -1;
     std::vector<float> samples;
+    // One entry per waveform bin. A non-zero value means conservative WebRTC
+    // VAD decisions reached temporal consensus around that point.
+    std::vector<uint8_t> probableSpeech;
 };
 static std::mutex                 g_waveformCacheMutex;
 static std::vector<AudioWaveformTrack> g_waveformCache;
@@ -333,6 +337,15 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         double nextTime = 0.0;
         std::vector<double> energy;
         std::vector<std::uint64_t> sampleCounts;
+        Fvad* vad = nullptr;
+        SwrContext* vadResampler = nullptr;
+        std::vector<int16_t> vadResampleBuffer;
+        std::deque<int16_t> vadSampleQueue;
+        std::vector<int16_t> vadFrame;
+        std::vector<std::uint32_t> vadSpeechVotes;
+        std::vector<std::uint32_t> vadFrameCounts;
+        double nextVadTime = 0.0;
+        bool hasVadTime = false;
     };
     std::vector<WaveformDecoder> decoders;
 
@@ -366,6 +379,15 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         decoder.codecContext = codecContext;
         decoder.energy.assign(WAVEFORM_BIN_COUNT, 0.0);
         decoder.sampleCounts.assign(WAVEFORM_BIN_COUNT, 0);
+        decoder.vad = fvad_new();
+        if (decoder.vad)
+        {
+            fvad_set_mode(decoder.vad, 3);
+            fvad_set_sample_rate(decoder.vad, 8000);
+        }
+        decoder.vadFrame.resize(240); // 30 ms at 8 kHz
+        decoder.vadSpeechVotes.assign(WAVEFORM_BIN_COUNT, 0);
+        decoder.vadFrameCounts.assign(WAVEFORM_BIN_COUNT, 0);
         decoders.push_back(decoder);
     }
     if (minStart != std::numeric_limits<double>::max())
@@ -412,6 +434,103 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
                                     ? decoder.nextTime
                                     : timestamp * av_q2d(stream->time_base) - startTimeOffset;
             decoder.nextTime = frameStart + audioFrame->nb_samples / static_cast<double>(sampleRate);
+
+            // WebRTC VAD: a lightweight statistical detector using six
+            // frequency bands and adaptive speech/noise Gaussian models. Mode
+            // 3 is intentionally conservative to minimize false positives.
+            if (decoder.vad)
+            {
+                if (!decoder.vadResampler)
+                {
+                    AVChannelLayout inputLayout = audioFrame->ch_layout;
+                    if (inputLayout.nb_channels <= 0)
+                        av_channel_layout_default(&inputLayout, channels);
+                    AVChannelLayout monoLayout;
+                    av_channel_layout_default(&monoLayout, 1);
+
+                    decoder.vadResampler = swr_alloc();
+                    if (decoder.vadResampler)
+                    {
+                        av_opt_set_chlayout(decoder.vadResampler, "in_chlayout",
+                                           &inputLayout, 0);
+                        av_opt_set_chlayout(decoder.vadResampler, "out_chlayout",
+                                           &monoLayout, 0);
+                        av_opt_set_int(decoder.vadResampler, "in_sample_rate",
+                                      sampleRate, 0);
+                        av_opt_set_int(decoder.vadResampler, "out_sample_rate",
+                                      8000, 0);
+                        av_opt_set_sample_fmt(
+                            decoder.vadResampler, "in_sample_fmt",
+                            static_cast<AVSampleFormat>(audioFrame->format), 0);
+                        av_opt_set_sample_fmt(decoder.vadResampler,
+                                              "out_sample_fmt",
+                                              AV_SAMPLE_FMT_S16, 0);
+                        if (swr_init(decoder.vadResampler) < 0)
+                            swr_free(&decoder.vadResampler);
+                    }
+                    av_channel_layout_uninit(&monoLayout);
+                }
+
+                if (decoder.vadResampler)
+                {
+                    if (!decoder.hasVadTime ||
+                        std::fabs(frameStart - decoder.nextVadTime) > 0.15)
+                    {
+                        decoder.vadSampleQueue.clear();
+                        decoder.nextVadTime = frameStart;
+                        decoder.hasVadTime = true;
+                    }
+
+                    int outputCapacity = swr_get_out_samples(
+                        decoder.vadResampler, audioFrame->nb_samples);
+                    if (outputCapacity > 0)
+                    {
+                        decoder.vadResampleBuffer.resize(
+                            static_cast<size_t>(outputCapacity));
+                        int16_t* output = decoder.vadResampleBuffer.data();
+                        int converted = swr_convert(
+                            decoder.vadResampler,
+                            reinterpret_cast<uint8_t**>(&output),
+                            outputCapacity,
+                            const_cast<const uint8_t**>(
+                                audioFrame->extended_data),
+                            audioFrame->nb_samples);
+                        for (int i = 0; i < converted; ++i)
+                            decoder.vadSampleQueue.push_back(output[i]);
+
+                        constexpr int VAD_FRAME_SAMPLES = 240;
+                        constexpr double VAD_FRAME_SECONDS = 0.03;
+                        while (decoder.vadSampleQueue.size() >=
+                               VAD_FRAME_SAMPLES)
+                        {
+                            for (int i = 0; i < VAD_FRAME_SAMPLES; ++i)
+                            {
+                                decoder.vadFrame[i] =
+                                    decoder.vadSampleQueue.front();
+                                decoder.vadSampleQueue.pop_front();
+                            }
+                            const int decision = fvad_process(
+                                decoder.vad, decoder.vadFrame.data(),
+                                decoder.vadFrame.size());
+                            const double vadEnd =
+                                decoder.nextVadTime + VAD_FRAME_SECONDS;
+                            const int firstBin = std::clamp(static_cast<int>(
+                                decoder.nextVadTime * WAVEFORM_BIN_COUNT /
+                                duration), 0, WAVEFORM_BIN_COUNT - 1);
+                            const int lastBin = std::clamp(static_cast<int>(
+                                vadEnd * WAVEFORM_BIN_COUNT / duration),
+                                firstBin, WAVEFORM_BIN_COUNT - 1);
+                            for (int bin = firstBin; bin <= lastBin; ++bin)
+                            {
+                                decoder.vadFrameCounts[bin]++;
+                                if (decision == 1)
+                                    decoder.vadSpeechVotes[bin]++;
+                            }
+                            decoder.nextVadTime = vadEnd;
+                        }
+                    }
+                }
+            }
 
             // About 48 measurements per bin preserve transients without doing
             // unnecessary per-sample work on long recordings.
@@ -471,7 +590,12 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         av_frame_free(&audioFrame);
         av_packet_free(&packet);
         for (auto& decoder : decoders)
+        {
+            swr_free(&decoder.vadResampler);
+            if (decoder.vad)
+                fvad_free(decoder.vad);
             avcodec_free_context(&decoder.codecContext);
+        }
         avformat_close_input(&formatContext);
         return false;
     }
@@ -483,6 +607,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         AudioWaveformTrack track;
         track.streamIndex = decoder.streamIndex;
         track.samples.assign(WAVEFORM_BIN_COUNT, 0.0f);
+        track.probableSpeech.assign(WAVEFORM_BIN_COUNT, 0);
 
         std::vector<float> nonSilent;
         nonSilent.reserve(WAVEFORM_BIN_COUNT);
@@ -518,13 +643,87 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
             track.samples.swap(smoothed);
         }
 
+        if (!nonSilent.empty() && decoder.vad)
+        {
+            // Mode 3 is already conservative. Add temporal consensus so one
+            // frame classified as speech (for example, a click or impact)
+            // cannot color the waveform by itself.
+            constexpr double VAD_FRAME_SECONDS = 0.03;
+            const double binDuration = duration / WAVEFORM_BIN_COUNT;
+            const double requiredSpeechTime = std::min(
+                0.12, std::max(VAD_FRAME_SECONDS, binDuration * 0.55));
+            const std::uint32_t requiredVotes =
+                static_cast<std::uint32_t>(std::ceil(
+                    requiredSpeechTime / VAD_FRAME_SECONDS));
+            const double requiredRatio =
+                binDuration <= 0.12 ? 0.55 : 0.10;
+            for (int i = 0; i < WAVEFORM_BIN_COUNT; ++i)
+            {
+                const std::uint32_t frames = decoder.vadFrameCounts[i];
+                const std::uint32_t votes = decoder.vadSpeechVotes[i];
+                const double ratio = frames > 0
+                    ? votes / static_cast<double>(frames)
+                    : 0.0;
+                track.probableSpeech[i] =
+                    votes >= requiredVotes && ratio >= requiredRatio ? 1 : 0;
+            }
+
+            // Preserve natural intra-word pauses, but reject short events even
+            // if WebRTC's hangover briefly keeps the VAD active.
+            const int maximumGapBins = std::max(1, static_cast<int>(
+                0.09 * WAVEFORM_BIN_COUNT / duration));
+            for (int start = 1; start < WAVEFORM_BIN_COUNT - 1;)
+            {
+                if (track.probableSpeech[start])
+                {
+                    ++start;
+                    continue;
+                }
+                int end = start;
+                while (end < WAVEFORM_BIN_COUNT &&
+                       !track.probableSpeech[end])
+                    ++end;
+                if (track.probableSpeech[start - 1] &&
+                    end < WAVEFORM_BIN_COUNT &&
+                    end - start <= maximumGapBins)
+                {
+                    std::fill(track.probableSpeech.begin() + start,
+                              track.probableSpeech.begin() + end, 1);
+                }
+                start = end;
+            }
+
+            const int minimumSpeechBins = std::max(1, static_cast<int>(
+                std::ceil(0.30 * WAVEFORM_BIN_COUNT / duration)));
+            for (int start = 0; start < WAVEFORM_BIN_COUNT;)
+            {
+                if (!track.probableSpeech[start])
+                {
+                    ++start;
+                    continue;
+                }
+                int end = start;
+                while (end < WAVEFORM_BIN_COUNT && track.probableSpeech[end])
+                    ++end;
+                if (end - start < minimumSpeechBins)
+                    std::fill(track.probableSpeech.begin() + start,
+                              track.probableSpeech.begin() + end, 0);
+                start = end;
+            }
+        }
+
         result.push_back(std::move(track));
     }
 
     av_frame_free(&audioFrame);
     av_packet_free(&packet);
     for (auto& decoder : decoders)
+    {
+        swr_free(&decoder.vadResampler);
+        if (decoder.vad)
+            fvad_free(decoder.vad);
         avcodec_free_context(&decoder.codecContext);
+    }
     avformat_close_input(&formatContext);
     return true;
 }
@@ -548,8 +747,10 @@ static void WaveformThreadFunc()
             generation = g_waveformRequestGeneration;
         }
 
+        // Waveform and probable-speech coloring are derived in the same pass.
         std::vector<AudioWaveformTrack> waveforms;
-        bool built = BuildAudioWaveforms(filename, duration, generation, waveforms);
+        bool built = BuildAudioWaveforms(
+            filename, duration, generation, waveforms);
         if (built && !g_waveformThreadExit.load() &&
             g_waveformGeneration.load() == generation)
         {
@@ -1522,10 +1723,6 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         if (g_videoPlayer->IsAudioTrackMuted(trackIndex))
                             continue;
 
-                        float volume = g_videoPlayer->GetAudioTrackVolume(trackIndex);
-                        if (volume <= 0.0f)
-                            continue;
-
                         int streamIndex = g_videoPlayer->audioTracks[trackIndex]->streamIndex;
                         auto waveformIt = std::find_if(
                             waveforms.begin(), waveforms.end(),
@@ -1552,7 +1749,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                             int sampleIndex = std::clamp(static_cast<int>(
                                 time * waveformIt->samples.size() / dur),
                                 0, static_cast<int>(waveformIt->samples.size()) - 1);
-                            float scaled = std::min(1.0f, waveformIt->samples[sampleIndex] * volume);
+                            float scaled = std::min(1.0f, waveformIt->samples[sampleIndex]);
                             int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
                             points.push_back({ px, centerY - amplitude });
                         }
@@ -1562,7 +1759,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                             int sampleIndex = std::clamp(static_cast<int>(
                                 time * waveformIt->samples.size() / dur),
                                 0, static_cast<int>(waveformIt->samples.size()) - 1);
-                            float scaled = std::min(1.0f, waveformIt->samples[sampleIndex] * volume);
+                            float scaled = std::min(1.0f, waveformIt->samples[sampleIndex]);
                             int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
                             points.push_back({ right - 1, centerY - amplitude });
                         }
@@ -1576,6 +1773,57 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                             Polyline(hdc, points.data(), static_cast<int>(points.size()));
                             SelectObject(hdc, oldPen);
                             DeleteObject(waveformPen);
+                        }
+
+                        if (!waveformIt->probableSpeech.empty())
+                        {
+                            // Repaint only the waveform sections classified as
+                            // probable speech. No extra bars or icons compete
+                            // with the audio trace.
+                            HPEN speechPen =
+                                CreatePen(PS_SOLID, 2, RGB(105, 226, 154));
+                            HGDIOBJ oldSpeechPen =
+                                SelectObject(hdc, speechPen);
+                            size_t speechStart = points.size();
+                            for (size_t i = 0; i <= points.size(); ++i)
+                            {
+                                bool speech = false;
+                                if (i < points.size())
+                                {
+                                    double time =
+                                        PixelToTime(points[i].x, rc, dur);
+                                    int speechIndex = std::clamp(
+                                        static_cast<int>(
+                                            time *
+                                            waveformIt->probableSpeech.size() /
+                                            dur),
+                                        0, static_cast<int>(
+                                            waveformIt->probableSpeech.size()) -
+                                            1);
+                                    speech = waveformIt
+                                                 ->probableSpeech[speechIndex] !=
+                                             0;
+                                }
+
+                                if (speech && speechStart == points.size())
+                                {
+                                    speechStart = i;
+                                }
+                                else if (!speech &&
+                                         speechStart != points.size())
+                                {
+                                    const size_t pointCount = i - speechStart;
+                                    if (pointCount >= 2)
+                                    {
+                                        Polyline(
+                                            hdc, points.data() + speechStart,
+                                            static_cast<int>(pointCount));
+                                    }
+                                    speechStart = points.size();
+                                }
+                            }
+                            SelectObject(hdc, oldSpeechPen);
+                            DeleteObject(speechPen);
                         }
                     }
                 }
