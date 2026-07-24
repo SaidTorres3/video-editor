@@ -241,6 +241,26 @@ void RegisterCuttingTests(TestSuite& suite) {
         TEST_ASSERT_GE(info.audioStreamCount, 1, "Should have at least 1 audio stream");
     });
 
+    // ---- Persistent export master gain (preserves separate tracks) ----
+    suite.addTest("Cut_ExportMasterGain", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        std::wstring out = MakeOutputPath(L"cut_export_master_gain.mp4");
+        std::atomic<bool> cancel{false};
+        const int savedGainDb = g_exportMasterGainDb;
+        g_exportMasterGainDb = 5;
+        bool result = player.CutVideo(out, 0.5, 2.5, false, false,
+                                      EncoderSelection::Libx264, L"Medium", 0, nullptr, &cancel);
+        g_exportMasterGainDb = savedGainDb;
+
+        TEST_ASSERT(result, "CutVideo with export master gain should succeed");
+        OutputInfo info = InspectOutputFile(out);
+        TEST_ASSERT(info.valid, "Gain-adjusted output should be valid");
+        TEST_ASSERT_GE(info.audioStreamCount, 1, "Gain export should keep audio tracks");
+        TEST_ASSERT_EQ(static_cast<int>(info.audioCodecId), static_cast<int>(AV_CODEC_ID_AAC),
+                       "Gain-adjusted audio should be AAC re-encoded");
+    });
+
     // ---- Cut With Crop ----
     suite.addTest("Cut_WithCrop", []() {
         VideoPlayer player(g_testHwnd);

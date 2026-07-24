@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "../src/ten_vad_embedded.h"
 #include "../src/video_player.h"
+#include "../src/options_window.h"
 
 #include <array>
 
@@ -12,6 +13,21 @@ extern std::wstring g_testVideoPath;
 extern HWND g_testHwnd;
 
 void RegisterAudioTests(TestSuite& suite) {
+
+    suite.addTest("ExportMasterGain_DbConversion", []() {
+        const int savedGainDb = g_exportMasterGainDb;
+        g_exportMasterGainDb = 0;
+        const float unity = GetExportMasterGainLinear();
+        g_exportMasterGainDb = 6;
+        const float plusSix = GetExportMasterGainLinear();
+        g_exportMasterGainDb = -6;
+        const float minusSix = GetExportMasterGainLinear();
+        g_exportMasterGainDb = savedGainDb;
+
+        TEST_ASSERT_NEAR(unity, 1.0f, 0.001f, "0 dB should preserve the signal");
+        TEST_ASSERT_NEAR(plusSix, 1.995f, 0.002f, "+6 dB should nearly double amplitude");
+        TEST_ASSERT_NEAR(minusSix, 0.501f, 0.002f, "-6 dB should nearly halve amplitude");
+    });
 
     suite.addTest("AudioTrack_DefaultUnmuted", []() {
         VideoPlayer player(g_testHwnd);

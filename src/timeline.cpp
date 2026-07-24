@@ -169,6 +169,7 @@ static std::mutex                 g_waveformRequestMutex;
 static std::wstring               g_waveformRequestFile;
 static double                     g_waveformRequestDuration = 0.0;
 static std::uint64_t              g_waveformRequestGeneration = 0;
+static bool                       g_waveformRequestHighlightSpeech = false;
 static std::atomic<std::uint64_t> g_waveformGeneration{0};
 static std::atomic<bool>          g_waveformThreadExit{false};
 static HANDLE                     g_waveformRequestEvent = nullptr;
@@ -309,6 +310,7 @@ static double ReadNormalizedAudioSample(const AVFrame* frame, int channel, int s
 
 static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
                                 std::uint64_t generation,
+                                bool highlightSpeech,
                                 std::vector<AudioWaveformTrack>& result)
 {
     if (filename.empty() || duration <= 0.0)
@@ -388,8 +390,11 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         // frames. A high threshold deliberately favors precision here: this is
         // a visual hint, so missing a marginal syllable is preferable to
         // coloring sound effects as speech.
-        if (!EmbeddedTenVadCreate(&decoder.vad, 256, 0.70f))
+        if (highlightSpeech &&
+            !EmbeddedTenVadCreate(&decoder.vad, 256, 0.70f))
+        {
             decoder.vad = nullptr;
+        }
         decoders.push_back(decoder);
     }
     if (minStart != std::numeric_limits<double>::max())
@@ -804,17 +809,20 @@ static void WaveformThreadFunc()
         std::wstring filename;
         double duration = 0.0;
         std::uint64_t generation = 0;
+        bool highlightSpeech = false;
         {
             std::lock_guard<std::mutex> lock(g_waveformRequestMutex);
             filename = g_waveformRequestFile;
             duration = g_waveformRequestDuration;
             generation = g_waveformRequestGeneration;
+            highlightSpeech = g_waveformRequestHighlightSpeech;
         }
 
-        // Waveform and probable-speech coloring are derived in the same pass.
+        // Optional speech coloring is derived in the same pass. With it
+        // disabled, no neural runtime or 16 kHz speech resampler is created.
         std::vector<AudioWaveformTrack> waveforms;
         bool built = BuildAudioWaveforms(
-            filename, duration, generation, waveforms);
+            filename, duration, generation, highlightSpeech, waveforms);
         if (built && !g_waveformThreadExit.load() &&
             g_waveformGeneration.load() == generation)
         {
@@ -847,6 +855,7 @@ void RefreshAudioWaveformPreview()
         g_waveformRequestFile = g_videoPlayer->loadedFilename;
         g_waveformRequestDuration = g_videoPlayer->GetDuration();
         g_waveformRequestGeneration = generation;
+        g_waveformRequestHighlightSpeech = g_highlightSpeechWaveforms;
     }
     SetEvent(g_waveformRequestEvent);
 }
