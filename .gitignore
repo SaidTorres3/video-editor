@@ -4,6 +4,7 @@
 !/third_party/libfvad/
 *.exe
 *.dll
+!vendor/ten-vad/lib/Windows/x64/ten_vad.dll
 *.obj
 *.ilk
 *.pdb
