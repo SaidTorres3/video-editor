@@ -35,10 +35,11 @@ double g_previewSeekTime = -1.0; // For immediate timeline feedback
 static int g_timelineHoverX = -1;
 static bool g_timelineMouseTracking = false;
 static constexpr int TIMELINE_MIN_HEIGHT = 30;
-static int g_preferredTimelineHeight = TIMELINE_MIN_HEIGHT;
+static constexpr int TIMELINE_DEFAULT_HEIGHT = 50;
+static int g_preferredTimelineHeight = TIMELINE_DEFAULT_HEIGHT;
 static bool g_isTimelineHeightDragging = false;
 static int g_timelineResizeStartScreenY = 0;
-static int g_timelineResizeStartHeight = TIMELINE_MIN_HEIGHT;
+static int g_timelineResizeStartHeight = TIMELINE_DEFAULT_HEIGHT;
 static HWND g_timecodeTooltipWnd = nullptr;
 
 int GetPreferredTimelineHeight()
