@@ -12,22 +12,27 @@ endif()
 
 project(VideoEditor C CXX)
 
-# Ultra-light neural VAD. The official x64 Windows build is self-contained and
-# avoids pulling a general-purpose inference runtime into the editor.
+# Ultra-light neural VAD. TEN only publishes a Windows DLL, so package that DLL
+# as an executable resource and load it through our wrapper at runtime. This
+# keeps static releases self-contained instead of shipping ten_vad.dll beside
+# VideoEditor.exe.
 set(TEN_VAD_ROOT "${CMAKE_SOURCE_DIR}/vendor/ten-vad")
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "TEN VAD is currently vendored for Windows x64 only")
 endif()
-if(NOT EXISTS "${TEN_VAD_ROOT}/lib/Windows/x64/ten_vad.lib" OR
-   NOT EXISTS "${TEN_VAD_ROOT}/lib/Windows/x64/ten_vad.dll")
+set(TEN_VAD_DLL "${TEN_VAD_ROOT}/lib/Windows/x64/ten_vad.dll")
+if(NOT EXISTS "${TEN_VAD_DLL}")
     message(FATAL_ERROR "TEN VAD Windows x64 binaries are missing")
 endif()
-add_library(TEN_VAD SHARED IMPORTED GLOBAL)
-set_target_properties(TEN_VAD PROPERTIES
-    IMPORTED_IMPLIB "${TEN_VAD_ROOT}/lib/Windows/x64/ten_vad.lib"
-    IMPORTED_LOCATION "${TEN_VAD_ROOT}/lib/Windows/x64/ten_vad.dll"
-    INTERFACE_INCLUDE_DIRECTORIES "${TEN_VAD_ROOT}/include"
+file(TO_CMAKE_PATH "${TEN_VAD_DLL}" TEN_VAD_DLL_RC_PATH)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/src/ten_vad_resource.rc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/ten_vad_resource.rc"
+    @ONLY
 )
+set(TEN_VAD_RESOURCE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/ten_vad_resource.rc")
 
 if(USE_STATIC_FFMPEG)
     message(STATUS "🔗 Linking FFmpeg statically")
@@ -143,6 +148,8 @@ add_executable(VideoEditor WIN32
     src/catbox_upload.cpp
     src/debug_log.cpp
     src/upload_dialog.cpp
+    src/ten_vad_embedded.cpp
+    ${TEN_VAD_RESOURCE}
 )
 
 # ==== INCLUDE DIRECTORIES ====
@@ -210,15 +217,8 @@ target_link_libraries(VideoEditor PRIVATE
     ${PLATFORM_LIBS}
     ${FFMPEG_LIBS}
     ${RNNOISE_LIBRARY}
-    TEN_VAD
     VENDOR_LIBCURL
     VENDOR_ZLIB
-)
-
-add_custom_command(TARGET VideoEditor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:TEN_VAD>" "$<TARGET_FILE_DIR:VideoEditor>"
-    COMMENT "Copying TEN VAD neural runtime..."
 )
 
 # Force static runtime library linking for static builds
@@ -268,6 +268,8 @@ if(BUILD_TESTS)
         src/catbox_upload.cpp
         src/debug_log.cpp
         src/upload_dialog.cpp
+        src/ten_vad_embedded.cpp
+        ${TEN_VAD_RESOURCE}
     )
 
     # Test source files
@@ -316,15 +318,8 @@ if(BUILD_TESTS)
         ${PLATFORM_LIBS}
         ${FFMPEG_LIBS}
         ${RNNOISE_LIBRARY}
-        TEN_VAD
         VENDOR_LIBCURL
         VENDOR_ZLIB
-    )
-
-    add_custom_command(TARGET VideoEditorTests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:TEN_VAD>" "$<TARGET_FILE_DIR:VideoEditorTests>"
-        COMMENT "Copying TEN VAD neural runtime for tests..."
     )
 
     if(MSVC AND USE_STATIC_FFMPEG)

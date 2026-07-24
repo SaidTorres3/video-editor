@@ -7,7 +7,7 @@
 #include "ui_controls.h"
 #include "options_window.h"
 #include "editing.h"
-#include <ten_vad.h>
+#include "ten_vad_embedded.h"
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
@@ -343,7 +343,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         double nextTime = 0.0;
         std::vector<double> energy;
         std::vector<std::uint64_t> sampleCounts;
-        ten_vad_handle_t vad = nullptr;
+        EmbeddedTenVadHandle vad = nullptr;
         SwrContext* vadResampler = nullptr;
         std::vector<int16_t> vadResampleBuffer;
         std::vector<int16_t> vadSampleQueue;
@@ -388,7 +388,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         // frames. A high threshold deliberately favors precision here: this is
         // a visual hint, so missing a marginal syllable is preferable to
         // coloring sound effects as speech.
-        if (ten_vad_create(&decoder.vad, 256, 0.70f) != 0)
+        if (!EmbeddedTenVadCreate(&decoder.vad, 256, 0.70f))
             decoder.vad = nullptr;
         decoders.push_back(decoder);
     }
@@ -512,12 +512,12 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
                         {
                             float probability = 0.0f;
                             int decision = 0;
-                            if (ten_vad_process(
+                            if (EmbeddedTenVadProcess(
                                     decoder.vad,
                                     decoder.vadSampleQueue.data() +
                                         decoder.vadSampleOffset,
                                     VAD_FRAME_SAMPLES, &probability,
-                                    &decision) == 0)
+                                    &decision))
                             {
                                 WaveformDecoder::VadObservation observation;
                                 observation.time =
@@ -608,7 +608,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         {
             swr_free(&decoder.vadResampler);
             if (decoder.vad)
-                ten_vad_destroy(&decoder.vad);
+                EmbeddedTenVadDestroy(&decoder.vad);
             avcodec_free_context(&decoder.codecContext);
         }
         avformat_close_input(&formatContext);
@@ -785,7 +785,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
     {
         swr_free(&decoder.vadResampler);
         if (decoder.vad)
-            ten_vad_destroy(&decoder.vad);
+            EmbeddedTenVadDestroy(&decoder.vad);
         avcodec_free_context(&decoder.codecContext);
     }
     avformat_close_input(&formatContext);
@@ -1056,6 +1056,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
             g_waveformCache.clear();
         }
+        ShutdownEmbeddedTenVadRuntime();
         // Stop thumbnail decode thread before destroying the tooltip window
         if (g_thumbRequestEvent)
         {
