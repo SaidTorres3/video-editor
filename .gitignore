@@ -1,8 +1,9 @@
 # CMake build files
 /build/
-/third_party
+/third_party/*
 *.exe
 *.dll
+!vendor/ten-vad/lib/Windows/x64/ten_vad.dll
 *.obj
 *.ilk
 *.pdb

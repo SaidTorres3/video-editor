@@ -6,14 +6,20 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <commctrl.h>
+#include <algorithm>
+#include <cstdint>
+#include <cmath>
+#include <cwchar>
 
 static HWND g_hOptionsWnd = nullptr;
 static HWND g_hUploadWnd = nullptr;
 static HWND g_hCatboxWnd = nullptr;
 static HWND g_hGeneralPanel = nullptr;
+static HWND g_hAudioPanel = nullptr;
 static HWND g_hEncodingPanel = nullptr;
 static HWND g_hUploadPanel = nullptr;
 static HWND g_hExportPanel = nullptr;
+static HWND g_hExportMasterGainLabel = nullptr;
 static int g_selectedCategory = ID_TAB_GENERAL;
 static HBRUSH g_hOptionsBgBrush = (HBRUSH)GetStockObject(BLACK_BRUSH);
 
@@ -35,6 +41,8 @@ bool g_showVideoPreviewOnHover = true;
 bool g_improveSeekPerformance = true;
 bool g_enableMultiClipEditing = false;
 bool g_showAudioWaveform = true;
+bool g_highlightSpeechWaveforms = false;
+int g_exportMasterGainDb = 0;
 std::wstring g_qualityPreset = L"Medium";
 std::wstring g_b2KeyId;
 std::wstring g_b2AppKey;
@@ -51,6 +59,23 @@ std::wstring g_exportSaveName = L"$[filename]_edited";
 std::wstring g_exportDefaultFolder;
 bool g_exportAutoSave = false;
 bool g_exportDefaultCodecH264 = true;
+
+float GetExportMasterGainLinear()
+{
+    return std::pow(10.0f, g_exportMasterGainDb / 20.0f);
+}
+
+static void UpdateExportMasterGainLabel(int gainDb)
+{
+    if (!g_hExportMasterGainLabel)
+        return;
+    wchar_t text[32] = {};
+    if (gainDb > 0)
+        swprintf_s(text, L"+%d dB", gainDb);
+    else
+        swprintf_s(text, L"%d dB", gainDb);
+    SetWindowTextW(g_hExportMasterGainLabel, text);
+}
 
 // Load settings from Windows registry
 void LoadSettings()
@@ -82,6 +107,12 @@ void LoadSettings()
         size = sizeof(val);
         if (RegQueryValueExW(hKey, L"ShowAudioWaveform", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
             g_showAudioWaveform = (val != 0);
+        size = sizeof(val); val = 0;
+        if (RegQueryValueExW(hKey, L"HighlightSpeechWaveforms", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
+            g_highlightSpeechWaveforms = (val != 0);
+        size = sizeof(val); val = 0;
+        if (RegQueryValueExW(hKey, L"ExportMasterGainDb", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
+            g_exportMasterGainDb = std::clamp(static_cast<int32_t>(val), -12, 12);
 
         wchar_t buf[256];
         DWORD sz = sizeof(buf);
@@ -154,6 +185,10 @@ void SaveSettings()
         RegSetValueExW(hKey, L"EnableMultiClipEditing", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         val = g_showAudioWaveform ? 1 : 0;
         RegSetValueExW(hKey, L"ShowAudioWaveform", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = g_highlightSpeechWaveforms ? 1 : 0;
+        RegSetValueExW(hKey, L"HighlightSpeechWaveforms", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = static_cast<DWORD>(g_exportMasterGainDb);
+        RegSetValueExW(hKey, L"ExportMasterGainDb", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"B2KeyId", 0, REG_SZ, (const BYTE*)g_b2KeyId.c_str(), (DWORD)((g_b2KeyId.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2AppKey", 0, REG_SZ, (const BYTE*)g_b2AppKey.c_str(), (DWORD)((g_b2AppKey.size()+1)*sizeof(wchar_t)));
         RegSetValueExW(hKey, L"B2BucketId", 0, REG_SZ, (const BYTE*)g_b2BucketId.c_str(), (DWORD)((g_b2BucketId.size()+1)*sizeof(wchar_t)));
@@ -201,6 +236,8 @@ static LRESULT CALLBACK OptionsPanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     switch (msg) {
     case WM_COMMAND:
         return SendMessage(GetParent(hwnd), msg, wParam, lParam);
+    case WM_HSCROLL:
+        return SendMessage(GetParent(hwnd), msg, wParam, lParam);
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORBTN:
@@ -224,6 +261,7 @@ void SwitchCategory(int categoryId)
     
     // Hide all panels
     if (g_hGeneralPanel) ShowWindow(g_hGeneralPanel, SW_HIDE);
+    if (g_hAudioPanel) ShowWindow(g_hAudioPanel, SW_HIDE);
     if (g_hEncodingPanel) ShowWindow(g_hEncodingPanel, SW_HIDE);
     if (g_hUploadPanel) ShowWindow(g_hUploadPanel, SW_HIDE);
     if (g_hExportPanel) ShowWindow(g_hExportPanel, SW_HIDE);
@@ -231,6 +269,8 @@ void SwitchCategory(int categoryId)
     // Show selected panel
     if (categoryId == ID_TAB_GENERAL && g_hGeneralPanel)
         ShowWindow(g_hGeneralPanel, SW_SHOW);
+    else if (categoryId == ID_TAB_AUDIO && g_hAudioPanel)
+        ShowWindow(g_hAudioPanel, SW_SHOW);
     else if (categoryId == ID_TAB_ENCODING && g_hEncodingPanel)
         ShowWindow(g_hEncodingPanel, SW_SHOW);
     else if (categoryId == ID_TAB_UPLOAD && g_hUploadPanel)
@@ -272,18 +312,23 @@ void ShowOptionsWindow(HWND parent)
                                     (HMENU)ID_TAB_GENERAL, hInst, nullptr);
     HWND hTabEncoding = CreateWindow(L"BUTTON", L"  Encoding",
                                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
-                                     0, 90, leftPanelWidth, 40, g_hOptionsWnd,
+                                     0, 130, leftPanelWidth, 40, g_hOptionsWnd,
                                      (HMENU)ID_TAB_ENCODING, hInst, nullptr);
+    HWND hTabAudio = CreateWindow(L"BUTTON", L"  Audio",
+                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
+                                  0, 90, leftPanelWidth, 40, g_hOptionsWnd,
+                                  (HMENU)ID_TAB_AUDIO, hInst, nullptr);
     HWND hTabUpload = CreateWindow(L"BUTTON", L"  Upload",
                                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
-                                   0, 130, leftPanelWidth, 40, g_hOptionsWnd,
+                                   0, 170, leftPanelWidth, 40, g_hOptionsWnd,
                                    (HMENU)ID_TAB_UPLOAD, hInst, nullptr);
     HWND hTabExport = CreateWindow(L"BUTTON", L"  Exportation",
                                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_LEFT,
-                                   0, 170, leftPanelWidth, 40, g_hOptionsWnd,
+                                   0, 210, leftPanelWidth, 40, g_hOptionsWnd,
                                    (HMENU)ID_TAB_EXPORT, hInst, nullptr);
 
     ApplyDarkTheme(hTabGeneral);
+    ApplyDarkTheme(hTabAudio);
     ApplyDarkTheme(hTabEncoding);
     ApplyDarkTheme(hTabUpload);
     ApplyDarkTheme(hTabExport);
@@ -369,6 +414,56 @@ void ShowOptionsWindow(HWND parent)
     SendMessage(hSeekPerf, BM_SETCHECK, g_improveSeekPerformance ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hMultiClip, BM_SETCHECK, g_enableMultiClipEditing ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(hAudioWaveform, BM_SETCHECK, g_showAudioWaveform ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    // ===== AUDIO PANEL =====
+    g_hAudioPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
+                                   WS_CHILD,
+                                   contentX, contentY, contentWidth, 380,
+                                   g_hOptionsWnd, (HMENU)ID_PANEL_AUDIO, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Audio Settings", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 0, contentWidth, 26, g_hAudioPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+                 0, 32, contentWidth, 2, g_hAudioPanel, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Timeline Waveforms", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 50, contentWidth, 22, g_hAudioPanel, nullptr, hInst, nullptr);
+    HWND hHighlightSpeech = CreateWindow(
+        L"BUTTON", L"Highlight speech in audio waveforms",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        20, 78, 330, 22, g_hAudioPanel,
+        (HMENU)ID_CHECKBOX_HIGHLIGHT_SPEECH, hInst, nullptr);
+    ApplyDarkTheme(hHighlightSpeech);
+    SendMessage(hHighlightSpeech, BM_SETCHECK,
+                g_highlightSpeechWaveforms ? BST_CHECKED : BST_UNCHECKED, 0);
+    CreateWindow(
+        L"STATIC",
+        L"Uses neural voice detection. Keep disabled for faster waveform loading.",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        20, 106, contentWidth - 20, 38, g_hAudioPanel, nullptr, hInst, nullptr);
+
+    CreateWindow(L"STATIC", L"Export Audio", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 0, 160, contentWidth, 22, g_hAudioPanel, nullptr, hInst, nullptr);
+    CreateWindow(L"STATIC", L"Export master gain:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 20, 190, 150, 22, g_hAudioPanel, nullptr, hInst, nullptr);
+    HWND hExportGain = CreateWindow(
+        TRACKBAR_CLASSW, L"",
+        WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS | TBS_HORZ,
+        20, 216, 340, 36, g_hAudioPanel,
+        (HMENU)ID_SLIDER_EXPORT_MASTER_GAIN, hInst, nullptr);
+    SendMessage(hExportGain, TBM_SETRANGE, TRUE, MAKELPARAM(-12, 12));
+    SendMessage(hExportGain, TBM_SETTICFREQ, 1, 0);
+    SendMessage(hExportGain, TBM_SETPOS, TRUE, g_exportMasterGainDb);
+    g_hExportMasterGainLabel = CreateWindow(
+        L"STATIC", L"0 dB", WS_CHILD | WS_VISIBLE | SS_CENTER,
+        370, 220, 70, 22, g_hAudioPanel,
+        (HMENU)ID_LABEL_EXPORT_MASTER_GAIN, hInst, nullptr);
+    UpdateExportMasterGainLabel(g_exportMasterGainDb);
+    CreateWindow(
+        L"STATIC",
+        L"Added to every exported audio track. 0 dB keeps the original level.",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        20, 260, contentWidth - 20, 38, g_hAudioPanel, nullptr, hInst, nullptr);
 
     // ===== ENCODING PANEL =====
     g_hEncodingPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
@@ -551,6 +646,7 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_COMMAND:
         // Handle category button clicks
         if (LOWORD(wParam) == ID_TAB_GENERAL || 
+            LOWORD(wParam) == ID_TAB_AUDIO ||
             LOWORD(wParam) == ID_TAB_ENCODING || 
             LOWORD(wParam) == ID_TAB_UPLOAD ||
             LOWORD(wParam) == ID_TAB_EXPORT) {
@@ -617,13 +713,21 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hSeekPerf = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_IMPROVE_SEEK);
             HWND hMultiClip = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_MULTI_CLIP);
             HWND hAudioWaveform = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUDIO_WAVEFORM);
+            HWND hHighlightSpeech = GetDlgItem(g_hAudioPanel, ID_CHECKBOX_HIGHLIGHT_SPEECH);
+            HWND hExportGain = GetDlgItem(g_hAudioPanel, ID_SLIDER_EXPORT_MASTER_GAIN);
             HWND hAutoUpload = GetDlgItem(g_hUploadPanel, ID_CHECKBOX_AUTO_UPLOAD);
+            const bool previousShowAudioWaveform = g_showAudioWaveform;
+            const bool previousHighlightSpeech = g_highlightSpeechWaveforms;
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hHoverPrev) g_showVideoPreviewOnHover = SendMessage(hHoverPrev, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hSeekPerf) g_improveSeekPerformance = SendMessage(hSeekPerf, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hMultiClip) g_enableMultiClipEditing = SendMessage(hMultiClip, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hAudioWaveform) g_showAudioWaveform = SendMessage(hAudioWaveform, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hHighlightSpeech) g_highlightSpeechWaveforms = SendMessage(hHighlightSpeech, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hExportGain) g_exportMasterGainDb = std::clamp(
+                static_cast<int>(SendMessage(hExportGain, TBM_GETPOS, 0, 0)),
+                -12, 12);
             g_autoUpload = SendMessage(hAutoUpload, BM_GETCHECK, 0, 0) == BST_CHECKED;
 
             // Get exportation settings
@@ -643,7 +747,11 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
 
             SaveSettings();
-            RefreshAudioWaveformPreview();
+            if (previousShowAudioWaveform != g_showAudioWaveform ||
+                previousHighlightSpeech != g_highlightSpeechWaveforms)
+            {
+                RefreshAudioWaveformPreview();
+            }
             HWND owner = GetWindow(hwnd, GW_OWNER);
             DestroyWindow(hwnd);
             if (owner) {
@@ -651,6 +759,14 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 UpdateCutInfoLabel(owner);
                 InvalidateRect(owner, nullptr, TRUE);
             }
+        }
+        break;
+    case WM_HSCROLL:
+        if ((HWND)lParam &&
+            GetDlgCtrlID((HWND)lParam) == ID_SLIDER_EXPORT_MASTER_GAIN)
+        {
+            UpdateExportMasterGainLabel(static_cast<int>(
+                SendMessage((HWND)lParam, TBM_GETPOS, 0, 0)));
         }
         break;
     case WM_CLOSE:
@@ -680,12 +796,20 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hSeekPerf = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_IMPROVE_SEEK);
             HWND hMultiClip = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_MULTI_CLIP);
             HWND hAudioWaveform = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUDIO_WAVEFORM);
+            HWND hHighlightSpeech = GetDlgItem(g_hAudioPanel, ID_CHECKBOX_HIGHLIGHT_SPEECH);
+            HWND hExportGain = GetDlgItem(g_hAudioPanel, ID_SLIDER_EXPORT_MASTER_GAIN);
+            const bool previousShowAudioWaveform = g_showAudioWaveform;
+            const bool previousHighlightSpeech = g_highlightSpeechWaveforms;
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
             g_autoPlay = SendMessage(hAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hHoverPrev) g_showVideoPreviewOnHover = SendMessage(hHoverPrev, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hSeekPerf) g_improveSeekPerformance = SendMessage(hSeekPerf, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hMultiClip) g_enableMultiClipEditing = SendMessage(hMultiClip, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hAudioWaveform) g_showAudioWaveform = SendMessage(hAudioWaveform, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hHighlightSpeech) g_highlightSpeechWaveforms = SendMessage(hHighlightSpeech, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hExportGain) g_exportMasterGainDb = std::clamp(
+                static_cast<int>(SendMessage(hExportGain, TBM_GETPOS, 0, 0)),
+                -12, 12);
 
             // Get exportation settings
             {
@@ -704,7 +828,11 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
 
             SaveSettings();
-            RefreshAudioWaveformPreview();
+            if (previousShowAudioWaveform != g_showAudioWaveform ||
+                previousHighlightSpeech != g_highlightSpeechWaveforms)
+            {
+                RefreshAudioWaveformPreview();
+            }
             HWND owner = GetWindow(hwnd, GW_OWNER);
             DestroyWindow(hwnd);
             if (owner) {
@@ -717,9 +845,11 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         g_hOptionsWnd = nullptr;
         g_hGeneralPanel = nullptr;
+        g_hAudioPanel = nullptr;
         g_hEncodingPanel = nullptr;
         g_hUploadPanel = nullptr;
         g_hExportPanel = nullptr;
+        g_hExportMasterGainLabel = nullptr;
         g_selectedCategory = ID_TAB_GENERAL;
         break;
     }
