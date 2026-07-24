@@ -159,6 +159,7 @@ static const UINT                 WM_AUDIO_WAVEFORM_READY = WM_APP + 20;
 struct AudioWaveformTrack
 {
     int streamIndex = -1;
+    size_t validBins = 0;
     std::vector<float> samples;
     // One entry per waveform bin. A non-zero value means the lightweight
     // neural VAD found a temporally stable speech segment around that point.
@@ -596,6 +597,159 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         }
     };
 
+    auto buildTracksFromDecoders = [&](std::vector<AudioWaveformTrack>& outTracks) {
+        outTracks.clear();
+        outTracks.reserve(decoders.size());
+        for (auto& decoder : decoders)
+        {
+            AudioWaveformTrack track;
+            track.streamIndex = decoder.streamIndex;
+            track.samples.assign(WAVEFORM_BIN_COUNT, 0.0f);
+            track.probableSpeech.assign(WAVEFORM_BIN_COUNT, 0);
+
+            size_t maxValidBin = 0;
+            for (int i = WAVEFORM_BIN_COUNT - 1; i >= 0; --i)
+            {
+                if (decoder.sampleCounts[i] > 0)
+                {
+                    maxValidBin = static_cast<size_t>(i + 1);
+                    break;
+                }
+            }
+            track.validBins = maxValidBin;
+
+            std::vector<float> nonSilent;
+            nonSilent.reserve(WAVEFORM_BIN_COUNT);
+            for (int i = 0; i < WAVEFORM_BIN_COUNT; ++i)
+            {
+                if (decoder.sampleCounts[i] == 0)
+                    continue;
+                track.samples[i] = static_cast<float>(
+                    std::sqrt(decoder.energy[i] / decoder.sampleCounts[i]));
+                if (track.samples[i] > 0.00001f)
+                    nonSilent.push_back(track.samples[i]);
+            }
+
+            if (!nonSilent.empty())
+            {
+                std::sort(nonSilent.begin(), nonSilent.end());
+                size_t percentileIndex = static_cast<size_t>((nonSilent.size() - 1) * 0.95);
+                float referenceLevel = std::max(0.00001f, nonSilent[percentileIndex]);
+                for (int i = 0; i < WAVEFORM_BIN_COUNT; ++i)
+                {
+                    if (decoder.sampleCounts[i] == 0)
+                        continue;
+                    float normalized = std::min(1.0f, track.samples[i] / (referenceLevel * 1.15f));
+                    track.samples[i] = std::sqrt(normalized);
+                }
+
+                // A short smoothing pass keeps compact, one-pixel traces readable.
+                std::vector<float> smoothed(track.samples.size(), 0.0f);
+                for (size_t i = 0; i < track.samples.size(); ++i)
+                {
+                    if (decoder.sampleCounts[i] == 0)
+                        continue;
+                    float previous = (i > 0 && decoder.sampleCounts[i - 1] > 0) ? track.samples[i - 1] : track.samples[i];
+                    float next = (i + 1 < track.samples.size() && decoder.sampleCounts[i + 1] > 0) ? track.samples[i + 1] : track.samples[i];
+                    smoothed[i] = previous * 0.25f + track.samples[i] * 0.5f + next * 0.25f;
+                }
+                track.samples.swap(smoothed);
+            }
+
+            if (!nonSilent.empty() && !decoder.vadObservations.empty())
+            {
+                constexpr double VAD_FRAME_SECONDS = 0.016;
+                constexpr double MAX_CONTIGUOUS_STEP = 0.05;
+                constexpr float SPEECH_PROBABILITY = 0.70f;
+                const auto& observations = decoder.vadObservations;
+                std::vector<uint8_t> speech(observations.size(), 0);
+
+                for (size_t i = 0; i < observations.size(); ++i)
+                {
+                    double weightedProbability = 0.0;
+                    double totalWeight = 0.0;
+                    const size_t first = i > 2 ? i - 2 : 0;
+                    const size_t last = std::min(observations.size() - 1, i + 2);
+                    for (size_t j = first; j <= last; ++j)
+                    {
+                        if (std::fabs(observations[j].time - observations[i].time) > MAX_CONTIGUOUS_STEP * 2.0)
+                            continue;
+                        const size_t distance = i > j ? i - j : j - i;
+                        const double weight = 3.0 - static_cast<double>(distance);
+                        weightedProbability += observations[j].probability * weight;
+                        totalWeight += weight;
+                    }
+                    speech[i] = totalWeight > 0.0 && (weightedProbability / totalWeight >= SPEECH_PROBABILITY);
+                }
+                const std::vector<uint8_t> directSpeech = speech;
+
+                constexpr double MAXIMUM_SPEECH_GAP = 0.112;
+                for (size_t start = 1; start + 1 < speech.size();)
+                {
+                    if (speech[start])
+                    {
+                        ++start;
+                        continue;
+                    }
+                    size_t end = start;
+                    while (end < speech.size() && !speech[end])
+                        ++end;
+                    if (speech[start - 1] && end < speech.size() &&
+                        observations[end].time - observations[start - 1].time <= MAXIMUM_SPEECH_GAP + VAD_FRAME_SECONDS)
+                    {
+                        std::fill(speech.begin() + start, speech.begin() + end, 1);
+                    }
+                    start = end;
+                }
+
+                constexpr double MINIMUM_SEGMENT_TIME = 0.320;
+                constexpr double MINIMUM_DIRECT_SPEECH_TIME = 0.208;
+                constexpr double MINIMUM_DIRECT_RATIO = 0.55;
+                for (size_t start = 0; start < speech.size();)
+                {
+                    if (!speech[start])
+                    {
+                        ++start;
+                        continue;
+                    }
+
+                    size_t end = start + 1;
+                    while (end < speech.size() && speech[end] &&
+                           observations[end].time - observations[end - 1].time <= MAX_CONTIGUOUS_STEP)
+                        ++end;
+
+                    size_t directFrames = 0;
+                    for (size_t i = start; i < end; ++i)
+                        directFrames += directSpeech[i] ? 1 : 0;
+                    const double segmentTime = observations[end - 1].time - observations[start].time + VAD_FRAME_SECONDS;
+                    const double directTime = directFrames * VAD_FRAME_SECONDS;
+                    const double directRatio = directFrames / static_cast<double>(end - start);
+
+                    if (segmentTime >= MINIMUM_SEGMENT_TIME &&
+                        directTime >= MINIMUM_DIRECT_SPEECH_TIME &&
+                        directRatio >= MINIMUM_DIRECT_RATIO)
+                    {
+                        for (size_t i = start; i < end; ++i)
+                        {
+                            const double frameStart = observations[i].time;
+                            const double frameEnd = frameStart + VAD_FRAME_SECONDS;
+                            if (frameEnd <= 0.0 || frameStart >= duration)
+                                continue;
+                            const int firstBin = std::clamp(static_cast<int>(frameStart * WAVEFORM_BIN_COUNT / duration), 0, WAVEFORM_BIN_COUNT - 1);
+                            const int lastBin = std::clamp(static_cast<int>(frameEnd * WAVEFORM_BIN_COUNT / duration), firstBin, WAVEFORM_BIN_COUNT - 1);
+                            std::fill(track.probableSpeech.begin() + firstBin, track.probableSpeech.begin() + lastBin + 1, 1);
+                        }
+                    }
+                    start = end;
+                }
+            }
+
+            outTracks.push_back(std::move(track));
+        }
+    };
+
+    ULONGLONG lastPublishTime = GetTickCount64();
+
     while (!cancelled && av_read_frame(formatContext, packet) >= 0)
     {
         if (g_waveformThreadExit.load() || g_waveformGeneration.load() != generation)
@@ -628,6 +782,23 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
             }
         }
         av_packet_unref(packet);
+
+        ULONGLONG now = GetTickCount64();
+        if (now - lastPublishTime >= 1000)
+        {
+            lastPublishTime = now;
+            if (g_waveformGeneration.load() == generation)
+            {
+                std::vector<AudioWaveformTrack> partialWaveforms;
+                buildTracksFromDecoders(partialWaveforms);
+                {
+                    std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+                    g_waveformCache = std::move(partialWaveforms);
+                }
+                if (g_hTimeline)
+                    PostMessage(g_hTimeline, WM_AUDIO_WAVEFORM_READY, 0, 0);
+            }
+        }
     }
 
     if (!cancelled)
@@ -655,169 +826,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         return false;
     }
 
-    result.clear();
-    result.reserve(decoders.size());
-    for (auto& decoder : decoders)
-    {
-        AudioWaveformTrack track;
-        track.streamIndex = decoder.streamIndex;
-        track.samples.assign(WAVEFORM_BIN_COUNT, 0.0f);
-        track.probableSpeech.assign(WAVEFORM_BIN_COUNT, 0);
-
-        std::vector<float> nonSilent;
-        nonSilent.reserve(WAVEFORM_BIN_COUNT);
-        for (int i = 0; i < WAVEFORM_BIN_COUNT; ++i)
-        {
-            if (decoder.sampleCounts[i] == 0)
-                continue;
-            track.samples[i] = static_cast<float>(
-                std::sqrt(decoder.energy[i] / decoder.sampleCounts[i]));
-            if (track.samples[i] > 0.00001f)
-                nonSilent.push_back(track.samples[i]);
-        }
-
-        if (!nonSilent.empty())
-        {
-            std::sort(nonSilent.begin(), nonSilent.end());
-            size_t percentileIndex = static_cast<size_t>((nonSilent.size() - 1) * 0.95);
-            float referenceLevel = std::max(0.00001f, nonSilent[percentileIndex]);
-            for (float& value : track.samples)
-            {
-                float normalized = std::min(1.0f, value / (referenceLevel * 1.15f));
-                value = std::sqrt(normalized);
-            }
-
-            // A short smoothing pass keeps compact, one-pixel traces readable.
-            std::vector<float> smoothed(track.samples.size(), 0.0f);
-            for (size_t i = 0; i < track.samples.size(); ++i)
-            {
-                float previous = i > 0 ? track.samples[i - 1] : track.samples[i];
-                float next = i + 1 < track.samples.size() ? track.samples[i + 1] : track.samples[i];
-                smoothed[i] = previous * 0.25f + track.samples[i] * 0.5f + next * 0.25f;
-            }
-            track.samples.swap(smoothed);
-        }
-
-        if (!nonSilent.empty() && !decoder.vadObservations.empty())
-        {
-            // Smooth only 80 ms of probabilities. A click can produce a high
-            // single-frame score, but it cannot dominate this short weighted
-            // neighborhood as sustained speech can.
-            constexpr double VAD_FRAME_SECONDS = 0.016;
-            constexpr double MAX_CONTIGUOUS_STEP = 0.05;
-            constexpr float SPEECH_PROBABILITY = 0.70f;
-            const auto& observations = decoder.vadObservations;
-            std::vector<uint8_t> speech(observations.size(), 0);
-
-            for (size_t i = 0; i < observations.size(); ++i)
-            {
-                double weightedProbability = 0.0;
-                double totalWeight = 0.0;
-                const size_t first = i > 2 ? i - 2 : 0;
-                const size_t last =
-                    std::min(observations.size() - 1, i + 2);
-                for (size_t j = first; j <= last; ++j)
-                {
-                    if (std::fabs(observations[j].time -
-                                  observations[i].time) >
-                        MAX_CONTIGUOUS_STEP * 2.0)
-                        continue;
-                    const size_t distance = i > j ? i - j : j - i;
-                    const double weight =
-                        3.0 - static_cast<double>(distance);
-                    weightedProbability +=
-                        observations[j].probability * weight;
-                    totalWeight += weight;
-                }
-                speech[i] =
-                    totalWeight > 0.0 &&
-                    weightedProbability / totalWeight >= SPEECH_PROBABILITY;
-            }
-            const std::vector<uint8_t> directSpeech = speech;
-
-            // Bridge pauses up to 112 ms inside otherwise continuous speech.
-            // Timestamp checks prevent joining across seeks or stream gaps.
-            constexpr double MAXIMUM_SPEECH_GAP = 0.112;
-            for (size_t start = 1; start + 1 < speech.size();)
-            {
-                if (speech[start])
-                {
-                    ++start;
-                    continue;
-                }
-                size_t end = start;
-                while (end < speech.size() && !speech[end])
-                    ++end;
-                if (speech[start - 1] && end < speech.size() &&
-                    observations[end].time - observations[start - 1].time <=
-                        MAXIMUM_SPEECH_GAP + VAD_FRAME_SECONDS)
-                {
-                    std::fill(speech.begin() + start, speech.begin() + end, 1);
-                }
-                start = end;
-            }
-
-            // Require both a 320 ms segment and at least 208 ms of direct
-            // neural evidence. This is independent of timeline/bin resolution,
-            // so a transient cannot become "speech" merely because the video
-            // is long and each visible bin spans several seconds.
-            constexpr double MINIMUM_SEGMENT_TIME = 0.320;
-            constexpr double MINIMUM_DIRECT_SPEECH_TIME = 0.208;
-            constexpr double MINIMUM_DIRECT_RATIO = 0.55;
-            for (size_t start = 0; start < speech.size();)
-            {
-                if (!speech[start])
-                {
-                    ++start;
-                    continue;
-                }
-
-                size_t end = start + 1;
-                while (end < speech.size() && speech[end] &&
-                       observations[end].time -
-                               observations[end - 1].time <=
-                           MAX_CONTIGUOUS_STEP)
-                    ++end;
-
-                size_t directFrames = 0;
-                for (size_t i = start; i < end; ++i)
-                    directFrames += directSpeech[i] ? 1 : 0;
-                const double segmentTime =
-                    observations[end - 1].time - observations[start].time +
-                    VAD_FRAME_SECONDS;
-                const double directTime =
-                    directFrames * VAD_FRAME_SECONDS;
-                const double directRatio =
-                    directFrames / static_cast<double>(end - start);
-
-                if (segmentTime >= MINIMUM_SEGMENT_TIME &&
-                    directTime >= MINIMUM_DIRECT_SPEECH_TIME &&
-                    directRatio >= MINIMUM_DIRECT_RATIO)
-                {
-                    for (size_t i = start; i < end; ++i)
-                    {
-                        const double frameStart = observations[i].time;
-                        const double frameEnd =
-                            frameStart + VAD_FRAME_SECONDS;
-                        if (frameEnd <= 0.0 || frameStart >= duration)
-                            continue;
-                        const int firstBin = std::clamp(static_cast<int>(
-                            frameStart * WAVEFORM_BIN_COUNT / duration),
-                            0, WAVEFORM_BIN_COUNT - 1);
-                        const int lastBin = std::clamp(static_cast<int>(
-                            frameEnd * WAVEFORM_BIN_COUNT / duration),
-                            firstBin, WAVEFORM_BIN_COUNT - 1);
-                        std::fill(track.probableSpeech.begin() + firstBin,
-                                  track.probableSpeech.begin() + lastBin + 1,
-                                  1);
-                    }
-                }
-                start = end;
-            }
-        }
-
-        result.push_back(std::move(track));
-    }
+    buildTracksFromDecoders(result);
 
     av_frame_free(&audioFrame);
     av_packet_free(&packet);
@@ -1861,14 +1870,17 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         int centerY = (laneTop + laneBottom) / 2;
                         int maxAmplitude = std::max(1, (laneBottom - laneTop - 2) / 2);
 
+                        size_t validBinCount = waveformIt->validBins > 0 ? waveformIt->validBins : waveformIt->samples.size();
                         std::vector<POINT> points;
                         points.reserve(static_cast<size_t>(std::max(0, right - left) / 2 + 2));
                         for (int px = left; px < right; px += 2)
                         {
                             double time = PixelToTime(px, rc, dur);
-                            int sampleIndex = std::clamp(static_cast<int>(
-                                time * waveformIt->samples.size() / dur),
-                                0, static_cast<int>(waveformIt->samples.size()) - 1);
+                            int sampleIndex = static_cast<int>(
+                                time * waveformIt->samples.size() / dur);
+                            if (sampleIndex < 0) continue;
+                            if (static_cast<size_t>(sampleIndex) >= validBinCount)
+                                break;
                             float scaled = std::min(1.0f, waveformIt->samples[sampleIndex]);
                             int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
                             points.push_back({ px, centerY - amplitude });
@@ -1876,12 +1888,14 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         if (!points.empty() && points.back().x != right - 1)
                         {
                             double time = PixelToTime(right - 1, rc, dur);
-                            int sampleIndex = std::clamp(static_cast<int>(
-                                time * waveformIt->samples.size() / dur),
-                                0, static_cast<int>(waveformIt->samples.size()) - 1);
-                            float scaled = std::min(1.0f, waveformIt->samples[sampleIndex]);
-                            int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
-                            points.push_back({ right - 1, centerY - amplitude });
+                            int sampleIndex = static_cast<int>(
+                                time * waveformIt->samples.size() / dur);
+                            if (sampleIndex >= 0 && static_cast<size_t>(sampleIndex) < validBinCount)
+                            {
+                                float scaled = std::min(1.0f, waveformIt->samples[sampleIndex]);
+                                int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
+                                points.push_back({ right - 1, centerY - amplitude });
+                            }
                         }
 
                         if (points.size() >= 2)
