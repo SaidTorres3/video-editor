@@ -2,6 +2,7 @@
 #include "../src/ten_vad_embedded.h"
 #include "../src/video_player.h"
 #include "../src/options_window.h"
+#include "../src/timeline.h"
 
 #include <array>
 
@@ -211,5 +212,11 @@ void RegisterAudioTests(TestSuite& suite) {
         TEST_ASSERT(vad == nullptr,
                     "TEN VAD destroy should clear the handle");
         ShutdownEmbeddedTenVadRuntime();
+    });
+
+    suite.addTest("AudioWaveform_ProgressQuery", []() {
+        int progress = GetAudioWaveformProgress();
+        TEST_ASSERT(progress >= -1 && progress <= 100,
+                    "GetAudioWaveformProgress should return valid progress value (-1 to 100)");
     });
 }

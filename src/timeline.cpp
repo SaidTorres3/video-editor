@@ -173,8 +173,14 @@ static std::uint64_t              g_waveformRequestGeneration = 0;
 static bool                       g_waveformRequestHighlightSpeech = false;
 static std::atomic<std::uint64_t> g_waveformGeneration{0};
 static std::atomic<bool>          g_waveformThreadExit{false};
+static std::atomic<int>           g_waveformProgress{-1};
 static HANDLE                     g_waveformRequestEvent = nullptr;
 static std::thread                g_waveformThread;
+
+int GetAudioWaveformProgress()
+{
+    return g_waveformProgress.load();
+}
 
 // Pre-cache queue: populated when a video is loaded.
 static std::mutex              g_preCacheMutex;
@@ -410,6 +416,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
     AVPacket* packet = av_packet_alloc();
     AVFrame* audioFrame = av_frame_alloc();
     bool cancelled = !packet || !audioFrame;
+    double maxProcessedTime = 0.0;
 
     auto consumeFrames = [&](WaveformDecoder& decoder, AVPacket* inputPacket)
     {
@@ -442,6 +449,15 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
                                     ? decoder.nextTime
                                     : timestamp * av_q2d(stream->time_base) - startTimeOffset;
             decoder.nextTime = frameStart + audioFrame->nb_samples / static_cast<double>(sampleRate);
+            if (decoder.nextTime > maxProcessedTime && duration > 0.0)
+            {
+                maxProcessedTime = decoder.nextTime;
+                if (g_waveformGeneration.load() == generation)
+                {
+                    int pct = std::clamp(static_cast<int>((maxProcessedTime / duration) * 100.0), 0, 99);
+                    g_waveformProgress.store(pct);
+                }
+            }
 
             // Neural speech detection runs in the waveform decoding pass, so
             // it adds no second read/decode of the media.
@@ -589,6 +605,20 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
             break;
         }
 
+        if (packet->pts != AV_NOPTS_VALUE && duration > 0.0 && packet->stream_index < static_cast<int>(formatContext->nb_streams))
+        {
+            double packetTime = packet->pts * av_q2d(formatContext->streams[packet->stream_index]->time_base) - startTimeOffset;
+            if (packetTime > maxProcessedTime && packetTime <= duration)
+            {
+                maxProcessedTime = packetTime;
+                if (g_waveformGeneration.load() == generation)
+                {
+                    int pct = std::clamp(static_cast<int>((maxProcessedTime / duration) * 100.0), 0, 99);
+                    g_waveformProgress.store(pct);
+                }
+            }
+        }
+
         for (auto& decoder : decoders)
         {
             if (decoder.streamIndex == packet->stream_index)
@@ -604,6 +634,10 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
     {
         for (auto& decoder : decoders)
             consumeFrames(decoder, nullptr);
+        if (g_waveformGeneration.load() == generation)
+        {
+            g_waveformProgress.store(100);
+        }
     }
 
     if (cancelled)
@@ -831,8 +865,13 @@ static void WaveformThreadFunc()
                 std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
                 g_waveformCache = std::move(waveforms);
             }
+            g_waveformProgress.store(-1);
             if (g_hTimeline)
                 PostMessage(g_hTimeline, WM_AUDIO_WAVEFORM_READY, 0, 0);
+        }
+        else
+        {
+            g_waveformProgress.store(-1);
         }
     }
 }
@@ -849,7 +888,12 @@ void RefreshAudioWaveformPreview()
 
     if (!g_showAudioWaveform || !g_videoPlayer || !g_videoPlayer->IsLoaded() ||
         g_videoPlayer->GetAudioTrackCount() <= 0 || !g_waveformRequestEvent)
+    {
+        g_waveformProgress.store(-1);
         return;
+    }
+
+    g_waveformProgress.store(0);
 
     {
         std::lock_guard<std::mutex> lock(g_waveformRequestMutex);
@@ -1092,6 +1136,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_AUDIO_WAVEFORM_READY:
         InvalidateRect(hwnd, nullptr, FALSE);
+        UpdateControls();
         return 0;
     case WM_LBUTTONDOWN:
         if (g_videoPlayer && g_videoPlayer->IsLoaded())

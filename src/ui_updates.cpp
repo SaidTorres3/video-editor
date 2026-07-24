@@ -3,6 +3,7 @@
 #include "utils.h"
 #include "editing.h"
 #include "options_window.h"
+#include "timeline.h"
 #include <string>
 #include <commctrl.h>
 #include <cmath>
@@ -124,11 +125,24 @@ void UpdateControls()
         std::wstring currentTimeStr = FormatTime(currentTime);
         std::wstring durationStr = FormatTime(duration);
         wchar_t statusText[256];
-        swprintf_s(statusText, _countof(statusText),
-                   L"Time: %s / %s | Frame: %lld / %lld | %s",
-                   currentTimeStr.c_str(), durationStr.c_str(),
-                   currentFrame, g_videoPlayer->GetTotalFrames(),
-                   isPlaying ? L"Playing" : L"Paused");
+        int waveformProgress = GetAudioWaveformProgress();
+        if (waveformProgress >= 0 && waveformProgress <= 100)
+        {
+            swprintf_s(statusText, _countof(statusText),
+                       L"Time: %s / %s | Frame: %lld / %lld | %s | Waveforms: %d%%",
+                       currentTimeStr.c_str(), durationStr.c_str(),
+                       currentFrame, g_videoPlayer->GetTotalFrames(),
+                       isPlaying ? L"Playing" : L"Paused",
+                       waveformProgress);
+        }
+        else
+        {
+            swprintf_s(statusText, _countof(statusText),
+                       L"Time: %s / %s | Frame: %lld / %lld | %s",
+                       currentTimeStr.c_str(), durationStr.c_str(),
+                       currentFrame, g_videoPlayer->GetTotalFrames(),
+                       isPlaying ? L"Playing" : L"Paused");
+        }
         SetWindowTextW(g_hStatusText, statusText);
     }
 }

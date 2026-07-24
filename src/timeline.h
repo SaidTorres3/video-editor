@@ -19,3 +19,7 @@ void TriggerThumbnailPreCache(double duration);
 // Rebuilds or clears the cached audio waveform according to the current setting.
 // Decoding happens on a background thread and never blocks the UI.
 void RefreshAudioWaveformPreview();
+
+// Returns the current progress percentage (0-100) of audio waveform decoding, or -1 if idle/complete.
+int GetAudioWaveformProgress();
+
