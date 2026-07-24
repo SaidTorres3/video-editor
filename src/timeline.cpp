@@ -1179,29 +1179,28 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             const int ARROW_WIDTH = 20;
             if (g_timelineZoomLevel > 1.0)
             {
-                // Left arrow click
-                if (x < ARROW_WIDTH && g_timelineScrollOffset > 0)
+                double dur = g_videoPlayer->GetDuration();
+                double timeRange = dur > 0.0 ? (dur / g_timelineZoomLevel) : 0.0;
+                double maxOffset = dur - timeRange;
+
+                // Left arrow click (only if left arrow is visible)
+                if (x < ARROW_WIDTH && g_timelineScrollOffset > 0.0001)
                 {
                     g_scrollArrowPressed = ScrollArrowState::LeftArrow;
                     SetCapture(hwnd);
                     SetTimer(hwnd, SCROLL_ARROW_TIMER_ID, SCROLL_ARROW_TIMER_INTERVAL, NULL);
-                    double dur = g_videoPlayer->GetDuration();
-                    double timeRange = dur / g_timelineZoomLevel;
                     g_timelineScrollOffset -= timeRange * 0.1;  // Scroll left by 10%
                     if (g_timelineScrollOffset < 0) g_timelineScrollOffset = 0;
                     InvalidateRect(hwnd, NULL, FALSE);
                     UpdateControls();
                     return 0;
                 }
-                // Right arrow click
-                if (x > rc.right - ARROW_WIDTH)
+                // Right arrow click (only if right arrow is visible)
+                if (x > rc.right - ARROW_WIDTH && g_timelineScrollOffset < maxOffset - 0.0001)
                 {
                     g_scrollArrowPressed = ScrollArrowState::RightArrow;
                     SetCapture(hwnd);
                     SetTimer(hwnd, SCROLL_ARROW_TIMER_ID, SCROLL_ARROW_TIMER_INTERVAL, NULL);
-                    double dur = g_videoPlayer->GetDuration();
-                    double timeRange = dur / g_timelineZoomLevel;
-                    double maxOffset = dur - timeRange;
                     g_timelineScrollOffset += timeRange * 0.1;  // Scroll right by 10%
                     if (g_timelineScrollOffset > maxOffset) g_timelineScrollOffset = maxOffset;
                     InvalidateRect(hwnd, NULL, FALSE);
@@ -1776,11 +1775,14 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         
         // Draw scroll arrows if zoomed in
         const int ARROW_WIDTH = 20;
+        bool hasLeftArrow = false;
+        bool hasRightArrow = false;
         if (g_timelineZoomLevel > 1.0)
         {
-            // Draw left arrow if not at start
-            if (g_timelineScrollOffset > 0)
+            double dur = g_videoPlayer && g_videoPlayer->IsLoaded() ? g_videoPlayer->GetDuration() : 0;
+            if (g_timelineScrollOffset > 0.0001)
             {
+                hasLeftArrow = true;
                 RECT leftArrowRect = { 0, 0, ARROW_WIDTH, rc.bottom };
                 HBRUSH arrowBrush = CreateSolidBrush(RGB(150, 150, 150));
                 FillRect(hdc, &leftArrowRect, arrowBrush);
@@ -1796,14 +1798,13 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 DeleteObject(font);
             }
             
-            // Draw right arrow if not at end
-            double dur = g_videoPlayer && g_videoPlayer->IsLoaded() ? g_videoPlayer->GetDuration() : 0;
             if (dur > 0)
             {
                 double timeRange = dur / g_timelineZoomLevel;
                 double maxOffset = dur - timeRange;
-                if (g_timelineScrollOffset < maxOffset)
+                if (g_timelineScrollOffset < maxOffset - 0.0001)
                 {
+                    hasRightArrow = true;
                     RECT rightArrowRect = { rc.right - ARROW_WIDTH, 0, rc.right, rc.bottom };
                     HBRUSH arrowBrush = CreateSolidBrush(RGB(150, 150, 150));
                     FillRect(hdc, &rightArrowRect, arrowBrush);
@@ -1836,8 +1837,8 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 int trackCount = g_videoPlayer->GetAudioTrackCount();
                 if (!waveforms.empty() && trackCount > 0)
                 {
-                    const int left = g_timelineZoomLevel > 1.0 ? ARROW_WIDTH : 0;
-                    const int right = g_timelineZoomLevel > 1.0 ? rc.right - ARROW_WIDTH : rc.right;
+                    const int left = hasLeftArrow ? ARROW_WIDTH : 0;
+                    const int right = hasRightArrow ? rc.right - ARROW_WIDTH : rc.right;
                     const COLORREF trackColors[] = {
                         RGB(94, 169, 154),
                         RGB(213, 116, 101),
