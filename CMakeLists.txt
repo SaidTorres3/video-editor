@@ -229,7 +229,7 @@ if(MSVC AND USE_STATIC_FFMPEG)
     )
 endif()
 
-# ==== COPY FFmpeg DLLS (dynamic build) ====
+# ==== COPY FFmpeg & TEN VAD DLLS (dynamic build) ====
 if(WIN32 AND NOT USE_STATIC_FFMPEG)
     file(GLOB FFMPEG_DLLS 
         "${FFMPEG_ROOT}/bin/avcodec-*.dll"
@@ -239,8 +239,8 @@ if(WIN32 AND NOT USE_STATIC_FFMPEG)
         "${FFMPEG_ROOT}/bin/swresample-*.dll"
     )
     add_custom_command(TARGET VideoEditor POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "$<TARGET_FILE_DIR:VideoEditor>"
-        COMMENT "Copying dynamic FFmpeg DLLs..."
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "${TEN_VAD_DLL}" "$<TARGET_FILE_DIR:VideoEditor>"
+        COMMENT "Copying dynamic FFmpeg and TEN VAD DLLs..."
     )
 endif()
 
@@ -332,8 +332,8 @@ if(BUILD_TESTS)
     # Copy DLLs for tests too (dynamic build)
     if(WIN32 AND NOT USE_STATIC_FFMPEG)
         add_custom_command(TARGET VideoEditorTests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "$<TARGET_FILE_DIR:VideoEditorTests>"
-            COMMENT "Copying dynamic FFmpeg DLLs for tests..."
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "${TEN_VAD_DLL}" "$<TARGET_FILE_DIR:VideoEditorTests>"
+            COMMENT "Copying dynamic FFmpeg and TEN VAD DLLs for tests..."
         )
     endif()
 endif()

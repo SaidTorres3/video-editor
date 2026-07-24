@@ -26,6 +26,7 @@
 #include "file_handling.h"
 #include "ui_updates.h"
 #include "clip_segment.h"
+#include "ten_vad_embedded.h"
 
 #include <string>
 #include <cstdlib>
@@ -35,7 +36,6 @@
 // Control IDs
 #define ID_TIMER_UPDATE 1006
 
-// Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
 HWND g_hTimeline;
@@ -401,6 +401,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+    ShutdownEmbeddedTenVadRuntime();
     curl_global_cleanup();
     CoUninitialize();
     return 0;
