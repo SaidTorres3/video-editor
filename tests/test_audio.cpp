@@ -13,6 +13,32 @@
 extern std::wstring g_testVideoPath;
 extern HWND g_testHwnd;
 
+namespace
+{
+std::size_t CountLegacyTenVadTempDirectories()
+{
+    wchar_t tempPath[MAX_PATH] = {};
+    if (GetTempPathW(MAX_PATH, tempPath) == 0)
+        return 0;
+
+    const std::wstring pattern =
+        std::wstring(tempPath) + L"VideoEditor-ten-vad-*";
+    WIN32_FIND_DATAW findData = {};
+    HANDLE find = FindFirstFileW(pattern.c_str(), &findData);
+    if (find == INVALID_HANDLE_VALUE)
+        return 0;
+
+    std::size_t count = 0;
+    do
+    {
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            ++count;
+    } while (FindNextFileW(find, &findData));
+    FindClose(find);
+    return count;
+}
+} // namespace
+
 void RegisterAudioTests(TestSuite& suite) {
 
     suite.addTest("ExportMasterGain_DbConversion", []() {
@@ -192,6 +218,8 @@ void RegisterAudioTests(TestSuite& suite) {
     });
 
     suite.addTest("EmbeddedTenVad_LoadsAndProcesses", []() {
+        const std::size_t tempDirectoryCountBefore =
+            CountLegacyTenVadTempDirectories();
         EmbeddedTenVadHandle vad = nullptr;
         TEST_ASSERT(EmbeddedTenVadCreate(&vad, 256, 0.70f),
                     "Embedded TEN VAD resource should load");
@@ -210,8 +238,11 @@ void RegisterAudioTests(TestSuite& suite) {
 
         EmbeddedTenVadDestroy(&vad);
         TEST_ASSERT(vad == nullptr,
-                    "TEN VAD destroy should clear the handle");
+                     "TEN VAD destroy should clear the handle");
         ShutdownEmbeddedTenVadRuntime();
+        TEST_ASSERT_EQ(CountLegacyTenVadTempDirectories(),
+                       tempDirectoryCountBefore,
+                       "TEN VAD should not extract a directory into %TEMP%");
     });
 
     suite.addTest("AudioWaveform_ProgressQuery", []() {

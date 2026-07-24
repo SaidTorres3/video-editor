@@ -12,10 +12,10 @@ endif()
 
 project(VideoEditor C CXX)
 
-# Ultra-light neural VAD. TEN only publishes a Windows DLL, so package that DLL
-# as an executable resource and load it through our wrapper at runtime. This
-# keeps static releases self-contained instead of shipping ten_vad.dll beside
-# VideoEditor.exe.
+# Ultra-light neural VAD. TEN publishes an import library and DLL for Windows,
+# not a static archive. Dynamic builds keep the DLL beside the executable.
+# Static builds embed the DLL as a resource and map it directly from memory so
+# the single-file release never extracts files into %TEMP%.
 set(TEN_VAD_ROOT "${CMAKE_SOURCE_DIR}/vendor/ten-vad")
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "TEN VAD is currently vendored for Windows x64 only")
@@ -24,15 +24,20 @@ set(TEN_VAD_DLL "${TEN_VAD_ROOT}/lib/Windows/x64/ten_vad.dll")
 if(NOT EXISTS "${TEN_VAD_DLL}")
     message(FATAL_ERROR "TEN VAD Windows x64 binaries are missing")
 endif()
-file(TO_CMAKE_PATH "${TEN_VAD_DLL}" TEN_VAD_DLL_RC_PATH)
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
-configure_file(
-    "${CMAKE_SOURCE_DIR}/src/ten_vad_resource.rc.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/ten_vad_resource.rc"
-    @ONLY
-)
-set(TEN_VAD_RESOURCE
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/ten_vad_resource.rc")
+
+set(TEN_VAD_SOURCES src/ten_vad_embedded.cpp)
+if(USE_STATIC_FFMPEG)
+    file(TO_CMAKE_PATH "${TEN_VAD_DLL}" TEN_VAD_DLL_RC_PATH)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/src/ten_vad_resource.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ten_vad_resource.rc"
+        @ONLY
+    )
+    list(APPEND TEN_VAD_SOURCES
+        vendor/MemoryModule/MemoryModule.c
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ten_vad_resource.rc")
+endif()
 
 if(USE_STATIC_FFMPEG)
     message(STATUS "🔗 Linking FFmpeg statically")
@@ -148,16 +153,19 @@ add_executable(VideoEditor WIN32
     src/catbox_upload.cpp
     src/debug_log.cpp
     src/upload_dialog.cpp
-    src/ten_vad_embedded.cpp
-    ${TEN_VAD_RESOURCE}
+    ${TEN_VAD_SOURCES}
 )
 
 # ==== INCLUDE DIRECTORIES ====
 target_include_directories(VideoEditor PRIVATE
     src
+    vendor/MemoryModule
     ${FFMPEG_INCLUDE_DIR}
     ${RNNOISE_INCLUDE_DIR}
 )
+if(USE_STATIC_FFMPEG)
+    target_compile_definitions(VideoEditor PRIVATE TEN_VAD_IN_MEMORY)
+endif()
 
 # ==== TARGET-SPECIFIC OPTIONS ====
 if(MSVC AND USE_STATIC_FFMPEG)
@@ -268,8 +276,7 @@ if(BUILD_TESTS)
         src/catbox_upload.cpp
         src/debug_log.cpp
         src/upload_dialog.cpp
-        src/ten_vad_embedded.cpp
-        ${TEN_VAD_RESOURCE}
+        ${TEN_VAD_SOURCES}
     )
 
     # Test source files
@@ -289,9 +296,13 @@ if(BUILD_TESTS)
 
     target_include_directories(VideoEditorTests PRIVATE
         src
+        vendor/MemoryModule
         ${FFMPEG_INCLUDE_DIR}
         ${RNNOISE_INCLUDE_DIR}
     )
+    if(USE_STATIC_FFMPEG)
+        target_compile_definitions(VideoEditorTests PRIVATE TEN_VAD_IN_MEMORY)
+    endif()
 
     # Same compile/link options as main executable
     if(MSVC AND USE_STATIC_FFMPEG)

@@ -6,7 +6,10 @@
 
 #include <windows.h>
 
-#include <cstdio>
+#ifdef TEN_VAD_IN_MEMORY
+#include "MemoryModule.h"
+#endif
+
 #include <mutex>
 #include <string>
 
@@ -21,58 +24,15 @@ using TenVadProcessFn =
             int*);
 using TenVadDestroyFn = int (*)(EmbeddedTenVadHandle*);
 
-void DeleteDirectoryContents(const std::wstring& dirPath)
-{
-    std::wstring searchPattern = dirPath + L"\\*";
-    WIN32_FIND_DATAW findData;
-    HANDLE hFind = FindFirstFileW(searchPattern.c_str(), &findData);
-    if (hFind != INVALID_HANDLE_VALUE)
-    {
-        do
-        {
-            if (wcscmp(findData.cFileName, L".") != 0 && wcscmp(findData.cFileName, L"..") != 0)
-            {
-                std::wstring fullPath = dirPath + L"\\" + findData.cFileName;
-                if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-                {
-                    DeleteDirectoryContents(fullPath);
-                    RemoveDirectoryW(fullPath.c_str());
-                }
-                else
-                {
-                    DeleteFileW(fullPath.c_str());
-                }
-            }
-        } while (FindNextFileW(hFind, &findData));
-        FindClose(hFind);
-    }
-}
-
-void CleanupStaleTempDirectories(const wchar_t* tempPath)
-{
-    std::wstring searchPattern = std::wstring(tempPath) + L"VideoEditor-ten-vad-*";
-    WIN32_FIND_DATAW findData;
-    HANDLE hFind = FindFirstFileW(searchPattern.c_str(), &findData);
-    if (hFind != INVALID_HANDLE_VALUE)
-    {
-        do
-        {
-            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            {
-                std::wstring dirPath = std::wstring(tempPath) + findData.cFileName;
-                DeleteDirectoryContents(dirPath);
-                RemoveDirectoryW(dirPath.c_str());
-            }
-        } while (FindNextFileW(hFind, &findData));
-        FindClose(hFind);
-    }
-}
+#ifdef TEN_VAD_IN_MEMORY
+using TenVadModule = HMEMORYMODULE;
+#else
+using TenVadModule = HMODULE;
+#endif
 
 struct EmbeddedTenVadRuntime
 {
-    HMODULE module = nullptr;
-    std::wstring extractedPath;
-    std::wstring extractedDirectory;
+    TenVadModule module = nullptr;
     TenVadCreateFn create = nullptr;
     TenVadProcessFn process = nullptr;
     TenVadDestroyFn destroy = nullptr;
@@ -82,39 +42,12 @@ struct EmbeddedTenVadRuntime
     {
         if (module)
         {
+#ifdef TEN_VAD_IN_MEMORY
+            MemoryFreeLibrary(module);
+#else
             FreeLibrary(module);
+#endif
             module = nullptr;
-        }
-        if (!extractedPath.empty())
-        {
-            bool deleted = false;
-            for (int retry = 0; retry < 10; ++retry)
-            {
-                if (DeleteFileW(extractedPath.c_str()))
-                {
-                    deleted = true;
-                    break;
-                }
-                Sleep(20);
-            }
-            if (!deleted)
-            {
-                MoveFileExW(extractedPath.c_str(), nullptr,
-                            MOVEFILE_DELAY_UNTIL_REBOOT);
-            }
-            extractedPath.clear();
-        }
-        if (!extractedDirectory.empty())
-        {
-            for (int retry = 0; retry < 10; ++retry)
-            {
-                if (RemoveDirectoryW(extractedDirectory.c_str()))
-                {
-                    break;
-                }
-                Sleep(20);
-            }
-            extractedDirectory.clear();
         }
         create = nullptr;
         process = nullptr;
@@ -131,128 +64,73 @@ EmbeddedTenVadRuntime& GetRuntime()
     return runtime;
 }
 
-bool WriteAll(HANDLE file, const void* data, DWORD byteCount)
+FARPROC ResolveSymbol(TenVadModule module, const char* name)
 {
-    const auto* bytes = static_cast<const unsigned char*>(data);
-    DWORD writtenTotal = 0;
-    while (writtenTotal < byteCount)
-    {
-        DWORD written = 0;
-        if (!WriteFile(file, bytes + writtenTotal, byteCount - writtenTotal,
-                       &written, nullptr) ||
-            written == 0)
-        {
-            return false;
-        }
-        writtenTotal += written;
-    }
-    return true;
+#ifdef TEN_VAD_IN_MEMORY
+    return MemoryGetProcAddress(module, name);
+#else
+    return GetProcAddress(module, name);
+#endif
 }
 
-bool LoadEmbeddedRuntime()
+#ifdef TEN_VAD_IN_MEMORY
+TenVadModule LoadTenVadModule()
 {
-    EmbeddedTenVadRuntime& runtime = GetRuntime();
-
-    // Try loading ten_vad.dll directly from the application executable folder first (e.g. dynamic build)
-    wchar_t exePath[MAX_PATH] = {};
-    if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) > 0)
-    {
-        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
-        if (lastSlash)
-        {
-            *lastSlash = L'\0';
-            std::wstring localDllPath = std::wstring(exePath) + L"\\ten_vad.dll";
-            DWORD attrib = GetFileAttributesW(localDllPath.c_str());
-            if (attrib != INVALID_FILE_ATTRIBUTES && !(attrib & FILE_ATTRIBUTE_DIRECTORY))
-            {
-                runtime.module = LoadLibraryExW(
-                    localDllPath.c_str(), nullptr,
-                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-                if (runtime.module)
-                {
-                    runtime.create = reinterpret_cast<TenVadCreateFn>(
-                        GetProcAddress(runtime.module, "ten_vad_create"));
-                    runtime.process = reinterpret_cast<TenVadProcessFn>(
-                        GetProcAddress(runtime.module, "ten_vad_process"));
-                    runtime.destroy = reinterpret_cast<TenVadDestroyFn>(
-                        GetProcAddress(runtime.module, "ten_vad_destroy"));
-                    if (runtime.create && runtime.process && runtime.destroy)
-                    {
-                        runtime.available = true;
-                        runtime.extractedDirectory.clear();
-                        runtime.extractedPath.clear();
-                        return true;
-                    }
-                    FreeLibrary(runtime.module);
-                    runtime.module = nullptr;
-                }
-            }
-        }
-    }
-
     HMODULE executable = GetModuleHandleW(nullptr);
     HRSRC resource = FindResourceW(
         executable, MAKEINTRESOURCEW(TEN_VAD_RESOURCE_ID), RT_RCDATA);
     if (!resource)
-        return false;
+        return nullptr;
 
     HGLOBAL loadedResource = LoadResource(executable, resource);
     const DWORD resourceSize = SizeofResource(executable, resource);
     const void* resourceData =
         loadedResource ? LockResource(loadedResource) : nullptr;
     if (!resourceData || resourceSize == 0)
-        return false;
+        return nullptr;
 
-    wchar_t tempPath[MAX_PATH] = {};
-    if (GetTempPathW(MAX_PATH, tempPath) == 0)
-        return false;
+    return MemoryLoadLibrary(resourceData, resourceSize);
+}
+#else
+TenVadModule LoadTenVadModule()
+{
+    wchar_t executablePath[MAX_PATH] = {};
+    const DWORD pathLength =
+        GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
+    if (pathLength == 0 || pathLength == MAX_PATH)
+        return nullptr;
 
-    CleanupStaleTempDirectories(tempPath);
+    wchar_t* lastSlash = wcsrchr(executablePath, L'\\');
+    if (!lastSlash)
+        return nullptr;
+    *lastSlash = L'\0';
 
-    wchar_t directoryName[96] = {};
-    swprintf_s(directoryName, L"VideoEditor-ten-vad-%lu-%llu",
-               GetCurrentProcessId(),
-               static_cast<unsigned long long>(GetTickCount64()));
-    runtime.extractedDirectory =
-        std::wstring(tempPath) + directoryName;
-    if (!CreateDirectoryW(runtime.extractedDirectory.c_str(), nullptr) &&
-        GetLastError() != ERROR_ALREADY_EXISTS)
-    {
-        runtime.extractedDirectory.clear();
-        return false;
-    }
-
-    runtime.extractedPath =
-        runtime.extractedDirectory + L"\\ten_vad.dll";
-    HANDLE file = CreateFileW(
-        runtime.extractedPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
-        nullptr, CREATE_ALWAYS,
-        FILE_ATTRIBUTE_TEMPORARY | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
-        nullptr);
-    if (file == INVALID_HANDLE_VALUE)
-        return false;
-
-    const bool written = WriteAll(file, resourceData, resourceSize);
-    if (written)
-        FlushFileBuffers(file);
-    CloseHandle(file);
-    if (!written)
-        return false;
-
-    runtime.module = LoadLibraryExW(
-        runtime.extractedPath.c_str(), nullptr,
+    const std::wstring dllPath =
+        std::wstring(executablePath) + L"\\ten_vad.dll";
+    return LoadLibraryExW(
+        dllPath.c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+}
+#endif
+
+bool LoadEmbeddedRuntime()
+{
+    EmbeddedTenVadRuntime& runtime = GetRuntime();
+    runtime.module = LoadTenVadModule();
     if (!runtime.module)
         return false;
 
     runtime.create = reinterpret_cast<TenVadCreateFn>(
-        GetProcAddress(runtime.module, "ten_vad_create"));
+        ResolveSymbol(runtime.module, "ten_vad_create"));
     runtime.process = reinterpret_cast<TenVadProcessFn>(
-        GetProcAddress(runtime.module, "ten_vad_process"));
+        ResolveSymbol(runtime.module, "ten_vad_process"));
     runtime.destroy = reinterpret_cast<TenVadDestroyFn>(
-        GetProcAddress(runtime.module, "ten_vad_destroy"));
+        ResolveSymbol(runtime.module, "ten_vad_destroy"));
     if (!runtime.create || !runtime.process || !runtime.destroy)
+    {
+        runtime.Unload();
         return false;
+    }
 
     runtime.available = true;
     return true;

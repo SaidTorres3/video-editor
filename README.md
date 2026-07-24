@@ -131,8 +131,6 @@ The resulting `VideoEditor.exe` no longer requires FFmpeg DLLs.
 
 > **Note:** The static build supports NVIDIA (NVENC) & AMD (AMF) hardware encoding if the linked FFmpeg library was built with the corresponding features (e.g. `nvcodec` for NVIDIA). The build system now automatically forces the inclusion of these encoders. Ensure your static FFmpeg installation includes these features (e.g. `vcpkg install ffmpeg[nvcodec]:x64-windows-static`).
 
-> **Transparency Note (Voice Activity Detection Runtime):**  
-> - In **standalone static build**, `ten_vad.dll` is embedded into `VideoEditor.exe` as a resource and temporarily extracted into `%TEMP%` (e.g., `%TEMP%\VideoEditor-ten-vad-<pid>-<timestamp>`) at runtime. This temporary directory is automatically cleaned up when the application exits or starts up.
 ---
 
 The `CutVideo` feature uses the FFmpeg libraries directly, so no external `ffmpeg` executable is needed.
