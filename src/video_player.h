@@ -239,6 +239,7 @@ private:
     std::atomic<bool> m_playbackSpeedChangePending;
     std::atomic<double> m_playbackClockStartPts;
     std::atomic<int64_t> m_playbackClockStartNs;
+    int64_t m_lastHighSpeedFrameDeliveryNs;
     std::atomic<ULONGLONG> m_speedOverlayDeadline;
 
     void ResetPlaybackClock(double pts);

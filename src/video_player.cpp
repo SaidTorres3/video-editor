@@ -57,6 +57,7 @@ VideoPlayer::VideoPlayer(HWND parent)
             m_playbackSpeedChangePending(false),
             m_playbackClockStartPts(0.0),
             m_playbackClockStartNs(0),
+            m_lastHighSpeedFrameDeliveryNs(0),
             m_speedOverlayDeadline(0),
             seekRefineThreadExit(false), seekRefinePending(false), seekRefineTarget(0.0),
             seekRefineGeneration(0)
@@ -320,6 +321,7 @@ bool VideoPlayer::Play()
     masterStartTime = std::chrono::high_resolution_clock::now();
     m_playbackClockStartPts.store(currentPts, std::memory_order_relaxed);
     m_playbackClockStartNs.store(0, std::memory_order_release);
+    m_lastHighSpeedFrameDeliveryNs = 0;
 
     // Keep roughly 350 ms of decoded video ready, while capping worst-case
     // memory usage (4 bytes/pixel is a conservative estimate for CPU frames).
@@ -366,10 +368,10 @@ void VideoPlayer::Pause()
             }
         }
 
-        // High-speed playback may temporarily discard non-reference frames.
-        // Restore normal decoding before any paused seek or frame stepping.
-        if (codecContext)
-            codecContext->skip_frame = AVDISCARD_DEFAULT;
+        // The decode thread is positioned after every frame it prefetched,
+        // while currentPts identifies the last frame actually presented.
+        // Force Play() to realign those positions before it discards the queue.
+        m_decoderOutOfSync = true;
 
         // The presentation thread starts audio after the video buffer has
         // prefilled. Stop it only after both playback threads are shut down so
@@ -408,6 +410,7 @@ void VideoPlayer::Stop()
         for (auto& tr : audioTracks)
             tr->buffer.clear();
     }
+    m_decoderOutOfSync = false;
 }
 
 std::uint64_t VideoPlayer::BeginSeekOperation()
@@ -649,7 +652,9 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
 
 void VideoPlayer::SetPlaybackSpeed(double speed)
 {
-    speed = std::clamp(std::round(speed * 10.0) / 10.0, 0.1, 100.0);
+    if (!std::isfinite(speed))
+        return;
+    speed = std::max(0.1, std::round(speed * 10.0) / 10.0);
     const double previous = m_playbackSpeed.exchange(speed, std::memory_order_acq_rel);
     if (isPlaying && std::fabs(previous - speed) > 0.0001)
     {
@@ -2347,12 +2352,6 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
 
         BufferedPlaybackFrame bufferedFrame;
         bufferedFrame.frame = av_frame_alloc();
-        // At high playback rates, avoid decoding disposable inter-frames that
-        // cannot all be displayed anyway. This raises throughput without
-        // seeking backward to a keyframe or risking repeated GOP playback.
-        codecContext->skip_frame = GetPlaybackSpeed() >= 4.0
-            ? AVDISCARD_NONREF
-            : AVDISCARD_DEFAULT;
         if (!bufferedFrame.frame ||
             !m_decoder->DecodeNextBufferedFrame(bufferedFrame.frame,
                                                 bufferedFrame.pts,

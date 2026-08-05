@@ -9,6 +9,7 @@
 // ============================================================================
 
 extern std::wstring g_testVideoPath;
+extern std::wstring g_testLongVideoPath;
 extern HWND g_testHwnd;
 
 void RegisterPlaybackTests(TestSuite& suite) {
@@ -29,9 +30,9 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.SetPlaybackSpeed(50.0);
         TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 50.0) < 0.001,
                     "Playback speed should allow values above 10x");
-        player.SetPlaybackSpeed(101.0);
-        TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 100.0) < 0.001,
-                    "Playback speed should clamp to 100x");
+        player.SetPlaybackSpeed(250.0);
+        TEST_ASSERT(std::fabs(player.GetPlaybackSpeed() - 250.0) < 0.001,
+                    "Playback speed should not have an artificial upper limit");
     });
 
     suite.addTest("PlaybackSpeed_AffectsPlaybackTiming", []() {
@@ -104,6 +105,126 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "5x playback should advance about four video seconds in 0.8 real seconds");
         TEST_ASSERT_LT(player.GetCurrentTime(), 4.8,
                        "5x playback should not run materially ahead of its wall clock");
+    });
+
+    suite.addTest("PlaybackSpeed_10xPresentsContinuously", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        player.SetPlaybackSpeed(10.0);
+        player.Play();
+
+        int presentedChanges = 0;
+        double lastPosition = player.GetCurrentTime();
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(350);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            const double position = player.GetCurrentTime();
+            if (position > lastPosition + 0.0001)
+            {
+                ++presentedChanges;
+                lastPosition = position;
+            }
+        }
+        player.Pause();
+
+        TEST_ASSERT_GE(presentedChanges, 8,
+                       "10x playback should present continuous updates instead of GOP-sized jumps");
+    });
+
+    suite.addTest("PlaybackSpeed_100xTracksWallClockWithoutCapping", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testLongVideoPath);
+        player.SetPlaybackSpeed(100.0);
+        player.Play();
+
+        int presentedChanges = 0;
+        double lastPosition = player.GetCurrentTime();
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(300);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            const double position = player.GetCurrentTime();
+            if (position > lastPosition + 0.0001)
+            {
+                ++presentedChanges;
+                lastPosition = position;
+            }
+        }
+        player.Pause();
+
+        TEST_ASSERT_GT(player.GetCurrentTime(), 18.0,
+                       "100x must advance near 100 video seconds per real second, not cap at 2-3x");
+        TEST_ASSERT_LT(player.GetCurrentTime(), 42.0,
+                       "100x playback should remain tied to its wall-clock target");
+        TEST_ASSERT_GE(presentedChanges, 5,
+                       "100x playback should keep presenting frames while catching up");
+    });
+
+    suite.addTest("PlaybackSpeed_500xTracksWallClockWithoutCapping", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testLongVideoPath);
+        player.SetPlaybackSpeed(500.0);
+        player.Play();
+
+        int presentedChanges = 0;
+        double lastPosition = player.GetCurrentTime();
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(300);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            const double position = player.GetCurrentTime();
+            if (position > lastPosition + 0.0001)
+            {
+                ++presentedChanges;
+                lastPosition = position;
+            }
+        }
+        player.Pause();
+
+        TEST_ASSERT_GT(player.GetCurrentTime(), 95.0,
+                       "500x must advance far beyond the former roughly-100x throughput ceiling");
+        TEST_ASSERT_LT(player.GetCurrentTime(), 205.0,
+                       "500x playback should remain tied to its wall-clock target");
+        TEST_ASSERT_GE(presentedChanges, 4,
+                       "500x playback should keep presenting clock-targeted frames");
+    });
+
+    suite.addTest("PlaybackSpeed_4xBoundaryNeverStarves", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        player.SetPlaybackSpeed(4.0);
+        player.Play();
+
+        double lastPosition = player.GetCurrentTime();
+        auto lastChange = std::chrono::steady_clock::now();
+        int64_t longestStallMs = 0;
+        const auto deadline = lastChange + std::chrono::milliseconds(900);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            const auto now = std::chrono::steady_clock::now();
+            const double position = player.GetCurrentTime();
+            if (position > lastPosition + 0.0001)
+            {
+                longestStallMs = (std::max)(longestStallMs,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - lastChange).count());
+                lastChange = now;
+                lastPosition = position;
+            }
+        }
+        longestStallMs = (std::max)(longestStallMs,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - lastChange).count());
+        player.Pause();
+
+        TEST_ASSERT_GT(player.GetCurrentTime(), 2.5,
+                       "4x playback should keep advancing past the high-speed boundary");
+        TEST_ASSERT_LT(longestStallMs, static_cast<int64_t>(250),
+                       "4x playback must not starve frame delivery and freeze");
     });
 
     suite.addTest("Play_StartsPlayback", []() {

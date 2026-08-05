@@ -20,6 +20,7 @@ extern "C" {
 
 // Global test state — shared with test files
 std::wstring g_testVideoPath;
+std::wstring g_testLongVideoPath;
 std::wstring g_testTempDir;
 HWND g_testHwnd = nullptr;
 
@@ -124,7 +125,7 @@ static bool GenerateTestVideo(const std::wstring& outputPath, const std::wstring
         L"-f lavfi -i \"sine=frequency=440:sample_rate=44100:duration=5\" "
         L"-f lavfi -i \"sine=frequency=880:sample_rate=44100:duration=5\" "
         L"-map 0:v -map 1:a -map 2:a "
-        L"-c:v libx264 -preset ultrafast -crf 23 -g 30 -keyint_min 30 -sc_threshold 0 "
+        L"-c:v libx264 -preset ultrafast -crf 23 -bf 2 -g 60 "
         L"-c:a aac -b:a 128k "
         L"-shortest \"" + outputPath + L"\"";
 
@@ -154,6 +155,41 @@ static bool GenerateTestVideo(const std::wstring& outputPath, const std::wstring
     }
 
     return std::filesystem::exists(outputPath);
+}
+
+// A longer, low-resolution input keeps very-high-speed tests away from EOF.
+// It deliberately includes B-frames and frequent keyframes so the playback
+// catch-up path is tested against a normal inter-frame dependency structure.
+static bool GenerateLongSpeedTestVideo(const std::wstring& outputPath,
+                                       const std::wstring& ffmpegDir) {
+    std::wstring ffmpegExe;
+    const std::wstring bundledExe = ffmpegDir + L"\\bin\\ffmpeg.exe";
+    if (!ffmpegDir.empty() && std::filesystem::exists(bundledExe))
+        ffmpegExe = L"\"" + bundledExe + L"\"";
+    else
+        ffmpegExe = L"ffmpeg";
+
+    std::wstring cmd = ffmpegExe +
+        L" -y -f lavfi -i \"testsrc2=size=320x180:rate=30:duration=240\" "
+        L"-an -c:v libx264 -preset ultrafast -crf 28 -bf 2 "
+        L"-g 30 -keyint_min 30 -sc_threshold 0 \"" + outputPath + L"\"";
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;
+
+    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 30000);
+    DWORD exitCode = 1;
+    if (waitResult == WAIT_OBJECT_0)
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return exitCode == 0 && std::filesystem::exists(outputPath);
 }
 
 // Generate test video using FFmpeg API directly (fallback if no ffmpeg.exe)
@@ -510,6 +546,17 @@ int wmain(int argc, wchar_t* argv[]) {
         TestColors::SetRed();
         std::cerr << "FATAL: Could not generate test video." << std::endl;
         std::cerr << "  Make sure ffmpeg.exe is in third_party/ffmpeg/bin/ or on PATH." << std::endl;
+        TestColors::Reset();
+        DestroyWindow(g_testHwnd);
+        CoUninitialize();
+        return 1;
+    }
+
+    g_testLongVideoPath = g_testTempDir + L"\\test_speed_input.mp4";
+    std::cout << "[Setup] Generating long high-speed test video..." << std::endl;
+    if (!GenerateLongSpeedTestVideo(g_testLongVideoPath, ffmpegDir)) {
+        TestColors::SetRed();
+        std::cerr << "FATAL: Could not generate long high-speed test video." << std::endl;
         TestColors::Reset();
         DestroyWindow(g_testHwnd);
         CoUninitialize();
