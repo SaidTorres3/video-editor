@@ -21,6 +21,7 @@ extern "C" {
 // Global test state — shared with test files
 std::wstring g_testVideoPath;
 std::wstring g_testLongVideoPath;
+std::wstring g_testHeavyVideoPath;
 std::wstring g_testTempDir;
 HWND g_testHwnd = nullptr;
 
@@ -173,6 +174,42 @@ static bool GenerateLongSpeedTestVideo(const std::wstring& outputPath,
         L" -y -f lavfi -i \"testsrc2=size=320x180:rate=30:duration=240\" "
         L"-an -c:v libx264 -preset ultrafast -crf 28 -bf 2 "
         L"-g 30 -keyint_min 30 -sc_threshold 0 \"" + outputPath + L"\"";
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;
+
+    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 30000);
+    DWORD exitCode = 1;
+    if (waitResult == WAIT_OBJECT_0)
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return exitCode == 0 && std::filesystem::exists(outputPath);
+}
+
+// Deliberately exceeds sequential 10x decode throughput on typical hardware.
+// The 4:4:4 10-bit profile also avoids silently making the regression easy via
+// the common consumer H.264 hardware-decode path.
+static bool GenerateHeavySpeedTestVideo(const std::wstring& outputPath,
+                                        const std::wstring& ffmpegDir) {
+    std::wstring ffmpegExe;
+    const std::wstring bundledExe = ffmpegDir + L"\\bin\\ffmpeg.exe";
+    if (!ffmpegDir.empty() && std::filesystem::exists(bundledExe))
+        ffmpegExe = L"\"" + bundledExe + L"\"";
+    else
+        ffmpegExe = L"ffmpeg";
+
+    std::wstring cmd = ffmpegExe +
+        L" -y -hide_banner -loglevel error "
+        L"-f lavfi -i \"testsrc2=size=3840x2160:rate=60:duration=20\" "
+        L"-an -c:v libx264 -preset ultrafast -crf 34 -pix_fmt yuv444p10le "
+        L"-bf 3 -g 120 -keyint_min 120 -sc_threshold 0 \"" + outputPath + L"\"";
 
     STARTUPINFOW si = {};
     si.cb = sizeof(si);
@@ -557,6 +594,17 @@ int wmain(int argc, wchar_t* argv[]) {
     if (!GenerateLongSpeedTestVideo(g_testLongVideoPath, ffmpegDir)) {
         TestColors::SetRed();
         std::cerr << "FATAL: Could not generate long high-speed test video." << std::endl;
+        TestColors::Reset();
+        DestroyWindow(g_testHwnd);
+        CoUninitialize();
+        return 1;
+    }
+
+    g_testHeavyVideoPath = g_testTempDir + L"\\test_speed_heavy.mp4";
+    std::cout << "[Setup] Generating heavy 10x regression video..." << std::endl;
+    if (!GenerateHeavySpeedTestVideo(g_testHeavyVideoPath, ffmpegDir)) {
+        TestColors::SetRed();
+        std::cerr << "FATAL: Could not generate heavy 10x regression video." << std::endl;
         TestColors::Reset();
         DestroyWindow(g_testHwnd);
         CoUninitialize();

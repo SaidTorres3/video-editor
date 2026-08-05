@@ -31,7 +31,10 @@ VideoPlayer::VideoPlayer(HWND parent)
       frame(nullptr), frameRGB(nullptr), hwFrame(nullptr), hwDeviceCtx(nullptr),
       hwPixelFormat(AV_PIX_FMT_NONE), useHwAccel(false), packet(nullptr), swsContext(nullptr),
       swsSourceFormat(AV_PIX_FMT_NONE),
-      buffer(nullptr), rgbBufferSize(0), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
+      buffer(nullptr), rgbBufferSize(0), playbackSwsContext(nullptr),
+      playbackSwsSourceFormat(AV_PIX_FMT_NONE), playbackRgbWidth(0), playbackRgbHeight(0),
+      playbackRgbStride(0), displayUsesPlaybackBuffer(false), videoStreamIndex(-1),
+      frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
       clipPreviewActive(false), clipPreviewEndTime(0.0),
@@ -57,6 +60,7 @@ VideoPlayer::VideoPlayer(HWND parent)
             m_playbackSpeedChangePending(false),
             m_playbackClockStartPts(0.0),
             m_playbackClockStartNs(0),
+            m_presentedPlaybackFrameCount(0),
             m_lastHighSpeedFrameDeliveryNs(0),
             m_speedOverlayDeadline(0),
             seekRefineThreadExit(false), seekRefinePending(false), seekRefineTarget(0.0),
@@ -332,6 +336,8 @@ bool VideoPlayer::Play()
     const size_t memoryLimitedFrames = std::max<size_t>(3, (128ull * 1024ull * 1024ull) / bytesPerFrame);
     playbackBufferCapacity = std::min(desiredFrames, memoryLimitedFrames);
     playbackPrebufferFrames = std::min(playbackBufferCapacity, std::max<size_t>(2, playbackBufferCapacity / 2));
+    if (GetPlaybackSpeed() >= 4.0)
+        playbackPrebufferFrames = 1;
     ClearPlaybackBuffer();
     playbackThreadRunning = true;
     playbackDecodeThread = std::thread(&VideoPlayer::PlaybackDecodeThreadFunction, this);
@@ -368,6 +374,20 @@ void VideoPlayer::Pause()
             }
         }
 
+        // A packet may be intentionally retained when avcodec_send_packet
+        // reports EAGAIN. Playback is now stopped, so discard that pending
+        // ownership before any paused seek or frame-step uses the decoder.
+        m_decoder->ResetBufferedDecodeState();
+
+        // High-speed playback temporarily enables decoder discard options.
+        // Restore full-quality decoding before paused seeks/frame stepping.
+        if (codecContext)
+        {
+            codecContext->skip_frame = AVDISCARD_DEFAULT;
+            codecContext->skip_idct = AVDISCARD_DEFAULT;
+            codecContext->skip_loop_filter = AVDISCARD_DEFAULT;
+        }
+
         // The decode thread is positioned after every frame it prefetched,
         // while currentPts identifies the last frame actually presented.
         // Force Play() to realign those positions before it discards the queue.
@@ -395,6 +415,7 @@ void VideoPlayer::Stop()
     currentPts = 0.0;
     if (isLoaded)
     {
+        m_decoder->ResetBufferedDecodeState();
         av_seek_frame(formatContext, videoStreamIndex, 0, AVSEEK_FLAG_FRAME);
         avcodec_flush_buffers(codecContext);
         
@@ -888,6 +909,7 @@ bool VideoPlayer::ConsumeBwdPrefetch(int64_t frame, bool waitForFrame)
                     dst += 4;
                     src += 3;
                 }
+                displayUsesPlaybackBuffer = false;
             }
             currentFrame = frame;
             currentPts   = it->second.pts;
@@ -1227,6 +1249,7 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
         AVStream *vs = formatContext->streams[videoStreamIndex];
         int64_t ts = static_cast<int64_t>((seconds + startTimeOffset) / av_q2d(vs->time_base));
 
+        m_decoder->ResetBufferedDecodeState();
         av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
         avcodec_flush_buffers(codecContext);
 
@@ -1345,6 +1368,12 @@ size_t VideoPlayer::GetBufferedPlaybackFrameCount() const
 {
     std::lock_guard<std::mutex> lock(playbackBufferMutex);
     return playbackFrameBuffer.size();
+}
+
+bool VideoPlayer::HasPlaybackDecoderEnded() const
+{
+    std::lock_guard<std::mutex> lock(playbackBufferMutex);
+    return playbackDecodeEof;
 }
 
 bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vector<uint8_t>& pixels) const
@@ -2309,6 +2338,11 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
             }
             m_audioPlayer->StopThread(true);
             ClearPlaybackBuffer();
+            // Decode cadence is timestamp-based at high speed. A backward
+            // seek must forget the last pre-seek delivery timestamp or every
+            // frame before that old position is rejected and the producer can
+            // run all the way back to EOF without refilling the queue.
+            m_lastHighSpeedFrameDeliveryNs = 0;
 
             do
             {
@@ -2352,15 +2386,38 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
 
         BufferedPlaybackFrame bufferedFrame;
         bufferedFrame.frame = av_frame_alloc();
-        if (!bufferedFrame.frame ||
-            !m_decoder->DecodeNextBufferedFrame(bufferedFrame.frame,
-                                                bufferedFrame.pts,
-                                                bufferedFrame.frameNumber))
+        if (!bufferedFrame.frame)
+            return;
+
+        const VideoDecoder::BufferedDecodeResult decodeResult =
+            m_decoder->DecodeNextBufferedFrame(bufferedFrame.frame,
+                                               bufferedFrame.pts,
+                                               bufferedFrame.frameNumber);
+        if (decodeResult == VideoDecoder::BufferedDecodeResult::RecoverableError)
         {
-            std::lock_guard<std::mutex> lock(playbackBufferMutex);
+            // A bad packet or a transient hardware-frame transfer must not
+            // permanently kill playback. The demuxer/decoder consumed the bad
+            // input, so retrying advances to the next usable frame.
+            std::this_thread::yield();
+            continue;
+        }
+        if (decodeResult == VideoDecoder::BufferedDecodeResult::EndOfStream)
+        {
+            std::unique_lock<std::mutex> lock(playbackBufferMutex);
             playbackDecodeEof = true;
             playbackBufferCondition.notify_all();
-            return;
+
+            // Keep the producer alive until presentation has stopped playback
+            // or an in-playback seek supplies a new decode position. Returning
+            // here left seekPending with no thread to service it, so the player
+            // could drain its three queued frames and become unrecoverable.
+            playbackBufferCondition.wait(lock, [this]() {
+                return !playbackThreadRunning ||
+                       m_playbackSeekPending.load(std::memory_order_acquire);
+            });
+            if (!playbackThreadRunning)
+                return;
+            continue;
         }
 
         if (m_playbackSeekPending.load(std::memory_order_acquire))
@@ -2386,24 +2443,69 @@ bool VideoPlayer::PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame)
     {
         std::lock_guard<std::mutex> renderLock(renderMutex);
         const AVPixelFormat actualFormat = static_cast<AVPixelFormat>(bufferedFrame.frame->format);
-        if (actualFormat != swsSourceFormat && actualFormat != AV_PIX_FMT_NONE)
+        const bool usePreviewBuffer = GetPlaybackSpeed() >= 4.0;
+        if (usePreviewBuffer)
         {
-            sws_freeContext(swsContext);
-            swsSourceFormat = actualFormat;
-            swsContext = sws_getContext(
-                frameWidth, frameHeight, actualFormat,
-                frameWidth, frameHeight, AV_PIX_FMT_BGRA,
-                SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-        }
-        if (!swsContext)
-            return false;
+            RECT clientRect{};
+            GetClientRect(videoWindow, &clientRect);
+            const int clientWidth = std::max(1L, clientRect.right - clientRect.left);
+            const int clientHeight = std::max(1L, clientRect.bottom - clientRect.top);
+            const double scale = std::min({
+                1.0,
+                clientWidth / static_cast<double>(std::max(1, frameWidth)),
+                clientHeight / static_cast<double>(std::max(1, frameHeight))});
+            const int previewWidth = std::max(2, static_cast<int>(std::lround(frameWidth * scale)));
+            const int previewHeight = std::max(2, static_cast<int>(std::lround(frameHeight * scale)));
 
-        sws_scale(swsContext,
-                  const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
-                  bufferedFrame.frame->linesize, 0, frameHeight,
-                  frameRGB->data, frameRGB->linesize);
+            if (actualFormat != playbackSwsSourceFormat ||
+                previewWidth != playbackRgbWidth || previewHeight != playbackRgbHeight)
+            {
+                sws_freeContext(playbackSwsContext);
+                playbackSwsSourceFormat = actualFormat;
+                playbackRgbWidth = previewWidth;
+                playbackRgbHeight = previewHeight;
+                playbackRgbStride = previewWidth * 4;
+                playbackRgbBuffer.resize(
+                    static_cast<size_t>(playbackRgbStride) * playbackRgbHeight);
+                playbackSwsContext = sws_getContext(
+                    frameWidth, frameHeight, actualFormat,
+                    playbackRgbWidth, playbackRgbHeight, AV_PIX_FMT_BGRA,
+                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+            }
+            if (!playbackSwsContext || playbackRgbBuffer.empty())
+                return false;
+
+            uint8_t* destinationData[4] = { playbackRgbBuffer.data(), nullptr, nullptr, nullptr };
+            int destinationStride[4] = { playbackRgbStride, 0, 0, 0 };
+            sws_scale(playbackSwsContext,
+                      const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
+                      bufferedFrame.frame->linesize, 0, frameHeight,
+                      destinationData, destinationStride);
+            displayUsesPlaybackBuffer = true;
+        }
+        else
+        {
+            if (actualFormat != swsSourceFormat && actualFormat != AV_PIX_FMT_NONE)
+            {
+                sws_freeContext(swsContext);
+                swsSourceFormat = actualFormat;
+                swsContext = sws_getContext(
+                    frameWidth, frameHeight, actualFormat,
+                    frameWidth, frameHeight, AV_PIX_FMT_BGRA,
+                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+            }
+            if (!swsContext)
+                return false;
+
+            sws_scale(swsContext,
+                      const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
+                      bufferedFrame.frame->linesize, 0, frameHeight,
+                      frameRGB->data, frameRGB->linesize);
+            displayUsesPlaybackBuffer = false;
+        }
     }
 
+    m_presentedPlaybackFrameCount.fetch_add(1, std::memory_order_release);
     InvalidateRect(videoWindow, nullptr, FALSE);
     UpdateTimeline();
     if (cropChanged)
@@ -2416,7 +2518,6 @@ void VideoPlayer::PlaybackThreadFunction()
     bool clockStarted = false;
     auto startTime = masterStartTime;
     double startPts = masterStartPts;
-    auto lastPresentedAt = startTime;
 
     while (playbackThreadRunning)
     {
@@ -2449,6 +2550,27 @@ void VideoPlayer::PlaybackThreadFunction()
             {
                 if (playbackDecodeEof)
                 {
+                    // EOF and a user seek can arrive together. Give the seek
+                    // publisher a short hand-off window and re-check while
+                    // holding the queue lock; otherwise this thread can decide
+                    // to Stop just as the producer clears EOF and restarts at
+                    // the new position, killing the recovered playback.
+                    playbackBufferCondition.wait_for(
+                        lock, std::chrono::milliseconds(50), [this]() {
+                            return !playbackThreadRunning ||
+                                   m_playbackSeekPending.load(std::memory_order_acquire) ||
+                                   m_playbackSeekInProgress.load(std::memory_order_acquire) ||
+                                   !playbackDecodeEof || !playbackFrameBuffer.empty();
+                        });
+                    if (!playbackThreadRunning)
+                        return;
+                    if (m_playbackSeekPending.load(std::memory_order_acquire) ||
+                        m_playbackSeekInProgress.load(std::memory_order_acquire) ||
+                        !playbackDecodeEof || !playbackFrameBuffer.empty())
+                    {
+                        clockStarted = false;
+                        continue;
+                    }
                     lock.unlock();
                     Stop();
                     PostMessage(parentWindow, WM_TIMER, 1006, 0);
@@ -2471,12 +2593,12 @@ void VideoPlayer::PlaybackThreadFunction()
                 continue;
 
             startTime = std::chrono::high_resolution_clock::now();
-            lastPresentedAt = startTime;
             startPts = currentPts;
             masterStartTime = startTime;
             masterStartPts = startPts;
             ResetPlaybackClock(startPts);
-            m_audioPlayer->StartThread();
+            if (GetPlaybackSpeed() < 4.0)
+                m_audioPlayer->StartThread();
             clockStarted = true;
         }
 
@@ -2488,12 +2610,11 @@ void VideoPlayer::PlaybackThreadFunction()
         {
             m_audioPlayer->StopThread(true);
             startTime = std::chrono::high_resolution_clock::now();
-            lastPresentedAt = startTime;
             startPts = currentPts;
             masterStartTime = startTime;
             masterStartPts = startPts;
             ResetPlaybackClock(startPts);
-            if (playbackThreadRunning && isPlaying)
+            if (playbackThreadRunning && isPlaying && GetPlaybackSpeed() < 4.0)
                 m_audioPlayer->StartThread();
         }
 

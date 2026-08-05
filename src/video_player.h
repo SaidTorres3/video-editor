@@ -103,6 +103,13 @@ public:
     AVPixelFormat swsSourceFormat;
     uint8_t *buffer;
     int rgbBufferSize;
+    struct SwsContext *playbackSwsContext;
+    AVPixelFormat playbackSwsSourceFormat;
+    std::vector<uint8_t> playbackRgbBuffer;
+    int playbackRgbWidth;
+    int playbackRgbHeight;
+    int playbackRgbStride;
+    bool displayUsesPlaybackBuffer;
     int videoStreamIndex;
     int frameWidth, frameHeight;
     bool isLoaded;
@@ -239,6 +246,7 @@ private:
     std::atomic<bool> m_playbackSpeedChangePending;
     std::atomic<double> m_playbackClockStartPts;
     std::atomic<int64_t> m_playbackClockStartNs;
+    std::atomic<uint64_t> m_presentedPlaybackFrameCount;
     int64_t m_lastHighSpeedFrameDeliveryNs;
     std::atomic<ULONGLONG> m_speedOverlayDeadline;
 
@@ -341,7 +349,11 @@ public:
     double GetCurrentTime() const;
     int64_t GetCurrentFrame() const { return currentFrame; }
     int64_t GetTotalFrames() const { return totalFrames; }
+    uint64_t GetPresentedPlaybackFrameCount() const {
+        return m_presentedPlaybackFrameCount.load(std::memory_order_acquire);
+    }
     size_t GetBufferedPlaybackFrameCount() const;
+    bool HasPlaybackDecoderEnded() const;
     size_t GetPlaybackBufferCapacity() const { return playbackBufferCapacity; }
 
     // Crop timeline helpers

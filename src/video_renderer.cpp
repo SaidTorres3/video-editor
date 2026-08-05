@@ -67,21 +67,41 @@ void VideoRenderer::UpdateDisplay() {
 
     std::lock_guard<std::mutex> lock(m_player->renderMutex);
 
+    const bool usePreview = m_player->displayUsesPlaybackBuffer &&
+                            !m_player->playbackRgbBuffer.empty();
+    const uint8_t* displayData = usePreview
+        ? m_player->playbackRgbBuffer.data()
+        : m_player->frameRGB->data[0];
+    const int bitmapWidth = usePreview ? m_player->playbackRgbWidth : m_player->frameWidth;
+    const int bitmapHeight = usePreview ? m_player->playbackRgbHeight : m_player->frameHeight;
+    const int bitmapStride = usePreview ? m_player->playbackRgbStride : m_player->frameRGB->linesize[0];
+
+    if (m_player->d2dBitmap)
+    {
+        const D2D1_SIZE_U bitmapSize = m_player->d2dBitmap->GetPixelSize();
+        if (bitmapSize.width != static_cast<UINT32>(bitmapWidth) ||
+            bitmapSize.height != static_cast<UINT32>(bitmapHeight))
+        {
+            m_player->d2dBitmap->Release();
+            m_player->d2dBitmap = nullptr;
+        }
+    }
+
     if (!m_player->d2dBitmap)
     {
         D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
         m_player->d2dRenderTarget->CreateBitmap(
-            D2D1::SizeU(m_player->frameWidth, m_player->frameHeight),
-            m_player->frameRGB->data[0],
-            m_player->frameRGB->linesize[0],
+            D2D1::SizeU(bitmapWidth, bitmapHeight),
+            displayData,
+            bitmapStride,
             props,
             &m_player->d2dBitmap);
     }
     else
     {
-        D2D1_RECT_U rect = {0, 0, (UINT32)m_player->frameWidth, (UINT32)m_player->frameHeight};
-        m_player->d2dBitmap->CopyFromMemory(&rect, m_player->frameRGB->data[0], m_player->frameRGB->linesize[0]);
+        D2D1_RECT_U rect = {0, 0, (UINT32)bitmapWidth, (UINT32)bitmapHeight};
+        m_player->d2dBitmap->CopyFromMemory(&rect, displayData, bitmapStride);
     }
 
     m_player->d2dRenderTarget->BeginDraw();
@@ -89,12 +109,17 @@ void VideoRenderer::UpdateDisplay() {
     D2D1_SIZE_F size = m_player->d2dRenderTarget->GetSize();
     int srcW = m_player->frameWidth;
     int srcH = m_player->frameHeight;
+    const float sourceScaleX = bitmapWidth / static_cast<float>(m_player->frameWidth);
+    const float sourceScaleY = bitmapHeight / static_cast<float>(m_player->frameHeight);
     D2D1_RECT_F srcRect = {};
     if (m_player->hasCrop) {
         srcW = m_player->cropRect.right - m_player->cropRect.left;
         srcH = m_player->cropRect.bottom - m_player->cropRect.top;
-        srcRect = D2D1::RectF((FLOAT)m_player->cropRect.left, (FLOAT)m_player->cropRect.top,
-                              (FLOAT)m_player->cropRect.right, (FLOAT)m_player->cropRect.bottom);
+        srcRect = D2D1::RectF(
+            static_cast<FLOAT>(m_player->cropRect.left) * sourceScaleX,
+            static_cast<FLOAT>(m_player->cropRect.top) * sourceScaleY,
+            static_cast<FLOAT>(m_player->cropRect.right) * sourceScaleX,
+            static_cast<FLOAT>(m_player->cropRect.bottom) * sourceScaleY);
     }
     float targetAspect = size.width / size.height;
     float videoAspect = static_cast<float>(srcW) / srcH;

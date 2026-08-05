@@ -4,6 +4,8 @@
 #include "video_renderer.h"
 #include "ui_updates.h"
 #include <algorithm> // For std::lower_bound
+#include <cstdlib>
+#include <libavutil/pixdesc.h>
 
 VideoDecoder::VideoDecoder(VideoPlayer* player) : m_player(player) {}
 
@@ -55,10 +57,39 @@ bool VideoDecoder::Initialize() {
         return false;
     }
 
-    // Try hardware acceleration: D3D11VA first (modern), then DXVA2 (legacy).
+    // D3D11VA/DXVA2 consumer decode paths are 4:2:0. Merely creating a D3D
+    // device does not mean the stream profile can use it; treating a 4:4:4
+    // software fallback as hardware forced FFmpeg onto the single-thread path
+    // and made 4x playback slower than real time on demanding sources.
+    const AVPixFmtDescriptor* sourceFormat = cp->format >= 0
+        ? av_pix_fmt_desc_get(static_cast<AVPixelFormat>(cp->format))
+        : nullptr;
+    const bool hardwareCompatibleFormat = sourceFormat &&
+        sourceFormat->log2_chroma_w == 1 && sourceFormat->log2_chroma_h == 1 &&
+        sourceFormat->comp[0].depth <= 10;
+
+    // Try hardware acceleration only when both the codec and source pixel
+    // format have a compatible device path: D3D11VA first, then DXVA2.
     AVHWDeviceType hwTypes[] = { AV_HWDEVICE_TYPE_D3D11VA, AV_HWDEVICE_TYPE_DXVA2 };
     for (auto hwType : hwTypes)
     {
+        if (!hardwareCompatibleFormat)
+            break;
+        bool codecSupportsDevice = false;
+        for (int configIndex = 0;; ++configIndex)
+        {
+            const AVCodecHWConfig* config = avcodec_get_hw_config(codec, configIndex);
+            if (!config)
+                break;
+            if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0 &&
+                config->device_type == hwType)
+            {
+                codecSupportsDevice = true;
+                break;
+            }
+        }
+        if (!codecSupportsDevice)
+            continue;
         if (av_hwdevice_ctx_create(&m_player->hwDeviceCtx, hwType, nullptr, nullptr, 0) >= 0)
         {
             m_player->codecContext->hw_device_ctx = av_buffer_ref(m_player->hwDeviceCtx);
@@ -129,6 +160,15 @@ bool VideoDecoder::Initialize() {
 }
 
 void VideoDecoder::Cleanup() {
+    ResetBufferedDecodeState();
+    if (m_player->playbackSwsContext)
+        sws_freeContext(m_player->playbackSwsContext), m_player->playbackSwsContext = nullptr;
+    m_player->playbackSwsSourceFormat = AV_PIX_FMT_NONE;
+    m_player->playbackRgbBuffer.clear();
+    m_player->playbackRgbWidth = 0;
+    m_player->playbackRgbHeight = 0;
+    m_player->playbackRgbStride = 0;
+    m_player->displayUsesPlaybackBuffer = false;
     if (m_player->swsContext)
         sws_freeContext(m_player->swsContext), m_player->swsContext = nullptr;
     if (m_player->buffer)
@@ -147,6 +187,14 @@ void VideoDecoder::Cleanup() {
     if (m_player->hwDeviceCtx)
         av_buffer_unref(&m_player->hwDeviceCtx), m_player->hwDeviceCtx = nullptr;
     m_player->useHwAccel = false;
+}
+
+void VideoDecoder::ResetBufferedDecodeState() {
+    if (m_player->packet)
+        av_packet_unref(m_player->packet);
+    m_bufferedPacketPending = false;
+    m_bufferedDemuxEof = false;
+    m_bufferedFlushSent = false;
 }
 
 bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool generateImage) {
@@ -232,6 +280,7 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
                             (uint8_t const *const *)swFrame->data, swFrame->linesize,
                             0, m_player->frameHeight,
                             m_player->frameRGB->data, m_player->frameRGB->linesize);
+                        m_player->displayUsesPlaybackBuffer = false;
                     }
                 }
 
@@ -274,20 +323,201 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
     return false; // Should never reach here
 }
 
-bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, int64_t& frameNumber) {
+VideoDecoder::BufferedReceiveResult VideoDecoder::ReceiveBufferedFrame(
+    AVFrame* outputFrame, double& pts, int64_t& frameNumber) {
+    const int ret = avcodec_receive_frame(m_player->codecContext, m_player->hwFrame);
+    if (ret == AVERROR(EAGAIN))
+        return BufferedReceiveResult::NeedPacket;
+    if (ret == AVERROR_EOF)
+        return BufferedReceiveResult::EndOfStream;
+    if (ret < 0)
+        return BufferedReceiveResult::RecoverableError;
+
+    AVStream* stream = m_player->formatContext->streams[m_player->videoStreamIndex];
+    const int64_t decodedTimestamp =
+        m_player->hwFrame->best_effort_timestamp != AV_NOPTS_VALUE
+            ? m_player->hwFrame->best_effort_timestamp
+            : m_player->hwFrame->pts;
+    const double decodedPts = decodedTimestamp != AV_NOPTS_VALUE
+        ? std::max(0.0, decodedTimestamp * av_q2d(stream->time_base) -
+                          m_player->startTimeOffset)
+        : -1.0;
+    const double speed = m_player->GetPlaybackSpeed();
+    if (speed >= 4.0 && decodedPts >= 0.0)
+    {
+        const double clockTarget = m_player->GetPlaybackClockTarget();
+        const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const bool highSpeedDeliveryOverdue = speed >= 8.0 &&
+            (m_player->m_lastHighSpeedFrameDeliveryNs == 0 ||
+             nowNs - m_player->m_lastHighSpeedFrameDeliveryNs >= 16666667);
+
+        const double displayMediaStep = speed / 60.0;
+        const bool cadenceDue = m_lastHighSpeedFrameDeliveryPts < 0.0 ||
+            decodedPts >= m_lastHighSpeedFrameDeliveryPts + displayMediaStep * 0.6;
+        if (!cadenceDue && !highSpeedDeliveryOverdue)
+        {
+            av_frame_unref(m_player->hwFrame);
+            return BufferedReceiveResult::FrameDiscarded;
+        }
+
+        const double allowedLag = std::max(0.10, speed / 60.0);
+        if (decodedPts < clockTarget - allowedLag && !highSpeedDeliveryOverdue)
+        {
+            av_frame_unref(m_player->hwFrame);
+            return BufferedReceiveResult::FrameDiscarded;
+        }
+    }
+
+    if (m_player->useHwAccel &&
+        m_player->hwFrame->format == m_player->hwPixelFormat)
+    {
+        if (av_hwframe_transfer_data(outputFrame, m_player->hwFrame, 0) < 0)
+        {
+            av_frame_unref(m_player->hwFrame);
+            return BufferedReceiveResult::RecoverableError;
+        }
+        av_frame_copy_props(outputFrame, m_player->hwFrame);
+    }
+    else if (av_frame_ref(outputFrame, m_player->hwFrame) < 0)
+    {
+        av_frame_unref(m_player->hwFrame);
+        return BufferedReceiveResult::RecoverableError;
+    }
+
+    if (decodedPts >= 0.0)
+        pts = decodedPts;
+    else
+        pts = m_player->currentPts +
+              (m_player->frameRate > 0.0 ? 1.0 / m_player->frameRate : 1.0 / 30.0);
+
+    pts = std::max(0.0, pts);
+    frameNumber = static_cast<int64_t>(pts * m_player->frameRate + 0.5);
+    av_frame_unref(m_player->hwFrame);
+    if (speed >= 4.0)
+    {
+        m_lastHighSpeedFrameDeliveryPts = pts;
+        m_player->m_lastHighSpeedFrameDeliveryNs =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    else
+    {
+        m_lastHighSpeedFrameDeliveryPts = -1.0;
+        m_player->m_lastHighSpeedFrameDeliveryNs = 0;
+    }
+    return BufferedReceiveResult::FrameReady;
+}
+
+VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
+    AVFrame* outputFrame, double& pts, int64_t& frameNumber) {
     if (!m_player->isLoaded || !outputFrame)
-        return false;
+        return BufferedDecodeResult::RecoverableError;
 
     std::unique_lock<std::mutex> lock(m_player->decodeMutex);
     av_frame_unref(outputFrame);
     bool scanningToForwardKeyframe = false;
     bool jumpedToClockTarget = false;
 
+    const double initialSpeed = m_player->GetPlaybackSpeed();
+    if (m_player->m_lastHighSpeedFrameDeliveryNs == 0)
+    {
+        m_lastHighSpeedFrameDeliveryPts = -1.0;
+        m_moderateLagStartNs = 0;
+    }
+    if (initialSpeed >= 4.0 && initialSpeed < 64.0)
+    {
+        // At these rates the display cannot show every source frame. Decode
+        // reference frames from the outset so demanding sources do not become
+        // throughput-limited before the clock has even started. NONREF keeps
+        // reference B-frames (unlike BIDIR), preserving a denser cadence.
+        m_player->codecContext->skip_frame = AVDISCARD_NONREF;
+        m_player->codecContext->skip_idct = AVDISCARD_NONREF;
+        m_player->codecContext->skip_loop_filter = AVDISCARD_ALL;
+    }
+    else
+    {
+        m_moderateLagStartNs = 0;
+        m_lastHighSpeedFrameDeliveryPts = -1.0;
+        m_player->codecContext->skip_frame = AVDISCARD_DEFAULT;
+        m_player->codecContext->skip_idct = AVDISCARD_DEFAULT;
+        m_player->codecContext->skip_loop_filter = AVDISCARD_DEFAULT;
+    }
+
     while (m_player->playbackThreadRunning)
     {
+        // Always drain decoder output before reading another demux packet.
+        // A single compressed packet can produce multiple frames. Reading and
+        // sending a new packet first can therefore return EAGAIN; the packet
+        // must remain pending while those frames are delivered.
+        const BufferedReceiveResult receiveResult =
+            ReceiveBufferedFrame(outputFrame, pts, frameNumber);
+        if (receiveResult == BufferedReceiveResult::FrameReady)
+            return BufferedDecodeResult::FrameReady;
+        if (receiveResult == BufferedReceiveResult::FrameDiscarded)
+            continue;
+        if (receiveResult == BufferedReceiveResult::EndOfStream)
+            return BufferedDecodeResult::EndOfStream;
+        if (receiveResult == BufferedReceiveResult::RecoverableError)
+            return BufferedDecodeResult::RecoverableError;
+
+        if (m_player->m_playbackSeekPending.load(std::memory_order_acquire))
+            return BufferedDecodeResult::RecoverableError;
+
+        if (m_bufferedPacketPending)
+        {
+            const int sendResult =
+                avcodec_send_packet(m_player->codecContext, m_player->packet);
+            if (sendResult == 0)
+            {
+                av_packet_unref(m_player->packet);
+                m_bufferedPacketPending = false;
+                continue;
+            }
+            if (sendResult == AVERROR(EAGAIN))
+            {
+                // Keep ownership of the packet. The next iteration drains
+                // output first and retries this exact packet afterward.
+                std::this_thread::yield();
+                continue;
+            }
+
+            av_packet_unref(m_player->packet);
+            m_bufferedPacketPending = false;
+            if (sendResult == AVERROR_EOF)
+                return BufferedDecodeResult::EndOfStream;
+            return BufferedDecodeResult::RecoverableError;
+        }
+
+        if (m_bufferedDemuxEof)
+        {
+            if (m_bufferedFlushSent)
+                return BufferedDecodeResult::EndOfStream;
+
+            const int flushResult =
+                avcodec_send_packet(m_player->codecContext, nullptr);
+            if (flushResult == 0 || flushResult == AVERROR_EOF)
+            {
+                m_bufferedFlushSent = true;
+                continue;
+            }
+            if (flushResult == AVERROR(EAGAIN))
+                continue;
+            return BufferedDecodeResult::RecoverableError;
+        }
+
         int ret = av_read_frame(m_player->formatContext, m_player->packet);
         if (ret < 0)
-            return false;
+        {
+            if (ret == AVERROR(EAGAIN))
+                continue;
+            if (ret == AVERROR_EOF)
+            {
+                m_bufferedDemuxEof = true;
+                continue;
+            }
+            return BufferedDecodeResult::RecoverableError;
+        }
 
         if (m_player->packet->stream_index == m_player->videoStreamIndex)
         {
@@ -301,7 +531,155 @@ bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, in
                 : -1.0;
             const double packetSpeed = m_player->GetPlaybackSpeed();
             const double clockTarget = m_player->GetPlaybackClockTarget();
-            const double lag = packetPts >= 0.0 ? clockTarget - packetPts : 0.0;
+            // Frame-threaded decoders can accept packets far ahead of the
+            // frames they have actually produced. Use delivered media
+            // progress when available, otherwise catch-up falsely concludes
+            // that playback is on time while presentation is several seconds
+            // behind the requested clock.
+            const double deliveredProgress = m_lastHighSpeedFrameDeliveryPts >= 0.0
+                ? m_lastHighSpeedFrameDeliveryPts
+                : packetPts;
+            const double lag = deliveredProgress >= 0.0
+                ? clockTarget - deliveredProgress
+                : 0.0;
+
+            if (packetSpeed >= 4.0 && packetSpeed < 64.0 &&
+                packetPts >= 0.0 && !jumpedToClockTarget)
+            {
+                // A packet can briefly be late because of ordinary decoder or
+                // scheduler jitter. The decoded-frame path below already drops
+                // stale output without doing color conversion, which normally
+                // lets it recover while preserving continuous I/P motion. Only
+                // abandon that GOP when the lag persists or becomes too large
+                // to recover sequentially. This avoids turning a ~30 ms hiccup
+                // into the multi-second visual jump of a keyframe seek.
+                const bool smoothModerateSpeed = packetSpeed < 8.0;
+                const double recoverableLag = smoothModerateSpeed
+                    ? std::max(0.20, packetSpeed / 30.0)
+                    : std::max(0.50, packetSpeed / 15.0);
+                const double severeLag = smoothModerateSpeed
+                    ? std::max(0.75, packetSpeed / 4.0)
+                    : std::max(1.50, packetSpeed / 4.0);
+                const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+
+                if (lag <= recoverableLag)
+                {
+                    m_moderateLagStartNs = 0;
+                    m_player->codecContext->skip_frame = AVDISCARD_NONREF;
+                    m_player->codecContext->skip_idct = AVDISCARD_NONREF;
+                }
+                else if (m_moderateLagStartNs == 0)
+                {
+                    m_moderateLagStartNs = nowNs;
+                }
+
+                if (lag > recoverableLag)
+                {
+                    // B-frames are not references for future P-frames, so they
+                    // are safe to omit temporarily while the decoder closes a
+                    // real clock gap. Full cadence resumes once lag recovers.
+                    m_player->codecContext->skip_frame = AVDISCARD_BIDIR;
+                    m_player->codecContext->skip_idct = AVDISCARD_BIDIR;
+                }
+
+                // Preview-sized conversion removes the main transient cost,
+                // so give sequential reference decoding enough time to close
+                // short gaps on its own. The old 120 ms window repeatedly
+                // forced a seek during harmless jitter, producing the visible
+                // play-pause-jump cycle at 5x. Severe lag still jumps at once.
+                const bool lagWasSustained = !smoothModerateSpeed ||
+                    (m_moderateLagStartNs != 0 &&
+                     nowNs - m_moderateLagStartNs >= 75000000);
+                if (lag > severeLag ||
+                    (lag > recoverableLag && lagWasSustained))
+                {
+                    const double frameDuration = m_player->frameRate > 0.0
+                        ? 1.0 / m_player->frameRate
+                        : 1.0 / 30.0;
+                    // A catch-up seek itself costs part of a display interval.
+                    // Aim one display tick ahead at 8x+ so the frame that
+                    // arrives after demux/decode is aligned with the clock
+                    // then, instead of permanently trailing it by that work.
+                    const double schedulingLead = smoothModerateSpeed
+                        ? 0.0
+                        : std::min(0.25, packetSpeed / 60.0);
+                    const double seekClockTarget = clockTarget + schedulingLead;
+                    const double target = m_player->duration > frameDuration
+                        ? std::min(seekClockTarget, m_player->duration - frameDuration)
+                        : std::max(0.0, seekClockTarget);
+                    const int64_t targetTs = static_cast<int64_t>(
+                        (target + m_player->startTimeOffset) / av_q2d(stream->time_base));
+
+                    const AVIndexEntry* before = avformat_index_get_entry_from_timestamp(
+                        stream, targetTs, AVSEEK_FLAG_BACKWARD);
+                    const AVIndexEntry* after = avformat_index_get_entry_from_timestamp(
+                        stream, targetTs, 0);
+                    const AVIndexEntry* chosen = nullptr;
+                    const int64_t deliveredTs = deliveredProgress >= 0.0
+                        ? static_cast<int64_t>((deliveredProgress + m_player->startTimeOffset) /
+                                               av_q2d(stream->time_base))
+                        : packetTimestamp;
+                    if (before && before->timestamp > deliveredTs)
+                        chosen = before;
+
+                    // Do not leap to the next GOP merely because the keyframe
+                    // before the clock is the one currently being decoded. A
+                    // modest forward overshoot is acceptable; a distant one is
+                    // smoother to reach by decoding reference frames. Severe
+                    // lag remains the fallback that guarantees the real rate.
+                    if (after && after->timestamp > deliveredTs)
+                    {
+                        const double afterPts = after->timestamp *
+                            av_q2d(stream->time_base) - m_player->startTimeOffset;
+                        const double maxForwardOvershoot =
+                            std::max(0.35, packetSpeed / 30.0);
+                        const bool afterIsUsable = afterPts <= target + maxForwardOvershoot ||
+                                                   lag > severeLag;
+                        if (afterIsUsable &&
+                            (!chosen || std::llabs(after->timestamp - targetTs) <
+                                        std::llabs(chosen->timestamp - targetTs)))
+                            chosen = after;
+                    }
+
+                    int seekResult = -1;
+                    if (chosen)
+                    {
+                        av_packet_unref(m_player->packet);
+                        seekResult = av_seek_frame(m_player->formatContext,
+                                                   m_player->videoStreamIndex,
+                                                   chosen->timestamp,
+                                                   AVSEEK_FLAG_BACKWARD);
+                    }
+                    else if (!before && !after)
+                    {
+                        av_packet_unref(m_player->packet);
+                        seekResult = avformat_seek_file(
+                            m_player->formatContext, m_player->videoStreamIndex,
+                            targetTs, targetTs, INT64_MAX, AVSEEK_FLAG_ANY);
+                        scanningToForwardKeyframe = seekResult >= 0;
+                    }
+                    if (seekResult >= 0)
+                    {
+                        avcodec_flush_buffers(m_player->codecContext);
+                        ResetBufferedDecodeState();
+                        for (auto& track : m_player->audioTracks)
+                        {
+                            if (track->codecContext)
+                                avcodec_flush_buffers(track->codecContext);
+                        }
+                        {
+                            std::lock_guard<std::mutex> audioLock(m_player->audioMutex);
+                            for (auto& track : m_player->audioTracks)
+                                track->buffer.clear();
+                        }
+                        m_moderateLagStartNs = 0;
+                        m_lastHighSpeedFrameDeliveryPts = -1.0;
+                        jumpedToClockTarget = true;
+                        continue;
+                    }
+                }
+            }
 
             if (packetSpeed >= 64.0 && packetPts >= 0.0 && !jumpedToClockTarget)
             {
@@ -345,6 +723,7 @@ bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, in
                     if (seekResult >= 0)
                     {
                         avcodec_flush_buffers(m_player->codecContext);
+                        ResetBufferedDecodeState();
                         for (auto& track : m_player->audioTracks)
                         {
                             if (track->codecContext)
@@ -362,7 +741,7 @@ bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, in
                 }
             }
 
-            if (packetSpeed >= 8.0 && packetPts >= 0.0)
+            if (packetSpeed >= 64.0 && packetPts >= 0.0)
             {
                 const double scanThreshold = std::max(0.5, packetSpeed / 15.0);
                 if (lag > scanThreshold)
@@ -382,91 +761,14 @@ bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, in
                 scanningToForwardKeyframe = false;
             }
 
-            ret = avcodec_send_packet(m_player->codecContext, m_player->packet);
-            av_packet_unref(m_player->packet);
-            if (ret < 0)
-                continue;
-
-            while (true)
-            {
-                ret = avcodec_receive_frame(m_player->codecContext, m_player->hwFrame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-                    break;
-                if (ret < 0)
-                    return false;
-
-                const int64_t decodedTimestamp =
-                    m_player->hwFrame->best_effort_timestamp != AV_NOPTS_VALUE
-                        ? m_player->hwFrame->best_effort_timestamp
-                        : m_player->hwFrame->pts;
-                const double decodedPts = decodedTimestamp != AV_NOPTS_VALUE
-                    ? std::max(0.0, decodedTimestamp * av_q2d(stream->time_base) -
-                                      m_player->startTimeOffset)
-                    : -1.0;
-                const double speed = m_player->GetPlaybackSpeed();
-                if (speed >= 4.0 && decodedPts >= 0.0)
-                {
-                    const double clockTarget = m_player->GetPlaybackClockTarget();
-                    // Keep at most one 60 Hz presentation interval of lateness.
-                    // Frames older than that are decoded for reference integrity,
-                    // but avoid GPU readback, color conversion, and rendering.
-                    const double allowedLag = std::max(0.05, speed / 60.0);
-                    const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch()).count();
-                    const bool deliveryOverdue = m_player->m_lastHighSpeedFrameDeliveryNs == 0 ||
-                        nowNs - m_player->m_lastHighSpeedFrameDeliveryNs >= 33333333;
-                    if (decodedPts < clockTarget - allowedLag && !deliveryOverdue)
-                    {
-                        av_frame_unref(m_player->hwFrame);
-                        continue;
-                    }
-                }
-
-                AVFrame* decodedFrame = m_player->hwFrame;
-                if (m_player->useHwAccel &&
-                    m_player->hwFrame->format == m_player->hwPixelFormat)
-                {
-                    if (av_hwframe_transfer_data(outputFrame, m_player->hwFrame, 0) < 0)
-                    {
-                        av_frame_unref(m_player->hwFrame);
-                        return false;
-                    }
-                    av_frame_copy_props(outputFrame, m_player->hwFrame);
-                    decodedFrame = outputFrame;
-                }
-                else if (av_frame_ref(outputFrame, m_player->hwFrame) < 0)
-                {
-                    av_frame_unref(m_player->hwFrame);
-                    return false;
-                }
-
-                if (decodedPts >= 0.0)
-                    pts = decodedPts;
-                else
-                    pts = m_player->currentPts +
-                          (m_player->frameRate > 0.0 ? 1.0 / m_player->frameRate : 1.0 / 30.0);
-
-                pts = std::max(0.0, pts);
-                frameNumber = static_cast<int64_t>(pts * m_player->frameRate + 0.5);
-                av_frame_unref(m_player->hwFrame);
-                if (speed >= 4.0)
-                {
-                    m_player->m_lastHighSpeedFrameDeliveryNs =
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch()).count();
-                }
-                else
-                {
-                    m_player->m_lastHighSpeedFrameDeliveryNs = 0;
-                }
-                return true;
-            }
+            m_bufferedPacketPending = true;
+            continue;
         }
         else
         {
-            // At extreme rates audio decoding/resampling is both inaudible and
-            // expensive enough to become the video clock's limiting factor.
-            if (scanningToForwardKeyframe || m_player->GetPlaybackSpeed() >= 64.0)
+            // Audio at these rates is not intelligible, and decoding/resampling
+            // it can consume enough time to throttle the video clock.
+            if (scanningToForwardKeyframe || m_player->GetPlaybackSpeed() >= 4.0)
             {
                 av_packet_unref(m_player->packet);
                 continue;
@@ -482,5 +784,5 @@ bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, in
             av_packet_unref(m_player->packet);
         }
     }
-    return false;
+    return BufferedDecodeResult::EndOfStream;
 }
