@@ -237,7 +237,12 @@ private:
     std::atomic<bool> m_playbackSeekExact;
     std::atomic<double> m_playbackSpeed;
     std::atomic<bool> m_playbackSpeedChangePending;
+    std::atomic<double> m_playbackClockStartPts;
+    std::atomic<int64_t> m_playbackClockStartNs;
     std::atomic<ULONGLONG> m_speedOverlayDeadline;
+
+    void ResetPlaybackClock(double pts);
+    double GetPlaybackClockTarget() const;
 
     // Background backward-frame prefetch: owns a completely separate
     // AVFormatContext so it never races with the main player.

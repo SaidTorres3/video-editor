@@ -280,6 +280,7 @@ bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, in
 
     std::unique_lock<std::mutex> lock(m_player->decodeMutex);
     av_frame_unref(outputFrame);
+    bool discardingForPlaybackClock = false;
 
     while (m_player->playbackThreadRunning)
     {
@@ -289,6 +290,42 @@ bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, in
 
         if (m_player->packet->stream_index == m_player->videoStreamIndex)
         {
+            AVStream* stream = m_player->formatContext->streams[m_player->videoStreamIndex];
+            const int64_t packetTimestamp = m_player->packet->pts != AV_NOPTS_VALUE
+                ? m_player->packet->pts
+                : m_player->packet->dts;
+            const double packetPts = packetTimestamp != AV_NOPTS_VALUE
+                ? std::max(0.0, packetTimestamp * av_q2d(stream->time_base) -
+                                  m_player->startTimeOffset)
+                : -1.0;
+            const double speed = m_player->GetPlaybackSpeed();
+
+            if (packetPts >= 0.0 && (speed >= 4.0 || discardingForPlaybackClock))
+            {
+                const double clockTarget = m_player->GetPlaybackClockTarget();
+                const double allowedLag = std::max(0.15, speed * 0.05);
+                const bool packetIsLate = speed >= 4.0 &&
+                                          packetPts < clockTarget - allowedLag;
+                if (packetIsLate)
+                {
+                    // Skip compressed packets while behind. Once caught up we
+                    // resume only at a forward keyframe, so decoder references
+                    // remain valid and playback can never loop to an older GOP.
+                    discardingForPlaybackClock = true;
+                }
+
+                if (discardingForPlaybackClock)
+                {
+                    if ((m_player->packet->flags & AV_PKT_FLAG_KEY) == 0)
+                    {
+                        av_packet_unref(m_player->packet);
+                        continue;
+                    }
+                    avcodec_flush_buffers(m_player->codecContext);
+                    discardingForPlaybackClock = false;
+                }
+            }
+
             ret = avcodec_send_packet(m_player->codecContext, m_player->packet);
             av_packet_unref(m_player->packet);
             if (ret < 0)
@@ -337,6 +374,11 @@ bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, in
         }
         else
         {
+            if (discardingForPlaybackClock)
+            {
+                av_packet_unref(m_player->packet);
+                continue;
+            }
             for (auto& track : m_player->audioTracks)
             {
                 if (m_player->packet->stream_index == track->streamIndex)

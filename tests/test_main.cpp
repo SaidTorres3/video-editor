@@ -124,7 +124,7 @@ static bool GenerateTestVideo(const std::wstring& outputPath, const std::wstring
         L"-f lavfi -i \"sine=frequency=440:sample_rate=44100:duration=5\" "
         L"-f lavfi -i \"sine=frequency=880:sample_rate=44100:duration=5\" "
         L"-map 0:v -map 1:a -map 2:a "
-        L"-c:v libx264 -preset ultrafast -crf 23 "
+        L"-c:v libx264 -preset ultrafast -crf 23 -g 30 -keyint_min 30 -sc_threshold 0 "
         L"-c:a aac -b:a 128k "
         L"-shortest \"" + outputPath + L"\"";
 

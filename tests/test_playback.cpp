@@ -92,6 +92,20 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "10x playback should not run substantially ahead of its wall clock");
     });
 
+    suite.addTest("PlaybackSpeed_5xSustainsRequestedRate", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        player.SetPlaybackSpeed(5.0);
+        player.Play();
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        player.Pause();
+
+        TEST_ASSERT_GT(player.GetCurrentTime(), 3.2,
+                       "5x playback should advance about four video seconds in 0.8 real seconds");
+        TEST_ASSERT_LT(player.GetCurrentTime(), 4.8,
+                       "5x playback should not run materially ahead of its wall clock");
+    });
+
     suite.addTest("Play_StartsPlayback", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);

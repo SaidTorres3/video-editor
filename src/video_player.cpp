@@ -55,6 +55,8 @@ VideoPlayer::VideoPlayer(HWND parent)
             m_playbackSeekExact(true),
             m_playbackSpeed(1.0),
             m_playbackSpeedChangePending(false),
+            m_playbackClockStartPts(0.0),
+            m_playbackClockStartNs(0),
             m_speedOverlayDeadline(0),
             seekRefineThreadExit(false), seekRefinePending(false), seekRefineTarget(0.0),
             seekRefineGeneration(0)
@@ -316,6 +318,8 @@ bool VideoPlayer::Play()
 
     masterStartPts = currentPts;
     masterStartTime = std::chrono::high_resolution_clock::now();
+    m_playbackClockStartPts.store(currentPts, std::memory_order_relaxed);
+    m_playbackClockStartNs.store(0, std::memory_order_release);
 
     // Keep roughly 350 ms of decoded video ready, while capping worst-case
     // memory usage (4 bytes/pixel is a conservative estimate for CPU frames).
@@ -361,6 +365,11 @@ void VideoPlayer::Pause()
                     playbackThread.join();
             }
         }
+
+        // High-speed playback may temporarily discard non-reference frames.
+        // Restore normal decoding before any paused seek or frame stepping.
+        if (codecContext)
+            codecContext->skip_frame = AVDISCARD_DEFAULT;
 
         // The presentation thread starts audio after the video buffer has
         // prefilled. Stop it only after both playback threads are shut down so
@@ -651,6 +660,27 @@ void VideoPlayer::SetPlaybackSpeed(double speed)
     m_speedOverlayDeadline.store(GetTickCount64() + 4000, std::memory_order_release);
     if (videoWindow)
         InvalidateRect(videoWindow, nullptr, FALSE);
+}
+
+void VideoPlayer::ResetPlaybackClock(double pts)
+{
+    const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    m_playbackClockStartPts.store(pts, std::memory_order_relaxed);
+    m_playbackClockStartNs.store(nowNs, std::memory_order_release);
+}
+
+double VideoPlayer::GetPlaybackClockTarget() const
+{
+    const int64_t startNs = m_playbackClockStartNs.load(std::memory_order_acquire);
+    const double startPts = m_playbackClockStartPts.load(std::memory_order_relaxed);
+    if (startNs == 0)
+        return startPts;
+
+    const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const double elapsed = std::max<int64_t>(0, nowNs - startNs) / 1000000000.0;
+    return startPts + elapsed * GetPlaybackSpeed();
 }
 
 bool VideoPlayer::IsPlaybackSpeedOverlayVisible() const
@@ -2295,6 +2325,8 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
             m_audioPlayer->StopThread(true);
             masterStartPts = currentPts;
             masterStartTime = std::chrono::high_resolution_clock::now();
+            m_playbackClockStartPts.store(currentPts, std::memory_order_relaxed);
+            m_playbackClockStartNs.store(0, std::memory_order_release);
             m_playbackSeekInProgress.store(false, std::memory_order_release);
             playbackBufferCondition.notify_all();
             continue;
@@ -2315,6 +2347,12 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
 
         BufferedPlaybackFrame bufferedFrame;
         bufferedFrame.frame = av_frame_alloc();
+        // At high playback rates, avoid decoding disposable inter-frames that
+        // cannot all be displayed anyway. This raises throughput without
+        // seeking backward to a keyframe or risking repeated GOP playback.
+        codecContext->skip_frame = GetPlaybackSpeed() >= 4.0
+            ? AVDISCARD_NONREF
+            : AVDISCARD_DEFAULT;
         if (!bufferedFrame.frame ||
             !m_decoder->DecodeNextBufferedFrame(bufferedFrame.frame,
                                                 bufferedFrame.pts,
@@ -2438,13 +2476,33 @@ void VideoPlayer::PlaybackThreadFunction()
             startPts = currentPts;
             masterStartTime = startTime;
             masterStartPts = startPts;
+            ResetPlaybackClock(startPts);
             m_audioPlayer->StartThread();
             clockStarted = true;
         }
 
-        const double target = bufferedFrame.pts - startPts;
-        const double elapsed = std::chrono::duration<double>(
-            std::chrono::high_resolution_clock::now() - startTime).count();
+        // A speed change alters the relationship between media timestamps and
+        // wall-clock time. Re-anchor both clocks at the last presented frame so
+        // the new rate applies only from this point forward (and so audio does
+        // not reinterpret samples already submitted at the previous rate).
+        if (m_playbackSpeedChangePending.exchange(false, std::memory_order_acq_rel))
+        {
+            m_audioPlayer->StopThread(true);
+            startTime = std::chrono::high_resolution_clock::now();
+            lastPresentedAt = startTime;
+            startPts = currentPts;
+            masterStartTime = startTime;
+            masterStartPts = startPts;
+            ResetPlaybackClock(startPts);
+            if (playbackThreadRunning && isPlaying)
+                m_audioPlayer->StartThread();
+        }
+
+        const double speed = GetPlaybackSpeed();
+        const auto now = std::chrono::high_resolution_clock::now();
+        const double elapsed = std::chrono::duration<double>(now - startTime).count();
+
+        const double target = (bufferedFrame.pts - startPts) / speed;
         const double delay = target - elapsed;
         if (delay > 0.0)
         {
