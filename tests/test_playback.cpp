@@ -38,6 +38,77 @@ void RegisterPlaybackTests(TestSuite& suite) {
         TEST_ASSERT(!player.IsPlaying(), "Should not be playing after pause");
     });
 
+    suite.addTest("PauseResume_RestartsPlayback", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        TEST_ASSERT(player.Play(), "Initial play should succeed");
+
+        auto firstDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (player.GetCurrentTime() < 0.1 &&
+               std::chrono::steady_clock::now() < firstDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        player.Pause();
+        const double pausedAt = player.GetCurrentTime();
+        TEST_ASSERT(!player.IsPlaying(), "Player should be paused before resuming");
+        TEST_ASSERT(player.Play(), "Play should succeed after pausing");
+
+        auto resumeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (player.GetCurrentTime() <= pausedAt + 0.05 &&
+               std::chrono::steady_clock::now() < resumeDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        TEST_ASSERT_GT(player.GetCurrentTime(), pausedAt + 0.05,
+                       "Playback should advance after pause and resume");
+        player.Pause();
+    });
+
+    suite.addTest("SeekImmediatePauseResume_DoesNotCrash", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+
+        for (int iteration = 0; iteration < 5; ++iteration) {
+            TEST_ASSERT(player.Play(), "Play should succeed before seek");
+            player.SeekWhilePlaying(1.0 + iteration * 0.5, false);
+            player.Pause();
+            TEST_ASSERT(!player.IsPlaying(), "Immediate pause should finish cleanly");
+        }
+
+        TEST_ASSERT(player.Play(), "Playback should restart after seek/pause races");
+        const double resumedAt = player.GetCurrentTime();
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (player.GetCurrentTime() <= resumedAt + 0.05 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        TEST_ASSERT_GT(player.GetCurrentTime(), resumedAt + 0.05,
+                       "Playback should advance after immediate seek/pause/resume");
+        player.Pause();
+    });
+
+    suite.addTest("PlaybackBuffer_PrefillsAndStaysBounded", []() {
+        VideoPlayer player(g_testHwnd);
+        player.LoadVideo(g_testVideoPath);
+        player.Play();
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (player.GetBufferedPlaybackFrameCount() == 0 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        const size_t capacity = player.GetPlaybackBufferCapacity();
+        const size_t buffered = player.GetBufferedPlaybackFrameCount();
+        TEST_ASSERT_GE(capacity, static_cast<size_t>(3),
+                       "Playback buffer should retain decoding headroom");
+        TEST_ASSERT(capacity <= static_cast<size_t>(24),
+                    "Playback buffer must have a bounded frame count");
+        TEST_ASSERT_GT(buffered, static_cast<size_t>(0),
+                       "Playback should decode frames ahead of presentation");
+        TEST_ASSERT(buffered <= capacity,
+                    "Playback buffer must never exceed its capacity");
+        player.Pause();
+    });
+
     suite.addTest("SeekWhilePlaying_ReachesTarget", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);
@@ -391,7 +462,10 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.PlayClips(segments);
 
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (player.GetCurrentTime() < 0.9 && std::chrono::steady_clock::now() < deadline) {
+        // Keep waiting at the exact boundary too. Depending on FFmpeg's build
+        // and timestamp rounding, the exact seek may first publish 0.9 before
+        // the next buffered frame advances beyond it.
+        while (player.GetCurrentTime() <= 0.9 && std::chrono::steady_clock::now() < deadline) {
             MSG msg;
             while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
                 TranslateMessage(&msg);

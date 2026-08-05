@@ -263,6 +263,14 @@ void AudioPlayer::CleanupTracks() {
 
 void AudioPlayer::StartThread() {
     std::lock_guard<std::mutex> lifecycleLock(m_threadLifecycleMutex);
+    // StartThread can be reached by the presentation thread while an
+    // asynchronous seek is stopping/restarting playback. Never overwrite a
+    // live std::thread: assigning to a joinable thread calls std::terminate.
+    if (m_player->audioThreadRunning)
+        return;
+    if (m_player->audioThread.joinable())
+        m_player->audioThread.join();
+
     if (!m_player->audioTracks.empty() && m_player->audioInitialized)
     {
         HRESULT hr = m_player->audioClient->Start();
