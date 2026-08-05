@@ -223,7 +223,6 @@ bool AudioPlayer::InitializeTracks() {
                 track->name = title->value;
             else
                 track->name = "Audio Track " + std::to_string(m_player->audioTracks.size() + 1);
-
             m_player->audioTracks.push_back(std::move(track));
         }
     }
@@ -268,8 +267,21 @@ void AudioPlayer::CleanupTracks() {
 
 void AudioPlayer::StartThread() {
     std::lock_guard<std::mutex> lifecycleLock(m_threadLifecycleMutex);
+    // StartThread can be reached by the presentation thread while an
+    // asynchronous seek is stopping/restarting playback. Never overwrite a
+    // live std::thread: assigning to a joinable thread calls std::terminate.
+    if (m_player->audioThreadRunning)
+        return;
+    if (m_player->audioThread.joinable())
+        m_player->audioThread.join();
+
     if (!m_player->audioTracks.empty() && m_player->audioInitialized)
     {
+        HRESULT hr = m_player->audioClient->Start();
+        if (FAILED(hr))
+        {
+            // Continue without audio or handle error appropriately
+        }
         m_framesWritten = 0;
         m_player->audioThreadRunning = true;
         m_player->audioThread = std::thread(&AudioPlayer::AudioThreadFunction, this);

@@ -94,12 +94,16 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
         }
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
+        g_cutSegments.clear();
+        g_selectedCutSegment = -1;
+        RefreshCutSegmentList();
         UpdateCutInfoLabel(hwnd);
         UpdateCutTimeEdits();
 
         UpdateControls();
         UpdateTimeline();
         TriggerThumbnailPreCache(g_videoPlayer->GetDuration());
+        RefreshAudioWaveformPreview();
 
         // Set bitrate field to the video's average bitrate
         if (g_hEditBitrate && g_videoPlayer && g_videoPlayer->formatContext)

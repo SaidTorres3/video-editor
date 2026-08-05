@@ -1,5 +1,10 @@
 #include "test_framework.h"
+#include "../src/ten_vad_embedded.h"
 #include "../src/video_player.h"
+#include "../src/options_window.h"
+#include "../src/timeline.h"
+
+#include <array>
 
 // ============================================================================
 // Integration tests for audio track management
@@ -8,7 +13,48 @@
 extern std::wstring g_testVideoPath;
 extern HWND g_testHwnd;
 
+namespace
+{
+std::size_t CountLegacyTenVadTempDirectories()
+{
+    wchar_t tempPath[MAX_PATH] = {};
+    if (GetTempPathW(MAX_PATH, tempPath) == 0)
+        return 0;
+
+    const std::wstring pattern =
+        std::wstring(tempPath) + L"VideoEditor-ten-vad-*";
+    WIN32_FIND_DATAW findData = {};
+    HANDLE find = FindFirstFileW(pattern.c_str(), &findData);
+    if (find == INVALID_HANDLE_VALUE)
+        return 0;
+
+    std::size_t count = 0;
+    do
+    {
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            ++count;
+    } while (FindNextFileW(find, &findData));
+    FindClose(find);
+    return count;
+}
+} // namespace
+
 void RegisterAudioTests(TestSuite& suite) {
+
+    suite.addTest("ExportMasterGain_DbConversion", []() {
+        const int savedGainDb = g_exportMasterGainDb;
+        g_exportMasterGainDb = 0;
+        const float unity = GetExportMasterGainLinear();
+        g_exportMasterGainDb = 6;
+        const float plusSix = GetExportMasterGainLinear();
+        g_exportMasterGainDb = -6;
+        const float minusSix = GetExportMasterGainLinear();
+        g_exportMasterGainDb = savedGainDb;
+
+        TEST_ASSERT_NEAR(unity, 1.0f, 0.001f, "0 dB should preserve the signal");
+        TEST_ASSERT_NEAR(plusSix, 1.995f, 0.002f, "+6 dB should nearly double amplitude");
+        TEST_ASSERT_NEAR(minusSix, 0.501f, 0.002f, "-6 dB should nearly halve amplitude");
+    });
 
     suite.addTest("AudioTrack_DefaultUnmuted", []() {
         VideoPlayer player(g_testHwnd);
@@ -169,5 +215,39 @@ void RegisterAudioTests(TestSuite& suite) {
         player.SetMasterVolume(1.0f);
         player.SetMasterVolume(2.0f);
         TEST_ASSERT(true, "SetMasterVolume should not crash");
+    });
+
+    suite.addTest("EmbeddedTenVad_LoadsAndProcesses", []() {
+        const std::size_t tempDirectoryCountBefore =
+            CountLegacyTenVadTempDirectories();
+        EmbeddedTenVadHandle vad = nullptr;
+        TEST_ASSERT(EmbeddedTenVadCreate(&vad, 256, 0.70f),
+                    "Embedded TEN VAD resource should load");
+
+        std::array<std::int16_t, 256> silence{};
+        float probability = -1.0f;
+        int speechFlag = -1;
+        TEST_ASSERT(EmbeddedTenVadProcess(
+                        vad, silence.data(), silence.size(), &probability,
+                        &speechFlag),
+                    "Embedded TEN VAD should process a frame");
+        TEST_ASSERT(probability >= 0.0f && probability <= 1.0f,
+                    "TEN VAD probability should be normalized");
+        TEST_ASSERT(speechFlag == 0 || speechFlag == 1,
+                    "TEN VAD speech flag should be binary");
+
+        EmbeddedTenVadDestroy(&vad);
+        TEST_ASSERT(vad == nullptr,
+                     "TEN VAD destroy should clear the handle");
+        ShutdownEmbeddedTenVadRuntime();
+        TEST_ASSERT_EQ(CountLegacyTenVadTempDirectories(),
+                       tempDirectoryCountBefore,
+                       "TEN VAD should not extract a directory into %TEMP%");
+    });
+
+    suite.addTest("AudioWaveform_ProgressQuery", []() {
+        int progress = GetAudioWaveformProgress();
+        TEST_ASSERT(progress >= -1 && progress <= 100,
+                    "GetAudioWaveformProgress should return valid progress value (-1 to 100)");
     });
 }

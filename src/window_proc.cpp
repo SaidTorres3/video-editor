@@ -37,7 +37,7 @@ void UpdateCutTimeEdits();
 
 
 extern VideoPlayer *g_videoPlayer;
-extern HWND g_hEditStartTime, g_hEditEndTime, g_hListBoxAudioTracks, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize;
+extern HWND g_hEditStartTime, g_hEditEndTime, g_hListBoxAudioTracks, g_hListBoxCutSegments, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize, g_hStatusText;
 extern double g_cutStartTime;
 extern double g_cutEndTime;
 extern bool g_lastOperationWasExport;
@@ -81,7 +81,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         switch (LOWORD(wParam))
         {
         case 1001: // ID_BUTTON_OPEN
-            OpenVideoFile(hwnd);
+            if (!g_isExporting)
+                OpenVideoFile(hwnd);
             break;
         case 1002: // ID_BUTTON_PLAY
             if (g_videoPlayer && g_videoPlayer->IsLoaded())
@@ -113,14 +114,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             RepositionControls(hwnd);
             UpdateControls();
             break;
-        case 1030: // ID_BUTTON_SPEED_DOWN
+        case 1040: // ID_BUTTON_SPEED_DOWN
             if (g_videoPlayer && g_videoPlayer->IsLoaded())
             {
                 g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() - 0.1);
                 UpdateControls();
             }
             break;
-        case 1031: // ID_BUTTON_SPEED_UP
+        case 1041: // ID_BUTTON_SPEED_UP
             if (g_videoPlayer && g_videoPlayer->IsLoaded())
             {
                 g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() + 0.1);
@@ -142,8 +143,24 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case 1028: // ID_BUTTON_PLAY_END_CLIP
             OnPlayEndClipClicked(hwnd);
             break;
+        case 1030: // ID_BUTTON_ADD_CLIP
+            OnAddClipClicked(hwnd);
+            break;
+        case 1031: // ID_BUTTON_CLEAR_CLIPS
+            OnClearClipsClicked(hwnd);
+            break;
+        case 1033: // ID_BUTTON_UPDATE_CLIP
+            OnUpdateClipClicked(hwnd);
+            break;
+        case 1034: // ID_BUTTON_REMOVE_CLIP
+            OnRemoveClipClicked(hwnd);
+            break;
+        case 1035: // ID_BUTTON_PLAY_ALL_CLIPS
+            OnPlayAllClipsClicked(hwnd);
+            break;
         case 1013: // ID_BUTTON_CUT
-            if (g_cutStartTime < 0 && g_cutEndTime < 0)
+            if ((!g_enableMultiClipEditing || g_cutSegments.empty()) &&
+                g_cutStartTime < 0 && g_cutEndTime < 0)
                 OnExportClicked(hwnd);
             else
                 OnCutClicked(hwnd);
@@ -256,6 +273,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             OnAudioTrackSelectionChanged();
         }
+        else if (HIWORD(wParam) == LBN_SELCHANGE && (HWND)lParam == g_hListBoxCutSegments)
+        {
+            OnCutSegmentSelectionChanged(hwnd);
+        }
         break;
 
     case WM_CONTEXTMENU:
@@ -341,7 +362,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         HDROP hDrop = (HDROP)wParam;
         wchar_t filePath[MAX_PATH];
-        if (DragQueryFileW(hDrop, 0, filePath, MAX_PATH))
+        if (!g_isExporting && DragQueryFileW(hDrop, 0, filePath, MAX_PATH))
         {
             LoadVideoFile(hwnd, std::wstring(filePath));
         }
@@ -378,8 +399,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
         case (WM_APP + 1): // WM_APP_CUT_DONE
         {
+            g_isExporting = false;
             CloseProgressWindow();
-            EnableWindow(hwnd, TRUE);
+            UpdateControls();
             bool success = wParam != 0;
             if (success && g_autoUpload && g_uploadSuccess) {
                 std::wstring m = g_lastOperationWasExport ? L"Video successfully exported." : L"Video successfully cut and saved.";
@@ -438,6 +460,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_CLOSE:
+        if (g_isExporting) {
+            g_cancelExport = true;
+            SetWindowTextW(g_hStatusText, L"Canceling export before closing...");
+            UpdateProgressStatus(L"Canceling export...");
+            return 0;
+        }
         DestroyWindow(hwnd);
         break;
 

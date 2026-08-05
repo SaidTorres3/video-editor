@@ -273,3 +273,80 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
     }
     return false; // Should never reach here
 }
+
+bool VideoDecoder::DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, int64_t& frameNumber) {
+    if (!m_player->isLoaded || !outputFrame)
+        return false;
+
+    std::unique_lock<std::mutex> lock(m_player->decodeMutex);
+    av_frame_unref(outputFrame);
+
+    while (m_player->playbackThreadRunning)
+    {
+        int ret = av_read_frame(m_player->formatContext, m_player->packet);
+        if (ret < 0)
+            return false;
+
+        if (m_player->packet->stream_index == m_player->videoStreamIndex)
+        {
+            ret = avcodec_send_packet(m_player->codecContext, m_player->packet);
+            av_packet_unref(m_player->packet);
+            if (ret < 0)
+                continue;
+
+            while (true)
+            {
+                ret = avcodec_receive_frame(m_player->codecContext, m_player->hwFrame);
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                    break;
+                if (ret < 0)
+                    return false;
+
+                AVFrame* decodedFrame = m_player->hwFrame;
+                if (m_player->useHwAccel &&
+                    m_player->hwFrame->format == m_player->hwPixelFormat)
+                {
+                    if (av_hwframe_transfer_data(outputFrame, m_player->hwFrame, 0) < 0)
+                    {
+                        av_frame_unref(m_player->hwFrame);
+                        return false;
+                    }
+                    av_frame_copy_props(outputFrame, m_player->hwFrame);
+                    decodedFrame = outputFrame;
+                }
+                else if (av_frame_ref(outputFrame, m_player->hwFrame) < 0)
+                {
+                    av_frame_unref(m_player->hwFrame);
+                    return false;
+                }
+
+                AVStream* stream = m_player->formatContext->streams[m_player->videoStreamIndex];
+                if (decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE)
+                    pts = decodedFrame->best_effort_timestamp * av_q2d(stream->time_base);
+                else if (decodedFrame->pts != AV_NOPTS_VALUE)
+                    pts = decodedFrame->pts * av_q2d(stream->time_base);
+                else
+                    pts = m_player->currentPts +
+                          (m_player->frameRate > 0.0 ? 1.0 / m_player->frameRate : 1.0 / 30.0);
+
+                pts = std::max(0.0, pts - m_player->startTimeOffset);
+                frameNumber = static_cast<int64_t>(pts * m_player->frameRate + 0.5);
+                av_frame_unref(m_player->hwFrame);
+                return true;
+            }
+        }
+        else
+        {
+            for (auto& track : m_player->audioTracks)
+            {
+                if (m_player->packet->stream_index == track->streamIndex)
+                {
+                    m_player->m_audioPlayer->ProcessFrame(m_player->packet);
+                    break;
+                }
+            }
+            av_packet_unref(m_player->packet);
+        }
+    }
+    return false;
+}

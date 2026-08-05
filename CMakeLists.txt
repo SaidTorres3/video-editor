@@ -10,7 +10,34 @@ if(POLICY CMP0111)
     cmake_policy(SET CMP0111 NEW)
 endif()
 
-project(VideoEditor CXX)
+project(VideoEditor C CXX)
+
+# Ultra-light neural VAD. TEN publishes an import library and DLL for Windows,
+# not a static archive. Dynamic builds keep the DLL beside the executable.
+# Static builds embed the DLL as a resource and map it directly from memory so
+# the single-file release never extracts files into %TEMP%.
+set(TEN_VAD_ROOT "${CMAKE_SOURCE_DIR}/vendor/ten-vad")
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "TEN VAD is currently vendored for Windows x64 only")
+endif()
+set(TEN_VAD_DLL "${TEN_VAD_ROOT}/lib/Windows/x64/ten_vad.dll")
+if(NOT EXISTS "${TEN_VAD_DLL}")
+    message(FATAL_ERROR "TEN VAD Windows x64 binaries are missing")
+endif()
+
+set(TEN_VAD_SOURCES src/ten_vad_embedded.cpp)
+if(USE_STATIC_FFMPEG)
+    file(TO_CMAKE_PATH "${TEN_VAD_DLL}" TEN_VAD_DLL_RC_PATH)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/src/ten_vad_resource.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ten_vad_resource.rc"
+        @ONLY
+    )
+    list(APPEND TEN_VAD_SOURCES
+        vendor/MemoryModule/MemoryModule.c
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ten_vad_resource.rc")
+endif()
 
 if(USE_STATIC_FFMPEG)
     message(STATUS "🔗 Linking FFmpeg statically")
@@ -126,14 +153,19 @@ add_executable(VideoEditor WIN32
     src/catbox_upload.cpp
     src/debug_log.cpp
     src/upload_dialog.cpp
+    ${TEN_VAD_SOURCES}
 )
 
 # ==== INCLUDE DIRECTORIES ====
 target_include_directories(VideoEditor PRIVATE
     src
+    vendor/MemoryModule
     ${FFMPEG_INCLUDE_DIR}
     ${RNNOISE_INCLUDE_DIR}
 )
+if(USE_STATIC_FFMPEG)
+    target_compile_definitions(VideoEditor PRIVATE TEN_VAD_IN_MEMORY)
+endif()
 
 # ==== TARGET-SPECIFIC OPTIONS ====
 if(MSVC AND USE_STATIC_FFMPEG)
@@ -205,7 +237,7 @@ if(MSVC AND USE_STATIC_FFMPEG)
     )
 endif()
 
-# ==== COPY FFmpeg DLLS (dynamic build) ====
+# ==== COPY FFmpeg & TEN VAD DLLS (dynamic build) ====
 if(WIN32 AND NOT USE_STATIC_FFMPEG)
     file(GLOB FFMPEG_DLLS 
         "${FFMPEG_ROOT}/bin/avcodec-*.dll"
@@ -215,8 +247,8 @@ if(WIN32 AND NOT USE_STATIC_FFMPEG)
         "${FFMPEG_ROOT}/bin/swresample-*.dll"
     )
     add_custom_command(TARGET VideoEditor POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "$<TARGET_FILE_DIR:VideoEditor>"
-        COMMENT "Copying dynamic FFmpeg DLLs..."
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "${TEN_VAD_DLL}" "$<TARGET_FILE_DIR:VideoEditor>"
+        COMMENT "Copying dynamic FFmpeg and TEN VAD DLLs..."
     )
 endif()
 
@@ -244,6 +276,7 @@ if(BUILD_TESTS)
         src/catbox_upload.cpp
         src/debug_log.cpp
         src/upload_dialog.cpp
+        ${TEN_VAD_SOURCES}
     )
 
     # Test source files
@@ -263,9 +296,13 @@ if(BUILD_TESTS)
 
     target_include_directories(VideoEditorTests PRIVATE
         src
+        vendor/MemoryModule
         ${FFMPEG_INCLUDE_DIR}
         ${RNNOISE_INCLUDE_DIR}
     )
+    if(USE_STATIC_FFMPEG)
+        target_compile_definitions(VideoEditorTests PRIVATE TEN_VAD_IN_MEMORY)
+    endif()
 
     # Same compile/link options as main executable
     if(MSVC AND USE_STATIC_FFMPEG)
@@ -306,8 +343,8 @@ if(BUILD_TESTS)
     # Copy DLLs for tests too (dynamic build)
     if(WIN32 AND NOT USE_STATIC_FFMPEG)
         add_custom_command(TARGET VideoEditorTests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "$<TARGET_FILE_DIR:VideoEditorTests>"
-            COMMENT "Copying dynamic FFmpeg DLLs for tests..."
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "${TEN_VAD_DLL}" "$<TARGET_FILE_DIR:VideoEditorTests>"
+            COMMENT "Copying dynamic FFmpeg and TEN VAD DLLs for tests..."
         )
     endif()
 endif()

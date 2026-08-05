@@ -44,11 +44,13 @@ VideoPlayer::VideoPlayer(HWND parent)
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioOutputIsFloat(false), audioThreadRunning(false),
       playbackThreadRunning(false),
+      playbackBufferCapacity(3), playbackPrebufferFrames(2), playbackDecodeEof(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
             dropAudioDuringStepping(false),
             m_decoderOutOfSync(false),
             m_playbackSeekPending(false),
+            m_playbackSeekInProgress(false),
             m_playbackSeekTarget(0.0),
             m_playbackSeekExact(true),
             m_playbackSpeed(1.0),
@@ -315,8 +317,18 @@ bool VideoPlayer::Play()
     masterStartPts = currentPts;
     masterStartTime = std::chrono::high_resolution_clock::now();
 
-    m_audioPlayer->StartThread();
+    // Keep roughly 350 ms of decoded video ready, while capping worst-case
+    // memory usage (4 bytes/pixel is a conservative estimate for CPU frames).
+    const size_t desiredFrames = static_cast<size_t>(std::clamp(
+        static_cast<int>(std::ceil(frameRate * 0.35)), 3, 24));
+    const size_t bytesPerFrame = std::max<size_t>(
+        1, static_cast<size_t>(frameWidth) * static_cast<size_t>(frameHeight) * 4);
+    const size_t memoryLimitedFrames = std::max<size_t>(3, (128ull * 1024ull * 1024ull) / bytesPerFrame);
+    playbackBufferCapacity = std::min(desiredFrames, memoryLimitedFrames);
+    playbackPrebufferFrames = std::min(playbackBufferCapacity, std::max<size_t>(2, playbackBufferCapacity / 2));
+    ClearPlaybackBuffer();
     playbackThreadRunning = true;
+    playbackDecodeThread = std::thread(&VideoPlayer::PlaybackDecodeThreadFunction, this);
     playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
     return true;
 }
@@ -329,14 +341,18 @@ void VideoPlayer::Pause()
         clipPreviewActive = false;
         m_playbackSeekPending.store(false, std::memory_order_release);
 
-        // Reset WASAPI so queued samples from before the pause cannot leak
-        // into the next Play() and make the resumed audio sound dirty.
-        m_audioPlayer->StopThread(true);
-
         if (playbackThreadRunning)
         {
             playbackThreadRunning = false;
             playbackWakeCondition.notify_all();
+            playbackBufferCondition.notify_all();
+            if (playbackDecodeThread.joinable())
+            {
+                if (std::this_thread::get_id() == playbackDecodeThread.get_id())
+                    playbackDecodeThread.detach();
+                else
+                    playbackDecodeThread.join();
+            }
             if (playbackThread.joinable())
             {
                 if (std::this_thread::get_id() == playbackThread.get_id())
@@ -345,6 +361,14 @@ void VideoPlayer::Pause()
                     playbackThread.join();
             }
         }
+
+        // The presentation thread starts audio after the video buffer has
+        // prefilled. Stop it only after both playback threads are shut down so
+        // it cannot race this pause and launch a new audio thread behind us.
+        // Leaving the old std::thread joinable makes the next Play() terminate
+        // the process when AudioPlayer::StartThread assigns its replacement.
+        m_audioPlayer->StopThread();
+
         // When paused, pre-decode the previous frame so the first ',' is instant
         RequestBwdPrefetch(currentFrame - 1);
     }
@@ -354,6 +378,7 @@ void VideoPlayer::Stop()
 {
     clipPreviewActive = false;
     Pause();
+    ClearPlaybackBuffer();
     CancelPendingSeekRefinement();
     currentFrame = 0;
     currentPts = 0.0;
@@ -485,10 +510,53 @@ void VideoPlayer::PlayClip(double startTime, double endTime)
     if (isPlaying)
         Pause();
 
+    clipPreviewSegments.clear();
+    clipPreviewSegmentIndex = 0;
     clipPreviewEndTime = endTime;
     clipPreviewActive = true;
     SeekToTimeExact(startTime);
     Play();
+}
+
+void VideoPlayer::PlayClips(const std::vector<ClipSegment>& segments)
+{
+    if (!isLoaded)
+        return;
+
+    std::vector<ClipSegment> validSegments;
+    for (auto segment : segments) {
+        segment.start = std::clamp(segment.start, 0.0, duration);
+        segment.end = std::clamp(segment.end, 0.0, duration);
+        if (segment.end > segment.start)
+            validSegments.push_back(segment);
+    }
+    std::sort(validSegments.begin(), validSegments.end(), [](const ClipSegment& a, const ClipSegment& b) {
+        return a.start < b.start;
+    });
+    if (validSegments.empty())
+        return;
+
+    if (isPlaying)
+        Pause();
+
+    clipPreviewSegments = std::move(validSegments);
+    clipPreviewSegmentIndex = 0;
+    clipPreviewEndTime = clipPreviewSegments.front().end;
+    clipPreviewActive = true;
+    SeekToTimeExact(clipPreviewSegments.front().start);
+    Play();
+}
+
+bool VideoPlayer::AdvanceClipPreview()
+{
+    if (!clipPreviewActive || clipPreviewSegments.empty() ||
+        clipPreviewSegmentIndex + 1 >= clipPreviewSegments.size())
+        return false;
+
+    ++clipPreviewSegmentIndex;
+    clipPreviewEndTime = clipPreviewSegments[clipPreviewSegmentIndex].end;
+    SeekWhilePlaying(clipPreviewSegments[clipPreviewSegmentIndex].start, true);
+    return true;
 }
 
 void VideoPlayer::CancelClipPreview()
@@ -624,6 +692,8 @@ void VideoPlayer::StepFrame(int direction)
                 m_bwdPrefetch->stepTargetFrame = accumulatedTarget;
             }
         }
+        m_audioPlayer->StopThread();
+        ClearPlaybackBuffer();
         if (accumulatedTarget >= 0)
         {
             RequestBwdPrefetch(accumulatedTarget);
@@ -1078,6 +1148,7 @@ void VideoPlayer::SeekWhilePlaying(double seconds, bool exact)
         m_playbackSeekPending.store(true, std::memory_order_release);
     }
     playbackWakeCondition.notify_all();
+    playbackBufferCondition.notify_all();
 }
 
 bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine,
@@ -1233,6 +1304,12 @@ double VideoPlayer::GetDuration() const
 double VideoPlayer::GetCurrentTime() const
 {
     return currentPts;
+}
+
+size_t VideoPlayer::GetBufferedPlaybackFrameCount() const
+{
+    std::lock_guard<std::mutex> lock(playbackBufferMutex);
+    return playbackFrameBuffer.size();
 }
 
 bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vector<uint8_t>& pixels) const
@@ -2000,9 +2077,11 @@ void VideoPlayer::OnTimer()
         m_decoder->DecodeNextFrame(true);
         if (clipPreviewActive && currentPts >= clipPreviewEndTime)
         {
-            clipPreviewActive = false;
-            Pause();
-            UpdateControls();
+            if (!AdvanceClipPreview()) {
+                clipPreviewActive = false;
+                Pause();
+                UpdateControls();
+            }
         }
     }
 }
@@ -2165,38 +2244,36 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
         }
         track->voiceIsolationInputBuffer.clear();
         track->voiceIsolationMonoBuffer.clear();
-        track->voiceIsolationProcessedBuffer.clear();
-        track->voiceIsolationSampleQueue.clear();
     }
 }
 
-void VideoPlayer::PlaybackThreadFunction()
+void VideoPlayer::ClearPlaybackBuffer()
 {
-    auto startTime = masterStartTime;
-    double startPts = masterStartPts;
-    auto lastPresentedAt = startTime;
-    const double frameDur = (frameRate > 0.0) ? (1.0 / frameRate) : (1.0 / 30.0);
+    {
+        std::lock_guard<std::mutex> lock(playbackBufferMutex);
+        playbackFrameBuffer.clear();
+        playbackDecodeEof = false;
+    }
+    playbackBufferCondition.notify_all();
+}
 
+void VideoPlayer::PlaybackDecodeThreadFunction()
+{
     while (playbackThreadRunning)
     {
-        if (m_playbackSpeedChangePending.exchange(false, std::memory_order_acq_rel))
+        if (m_playbackSeekPending.load(std::memory_order_acquire))
         {
+            // Publish the transition before clearing the pending flag so the
+            // presentation thread can never consume an old queued frame in
+            // the small hand-off window.
+            m_playbackSeekInProgress.store(true, std::memory_order_release);
+            if (!m_playbackSeekPending.exchange(false, std::memory_order_acq_rel))
+            {
+                m_playbackSeekInProgress.store(false, std::memory_order_release);
+                continue;
+            }
             m_audioPlayer->StopThread(true);
-            startTime = std::chrono::high_resolution_clock::now();
-            lastPresentedAt = startTime;
-            startPts = currentPts;
-            masterStartTime = startTime;
-            masterStartPts = startPts;
-            if (playbackThreadRunning && isPlaying)
-                m_audioPlayer->StartThread();
-            continue;
-        }
-
-        if (m_playbackSeekPending.exchange(false, std::memory_order_acq_rel))
-        {
-            // Stop only the audio consumer. The video decoder stays on this
-            // thread, so the UI never waits for thread teardown/recreation.
-            m_audioPlayer->StopThread(true);
+            ClearPlaybackBuffer();
 
             do
             {
@@ -2207,124 +2284,201 @@ void VideoPlayer::PlaybackThreadFunction()
                     target = m_playbackSeekTarget.load(std::memory_order_acquire);
                     exact = m_playbackSeekExact.load(std::memory_order_acquire);
                 }
-                SeekToTimeInternal(
-                    target,
-                    exact ? INT_MAX : 12,
-                    false,
-                    exact,
-                    true,
-                    true,
-                    exact);
+                SeekToTimeInternal(target, exact ? INT_MAX : 12, false, exact,
+                                   true, true, exact);
             }
             while (m_playbackSeekPending.exchange(false, std::memory_order_acq_rel));
+
+            // A presentation iteration that began just before seekInProgress
+            // was published may have started audio after the first StopThread.
+            // Close that race before allowing the new post-seek clock to run.
+            m_audioPlayer->StopThread(true);
+            masterStartPts = currentPts;
+            masterStartTime = std::chrono::high_resolution_clock::now();
+            m_playbackSeekInProgress.store(false, std::memory_order_release);
+            playbackBufferCondition.notify_all();
+            continue;
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(playbackBufferMutex);
+            playbackBufferCondition.wait(lock, [this]() {
+                return !playbackThreadRunning ||
+                       m_playbackSeekPending.load(std::memory_order_acquire) ||
+                       playbackFrameBuffer.size() < playbackBufferCapacity;
+            });
+            if (!playbackThreadRunning)
+                return;
+            if (m_playbackSeekPending.load(std::memory_order_acquire))
+                continue;
+        }
+
+        BufferedPlaybackFrame bufferedFrame;
+        bufferedFrame.frame = av_frame_alloc();
+        if (!bufferedFrame.frame ||
+            !m_decoder->DecodeNextBufferedFrame(bufferedFrame.frame,
+                                                bufferedFrame.pts,
+                                                bufferedFrame.frameNumber))
+        {
+            std::lock_guard<std::mutex> lock(playbackBufferMutex);
+            playbackDecodeEof = true;
+            playbackBufferCondition.notify_all();
+            return;
+        }
+
+        if (m_playbackSeekPending.load(std::memory_order_acquire))
+            continue;
+
+        {
+            std::lock_guard<std::mutex> lock(playbackBufferMutex);
+            playbackFrameBuffer.emplace_back(std::move(bufferedFrame));
+        }
+        playbackBufferCondition.notify_all();
+    }
+}
+
+bool VideoPlayer::PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame)
+{
+    if (!bufferedFrame.frame)
+        return false;
+
+    currentPts = bufferedFrame.pts;
+    currentFrame = bufferedFrame.frameNumber;
+    const bool cropChanged = UpdateCropForTime(currentPts);
+
+    {
+        std::lock_guard<std::mutex> renderLock(renderMutex);
+        const AVPixelFormat actualFormat = static_cast<AVPixelFormat>(bufferedFrame.frame->format);
+        if (actualFormat != swsSourceFormat && actualFormat != AV_PIX_FMT_NONE)
+        {
+            sws_freeContext(swsContext);
+            swsSourceFormat = actualFormat;
+            swsContext = sws_getContext(
+                frameWidth, frameHeight, actualFormat,
+                frameWidth, frameHeight, AV_PIX_FMT_BGRA,
+                SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+        }
+        if (!swsContext)
+            return false;
+
+        sws_scale(swsContext,
+                  const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
+                  bufferedFrame.frame->linesize, 0, frameHeight,
+                  frameRGB->data, frameRGB->linesize);
+    }
+
+    InvalidateRect(videoWindow, nullptr, FALSE);
+    UpdateTimeline();
+    if (cropChanged)
+        InvalidateRect(videoWindow, nullptr, FALSE);
+    return true;
+}
+
+void VideoPlayer::PlaybackThreadFunction()
+{
+    bool clockStarted = false;
+    auto startTime = masterStartTime;
+    double startPts = masterStartPts;
+    auto lastPresentedAt = startTime;
+
+    while (playbackThreadRunning)
+    {
+        BufferedPlaybackFrame bufferedFrame;
+        {
+            std::unique_lock<std::mutex> lock(playbackBufferMutex);
+            playbackBufferCondition.wait(lock, [this, clockStarted]() {
+                const size_t required = clockStarted ? 1 : playbackPrebufferFrames;
+                return !playbackThreadRunning ||
+                       m_playbackSeekPending.load(std::memory_order_acquire) ||
+                       m_playbackSeekInProgress.load(std::memory_order_acquire) ||
+                       playbackDecodeEof || playbackFrameBuffer.size() >= required;
+            });
+
+            if (!playbackThreadRunning)
+                return;
+            if (m_playbackSeekPending.load(std::memory_order_acquire) ||
+                m_playbackSeekInProgress.load(std::memory_order_acquire))
+            {
+                clockStarted = false;
+                playbackBufferCondition.notify_all();
+                playbackBufferCondition.wait(lock, [this]() {
+                    return !playbackThreadRunning ||
+                           (!m_playbackSeekPending.load(std::memory_order_acquire) &&
+                            !m_playbackSeekInProgress.load(std::memory_order_acquire));
+                });
+                continue;
+            }
+            if (playbackFrameBuffer.empty())
+            {
+                if (playbackDecodeEof)
+                {
+                    lock.unlock();
+                    Stop();
+                    PostMessage(parentWindow, WM_TIMER, 1006, 0);
+                    return;
+                }
+                continue;
+            }
+
+            bufferedFrame = std::move(playbackFrameBuffer.front());
+            playbackFrameBuffer.pop_front();
+        }
+        playbackBufferCondition.notify_all();
+
+        if (!clockStarted)
+        {
+            // The seek flag can change after a frame is removed from the
+            // buffer. Do not start audio for that stale presentation cycle.
+            if (m_playbackSeekPending.load(std::memory_order_acquire) ||
+                m_playbackSeekInProgress.load(std::memory_order_acquire))
+                continue;
 
             startTime = std::chrono::high_resolution_clock::now();
             lastPresentedAt = startTime;
             startPts = currentPts;
             masterStartTime = startTime;
             masterStartPts = startPts;
-
-            if (playbackThreadRunning && isPlaying)
-                m_audioPlayer->StartThread();
-            continue;
+            m_audioPlayer->StartThread();
+            clockStarted = true;
         }
 
-        // Keep playback tied to the wall clock. At high speeds the decoder
-        // cannot decode every intermediate frame, so jump to the clock target
-        // instead of slowing playback down to the decoder's maximum throughput.
-        double elapsed = std::chrono::duration<double>(
+        const double target = bufferedFrame.pts - startPts;
+        const double elapsed = std::chrono::duration<double>(
             std::chrono::high_resolution_clock::now() - startTime).count();
-        const double speed = GetPlaybackSpeed();
-        const double clockTarget = startPts + elapsed * speed;
-
-        double playbackEnd = duration;
-        if (clipPreviewActive)
-            playbackEnd = std::min(playbackEnd, clipPreviewEndTime);
-
-        if (playbackEnd > 0.0 && clockTarget >= playbackEnd)
-        {
-            if (clipPreviewActive)
-            {
-                const double finalFrameTime = std::max(0.0, playbackEnd - frameDur);
-                SeekToTimeInternal(finalFrameTime, INT_MAX, false, true, true, true, false);
-                clipPreviewActive = false;
-                Pause();
-            }
-            else
-            {
-                Stop();
-            }
-            PostMessage(parentWindow, WM_TIMER, 1006, 0);
-            break;
-        }
-
-        double videoTime = currentPts - startPts;
-        double lag = elapsed * speed - videoTime;
-        // At 4x and above, seeking for every small clock mismatch causes severe
-        // stutter. Allow a short decode runway and only seek a few times per
-        // second; continuous frame presentation fills the intervals smoothly.
-        const bool highSpeedPlayback = speed >= 4.0;
-        const double catchUpThreshold = std::max(1.0, speed * 0.25);
-
-        // Exact catch-up seeks flush every audio decoder and buffer.  They are
-        // useful when skipping large spans at 4x+, but at normal speed even a
-        // brief two-frame hiccup used to trigger them repeatedly, causing both
-        // the visible stutter and chopped audio.
-        if (highSpeedPlayback && lag > catchUpThreshold)
-        {
-            SeekToTimeInternal(clockTarget, INT_MAX, false, true, true, true, false);
-            lastPresentedAt = std::chrono::high_resolution_clock::now();
-            continue;
-        }
-
-        // When slightly behind, decode without image conversion. If that is
-        // insufficient, the clock-target seek above skips the missing frames.
-        const auto now = std::chrono::high_resolution_clock::now();
-        const double sinceLastPresentation = std::chrono::duration<double>(
-            now - lastPresentedAt).count();
-        const bool generateImage = lag <= frameDur * 2.0 ||
-                                   (highSpeedPlayback && sinceLastPresentation >= (1.0 / 30.0));
-
-        // At 1x-3x we can skip the expensive image conversion while still
-        // decoding every audio packet. Dropping those packets was audible as
-        // gaps whenever video briefly fell behind.
-        dropAudioDuringStepping = !generateImage && highSpeedPlayback;
-        if (highSpeedPlayback)
-            codecContext->skip_frame = AVDISCARD_NONREF;
-        const bool decoded = m_decoder->DecodeNextFrame(false, generateImage, generateImage);
-        codecContext->skip_frame = AVDISCARD_DEFAULT;
-        dropAudioDuringStepping = false;
-        if (!decoded)
-            break;
-        if (generateImage)
-            lastPresentedAt = std::chrono::high_resolution_clock::now();
-
-        if (clipPreviewActive && currentPts >= clipPreviewEndTime)
-        {
-            clipPreviewActive = false;
-            Pause();
-            PostMessage(parentWindow, WM_TIMER, 1006, 0);
-            break;
-        }
-
-        // When catching up (no image generated), skip sleep and keep decoding.
-        if (!generateImage)
-            continue;
-
-        double target = (currentPts - startPts) / speed;
-        elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
-        double delay = target - elapsed;
-        if (delay > 0)
+        const double delay = target - elapsed;
+        if (delay > 0.0)
         {
             std::unique_lock<std::mutex> wakeLock(playbackWakeMutex);
             playbackWakeCondition.wait_for(
-                wakeLock,
-                std::chrono::duration<double>(delay),
-                [this]() {
+                wakeLock, std::chrono::duration<double>(delay), [this]() {
                     return !playbackThreadRunning ||
                            m_playbackSeekPending.load(std::memory_order_acquire) ||
                            m_playbackSpeedChangePending.load(std::memory_order_acquire);
                 });
+        }
+
+        if (!playbackThreadRunning)
+            return;
+        if (m_playbackSeekPending.load(std::memory_order_acquire))
+        {
+            clockStarted = false;
+            continue;
+        }
+
+        if (!PresentBufferedFrame(std::move(bufferedFrame)))
+            continue;
+
+        if (clipPreviewActive && currentPts >= clipPreviewEndTime)
+        {
+            if (AdvanceClipPreview())
+            {
+                clockStarted = false;
+                continue;
+            }
+            clipPreviewActive = false;
+            Pause();
+            PostMessage(parentWindow, WM_TIMER, 1006, 0);
+            return;
         }
     }
 }
@@ -2335,6 +2489,15 @@ bool VideoPlayer::CutVideo(const std::wstring &outputFilename, double startTime,
                            std::atomic<bool>* cancelFlag)
 {
     return m_cutter->CutVideo(outputFilename, startTime, endTime, mergeAudio, convertH264, encoder, qualityPreset, maxBitrate, progressBar, cancelFlag);
+}
+
+bool VideoPlayer::CutVideo(const std::wstring &outputFilename, const std::vector<ClipSegment>& segments,
+                           bool mergeAudio, bool convertH264, EncoderSelection encoder,
+                           const std::wstring& qualityPreset, int maxBitrate, HWND progressBar,
+                           std::atomic<bool>* cancelFlag)
+{
+    return m_cutter->CutVideo(outputFilename, segments, mergeAudio, convertH264, encoder,
+                              qualityPreset, maxBitrate, progressBar, cancelFlag);
 }
 
 LRESULT CALLBACK VideoPlayer::VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)

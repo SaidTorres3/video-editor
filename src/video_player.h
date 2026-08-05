@@ -39,6 +39,7 @@ extern "C"
 #include <chrono>
 #include <limits>
 #include <cstdint>
+#include "clip_segment.h"
 
 enum class EncoderSelection : int;
 
@@ -114,6 +115,8 @@ public:
     double startTimeOffset;
     bool clipPreviewActive;
     double clipPreviewEndTime;
+    std::vector<ClipSegment> clipPreviewSegments;
+    size_t clipPreviewSegmentIndex = 0;
 
     // Crop selection
     struct CropKeyframe {
@@ -146,9 +149,41 @@ public:
     UINT_PTR playbackTimer;
     // Threaded playback
     std::thread playbackThread;
+    std::thread playbackDecodeThread;
     std::atomic<bool> playbackThreadRunning;
     std::mutex playbackWakeMutex;
     std::condition_variable playbackWakeCondition;
+
+    struct BufferedPlaybackFrame {
+        AVFrame* frame = nullptr;
+        double pts = 0.0;
+        int64_t frameNumber = 0;
+
+        BufferedPlaybackFrame() = default;
+        ~BufferedPlaybackFrame() { av_frame_free(&frame); }
+        BufferedPlaybackFrame(const BufferedPlaybackFrame&) = delete;
+        BufferedPlaybackFrame& operator=(const BufferedPlaybackFrame&) = delete;
+        BufferedPlaybackFrame(BufferedPlaybackFrame&& other) noexcept
+            : frame(other.frame), pts(other.pts), frameNumber(other.frameNumber) {
+            other.frame = nullptr;
+        }
+        BufferedPlaybackFrame& operator=(BufferedPlaybackFrame&& other) noexcept {
+            if (this != &other) {
+                av_frame_free(&frame);
+                frame = other.frame;
+                pts = other.pts;
+                frameNumber = other.frameNumber;
+                other.frame = nullptr;
+            }
+            return *this;
+        }
+    };
+    std::deque<BufferedPlaybackFrame> playbackFrameBuffer;
+    mutable std::mutex playbackBufferMutex;
+    std::condition_variable playbackBufferCondition;
+    size_t playbackBufferCapacity;
+    size_t playbackPrebufferFrames;
+    bool playbackDecodeEof;
 
     // Audio components
     std::vector<std::unique_ptr<AudioTrack>> audioTracks;
@@ -197,6 +232,7 @@ private:
     // Seeks requested while playing are consumed by the playback thread.
     // Keeping decoder ownership on that thread avoids pause/join/restart stalls.
     std::atomic<bool> m_playbackSeekPending;
+    std::atomic<bool> m_playbackSeekInProgress;
     std::atomic<double> m_playbackSeekTarget;
     std::atomic<bool> m_playbackSeekExact;
     std::atomic<double> m_playbackSpeed;
@@ -279,6 +315,7 @@ public:
     void Pause();
     void Stop();
     void PlayClip(double startTime, double endTime);
+    void PlayClips(const std::vector<ClipSegment>& segments);
     void CancelClipPreview();
     bool IsClipPreviewActive() const { return clipPreviewActive; }
     bool IsPlaying() const { return isPlaying; }
@@ -298,6 +335,8 @@ public:
     double GetCurrentTime() const;
     int64_t GetCurrentFrame() const { return currentFrame; }
     int64_t GetTotalFrames() const { return totalFrames; }
+    size_t GetBufferedPlaybackFrameCount() const;
+    size_t GetPlaybackBufferCapacity() const { return playbackBufferCapacity; }
 
     // Crop timeline helpers
     bool AddCropKeyframe(double time, RECT rect, double* actualTime = nullptr);
@@ -338,6 +377,9 @@ public:
     bool CutVideo(const std::wstring& outputFilename, double startTime, double endTime,
                   bool mergeAudio, bool convertH264, EncoderSelection encoder, const std::wstring& qualityPreset,
                   int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
+    bool CutVideo(const std::wstring& outputFilename, const std::vector<ClipSegment>& segments,
+                  bool mergeAudio, bool convertH264, EncoderSelection encoder, const std::wstring& qualityPreset,
+                  int maxBitrate, HWND progressBar, std::atomic<bool>* cancelFlag);
 
     // Timer callback
     static void CALLBACK TimerProc(HWND hwnd, UINT msg, UINT_PTR timerId, DWORD time);
@@ -353,6 +395,10 @@ private:
     void SeekRefinementThreadFunction();
     void CreateVideoWindow();
     void PlaybackThreadFunction();
+    void PlaybackDecodeThreadFunction();
+    void ClearPlaybackBuffer();
+    bool PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame);
     static LRESULT CALLBACK VideoWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     void RecomputeCropOutputDimensionsLocked();
+    bool AdvanceClipPreview();
 };

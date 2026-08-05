@@ -1,6 +1,9 @@
 #include "ui_updates.h"
 #include "video_player.h"
 #include "utils.h"
+#include "editing.h"
+#include "options_window.h"
+#include "timeline.h"
 #include <string>
 #include <commctrl.h>
 #include <cmath>
@@ -10,9 +13,9 @@ std::wstring FormatTime(double totalSeconds, bool showMilliseconds);
 
 // Global variables
 extern VideoPlayer *g_videoPlayer;
-extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hStatusText, g_hLabelCutInfo, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize, g_hLabelTrackVolume, g_hLabelMasterVolume;
-extern HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
-extern HWND g_hEditPlaybackSpeed;
+extern HWND g_hButtonOpen;
+extern HWND g_hButtonPlay, g_hButtonPause, g_hButtonStop, g_hTimeline, g_hListBoxAudioTracks, g_hButtonMuteTrack, g_hSliderTrackVolume, g_hSliderMasterVolume, g_hButtonSetStart, g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd, g_hButtonAddClip, g_hButtonClearClips, g_hListBoxCutSegments, g_hButtonUpdateClip, g_hButtonRemoveClip, g_hButtonPlayAllClips, g_hButtonCut, g_hCheckboxMergeAudio, g_hRadioCopyCodec, g_hRadioH264, g_hEditBitrate, g_hEditTargetSize, g_hStatusText, g_hLabelCutInfo, g_hRadioUseBitrate, g_hRadioUseSize, g_hLabelBitrate, g_hLabelTargetSize, g_hLabelTrackVolume, g_hLabelMasterVolume;
+extern HWND g_hButtonSpeedDown, g_hButtonSpeedUp, g_hEditPlaybackSpeed;
 extern double g_cutStartTime, g_cutEndTime;
 extern double g_previewSeekTime;
 extern bool g_isPanelVisible;
@@ -27,6 +30,7 @@ void UpdateControls()
     bool isLoaded = g_videoPlayer->IsLoaded();
     bool isPlaying = g_videoPlayer->IsPlaying();
 
+    EnableWindow(g_hButtonOpen, !g_isExporting);
     EnableWindow(g_hButtonPlay, isLoaded && !isPlaying);
     EnableWindow(g_hButtonPause, isLoaded && isPlaying);
     EnableWindow(g_hButtonStop, isLoaded);
@@ -58,27 +62,41 @@ void UpdateControls()
     EnableWindow(g_hEditEndTime, isLoaded);
     bool hasStart = g_cutStartTime >= 0;
     bool hasEnd = g_cutEndTime >= 0;
-    if (!hasStart && !hasEnd)
+    bool hasValidDraft = hasStart && hasEnd && g_cutEndTime > g_cutStartTime;
+    bool hasSavedClips = g_enableMultiClipEditing && !g_cutSegments.empty();
+    bool hasSelectedClip = g_enableMultiClipEditing && g_selectedCutSegment >= 0 &&
+                           g_selectedCutSegment < static_cast<int>(g_cutSegments.size());
+    if (!hasStart && !hasEnd && !hasSavedClips)
     {
         SetWindowTextW(g_hButtonCut, L"Export Video");
-        EnableWindow(g_hButtonCut, isLoaded);
+        EnableWindow(g_hButtonCut, isLoaded && !g_isExporting);
     }
     else
     {
         SetWindowTextW(g_hButtonCut, L"Cut Video");
-        EnableWindow(g_hButtonCut, isLoaded && hasStart && hasEnd && g_cutEndTime > g_cutStartTime);
+        EnableWindow(g_hButtonCut, isLoaded && !g_isExporting && (hasSavedClips || hasValidDraft));
     }
-    EnableWindow(g_hButtonPlayClip, isLoaded && hasStart && hasEnd && g_cutEndTime > g_cutStartTime);
-    EnableWindow(g_hButtonPlayEnd, isLoaded && hasStart && hasEnd && g_cutEndTime > g_cutStartTime);
+    EnableWindow(g_hButtonPlayClip, isLoaded && hasValidDraft);
+    EnableWindow(g_hButtonPlayEnd, isLoaded && hasValidDraft);
+    EnableWindow(g_hButtonAddClip, g_enableMultiClipEditing && isLoaded && hasValidDraft);
+    EnableWindow(g_hButtonClearClips, g_enableMultiClipEditing && isLoaded && (hasSavedClips || hasStart || hasEnd));
+    EnableWindow(g_hListBoxCutSegments, g_enableMultiClipEditing && isLoaded && hasSavedClips);
+    EnableWindow(g_hButtonUpdateClip, g_enableMultiClipEditing && isLoaded && hasSelectedClip && hasValidDraft);
+    EnableWindow(g_hButtonRemoveClip, g_enableMultiClipEditing && isLoaded && hasSelectedClip);
+    EnableWindow(g_hButtonPlayAllClips, g_enableMultiClipEditing && isLoaded && hasSavedClips);
 
    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
    EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
 
    bool anyCrop = g_videoPlayer && g_videoPlayer->HasAnyCrop();
    bool hasCrop = g_videoPlayer && g_videoPlayer->hasCrop;
-   EnableWindow(g_hRadioCopyCodec, isLoaded && !anyCrop);
+   size_t effectiveClipCount = g_enableMultiClipEditing
+                               ? g_cutSegments.size() + (hasValidDraft && !hasSelectedClip ? 1u : 0u)
+                               : (hasValidDraft ? 1u : 0u);
+   bool requiresEncoding = anyCrop || effectiveClipCount > 1;
+   EnableWindow(g_hRadioCopyCodec, isLoaded && !requiresEncoding);
    EnableWindow(g_hRadioH264, isLoaded);
-   if (anyCrop) {
+   if (requiresEncoding) {
        SendMessage(g_hRadioH264, BM_SETCHECK, BST_CHECKED, 0);
        SendMessage(g_hRadioCopyCodec, BM_SETCHECK, BST_UNCHECKED, 0);
    }
@@ -121,11 +139,24 @@ void UpdateControls()
         std::wstring currentTimeStr = FormatTime(currentTime);
         std::wstring durationStr = FormatTime(duration);
         wchar_t statusText[256];
-        swprintf_s(statusText, _countof(statusText),
-                   L"Time: %s / %s | Frame: %lld / %lld | %s",
-                   currentTimeStr.c_str(), durationStr.c_str(),
-                   currentFrame, g_videoPlayer->GetTotalFrames(),
-                   isPlaying ? L"Playing" : L"Paused");
+        int waveformProgress = GetAudioWaveformProgress();
+        if (waveformProgress >= 0 && waveformProgress <= 100)
+        {
+            swprintf_s(statusText, _countof(statusText),
+                       L"Time: %s / %s | Frame: %lld / %lld | %s | Waveforms: %d%%",
+                       currentTimeStr.c_str(), durationStr.c_str(),
+                       currentFrame, g_videoPlayer->GetTotalFrames(),
+                       isPlaying ? L"Playing" : L"Paused",
+                       waveformProgress);
+        }
+        else
+        {
+            swprintf_s(statusText, _countof(statusText),
+                       L"Time: %s / %s | Frame: %lld / %lld | %s",
+                       currentTimeStr.c_str(), durationStr.c_str(),
+                       currentFrame, g_videoPlayer->GetTotalFrames(),
+                       isPlaying ? L"Playing" : L"Paused");
+        }
         SetWindowTextW(g_hStatusText, statusText);
     }
 }
@@ -254,6 +285,7 @@ void OnMuteTrackClicked()
         UpdateAudioTrackList();
         SendMessage(g_hListBoxAudioTracks, LB_SETCURSEL, selectedIndex, 0);
         OnAudioTrackSelectionChanged();
+        InvalidateRect(g_hTimeline, nullptr, FALSE);
     }
 }
 
@@ -297,6 +329,7 @@ void OnTrackVolumeChanged()
         else
             swprintf_s(buf, L"Track Volume: 0.0 dB");
         SetWindowTextW(g_hLabelTrackVolume, buf);
+        InvalidateRect(g_hTimeline, nullptr, FALSE);
     }
 }
 
@@ -357,31 +390,52 @@ void UpdateCutTimeEdits()
     }
 }
 
+void RefreshCutSegmentList()
+{
+    if (!g_hListBoxCutSegments)
+        return;
+
+    SendMessage(g_hListBoxCutSegments, LB_RESETCONTENT, 0, 0);
+    for (size_t i = 0; i < g_cutSegments.size(); ++i) {
+        std::wstring start = FormatTime(g_cutSegments[i].start, true);
+        std::wstring end = FormatTime(g_cutSegments[i].end, true);
+        wchar_t item[160];
+        swprintf_s(item, _countof(item), L"%zu. %s - %s", i + 1, start.c_str(), end.c_str());
+        SendMessage(g_hListBoxCutSegments, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
+    }
+
+    if (g_selectedCutSegment >= 0 && g_selectedCutSegment < static_cast<int>(g_cutSegments.size()))
+        SendMessage(g_hListBoxCutSegments, LB_SETCURSEL, g_selectedCutSegment, 0);
+}
+
 void UpdateCutInfoLabel(HWND hwnd)
 {
-    wchar_t buffer[128];
-    if (g_cutStartTime < 0 && g_cutEndTime < 0)
+    wchar_t buffer[256];
+    if (!g_enableMultiClipEditing)
     {
-        swprintf_s(buffer, L"Cut points not set.");
+        std::wstring start = g_cutStartTime >= 0 ? FormatTime(g_cutStartTime, true) : L"Not set";
+        std::wstring end = g_cutEndTime >= 0 ? FormatTime(g_cutEndTime, true) : L"Not set";
+        swprintf_s(buffer, _countof(buffer), L"Start: %s\nEnd: %s", start.c_str(), end.c_str());
+        SetWindowTextW(g_hLabelCutInfo, buffer);
+        UpdateControls();
+        UpdateCutTimeEdits();
+        return;
+    }
+
+    double selectedDuration = 0.0;
+    for (const auto& segment : g_cutSegments)
+        selectedDuration += segment.end - segment.start;
+
+    if (g_cutSegments.empty())
+    {
+        swprintf_s(buffer, L"No clips added.");
     }
     else
     {
-        wchar_t startStr[64], endStr[64];
-        if (g_cutStartTime >= 0) {
-            std::wstring timeStr = FormatTime(g_cutStartTime, true);
-            swprintf_s(startStr, _countof(startStr), L"Start: %s", timeStr.c_str());
-        } else {
-            swprintf_s(startStr, _countof(startStr), L"Start: Not set");
-        }
-
-        if (g_cutEndTime >= 0) {
-            std::wstring timeStr = FormatTime(g_cutEndTime, true);
-            swprintf_s(endStr, _countof(endStr), L"End: %s", timeStr.c_str());
-        } else {
-            swprintf_s(endStr, _countof(endStr), L"End: Not set");
-        }
-
-        swprintf_s(buffer, _countof(buffer), L"%s\n%s", startStr, endStr);
+        std::wstring durationStr = FormatTime(selectedDuration, true);
+        swprintf_s(buffer, _countof(buffer), L"%zu clip%s - total %s",
+                   g_cutSegments.size(), g_cutSegments.size() == 1 ? L"" : L"s",
+                   durationStr.c_str());
     }
     SetWindowTextW(g_hLabelCutInfo, buffer);
     // Also update the cut button state

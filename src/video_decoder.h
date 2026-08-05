@@ -12,6 +12,7 @@ public:
     bool Initialize();
     void Cleanup();
     bool DecodeNextFrame(bool presentFrame, bool scheduleDisplay = true, bool generateImage = true);
+    bool DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts, int64_t& frameNumber);
 
 private:
     VideoPlayer* m_player;

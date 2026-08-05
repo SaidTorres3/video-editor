@@ -14,6 +14,8 @@
 #define ID_CHECKBOX_AUTO_PLAY   1033
 #define ID_CHECKBOX_HOVER_PREVIEW 1034
 #define ID_CHECKBOX_IMPROVE_SEEK  1035
+#define ID_CHECKBOX_MULTI_CLIP     1036
+#define ID_CHECKBOX_AUDIO_WAVEFORM 1037
 #define ID_TAB_GENERAL          1040
 #define ID_TAB_ENCODING         1041
 #define ID_TAB_UPLOAD           1042
@@ -22,6 +24,11 @@
 #define ID_PANEL_GENERAL        1046
 #define ID_PANEL_ENCODING       1047
 #define ID_PANEL_UPLOAD         1048
+#define ID_TAB_AUDIO            1051
+#define ID_PANEL_AUDIO          1052
+#define ID_CHECKBOX_HIGHLIGHT_SPEECH 1053
+#define ID_SLIDER_EXPORT_MASTER_GAIN 1054
+#define ID_LABEL_EXPORT_MASTER_GAIN  1055
 
 // B2 config control identifiers
 #define ID_EDIT_B2_KEY_ID       2001
@@ -54,6 +61,10 @@ extern bool g_logToFile;
 extern bool g_autoPlay;
 extern bool g_showVideoPreviewOnHover;
 extern bool g_improveSeekPerformance;
+extern bool g_enableMultiClipEditing;
+extern bool g_showAudioWaveform;
+extern bool g_highlightSpeechWaveforms;
+extern int g_exportMasterGainDb;
 extern std::wstring g_qualityPreset;
 
 extern std::wstring g_b2KeyId;
@@ -83,5 +94,6 @@ void ShowOptionsWindow(HWND parent);
 LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void LoadSettings();
 void SaveSettings();
+float GetExportMasterGainLinear();
 
 #endif // OPTIONS_WINDOW_H

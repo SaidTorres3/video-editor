@@ -25,6 +25,8 @@
 #include "utils.h"
 #include "file_handling.h"
 #include "ui_updates.h"
+#include "clip_segment.h"
+#include "ten_vad_embedded.h"
 
 #include <string>
 #include <cstdlib>
@@ -34,12 +36,12 @@
 // Control IDs
 #define ID_TIMER_UPDATE 1006
 
-// Global variables
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
 HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
 HWND g_hEditPlaybackSpeed;
 HWND g_hTimeline;
+HWND g_hTimelineResizeBar;
 HWND g_hStatusText;
 HWND g_hListBoxAudioTracks, g_hButtonMuteTrack;
 HWND g_hSliderTrackVolume, g_hSliderMasterVolume;
@@ -54,9 +56,13 @@ HWND g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip, g_hButtonPlayEnd;
 HWND g_hLabelCutInfo;
 HWND g_hButtonOptions;
 HWND g_hButtonTogglePanel;
+HWND g_hButtonAddClip, g_hButtonClearClips;
+HWND g_hListBoxCutSegments, g_hButtonUpdateClip, g_hButtonRemoveClip, g_hButtonPlayAllClips;
 bool g_isPanelVisible = true;
 double g_cutStartTime = -1.0;
 double g_cutEndTime = -1.0;
+std::vector<ClipSegment> g_cutSegments;
+int g_selectedCutSegment = -1;
 bool g_isTimelineDragging = false;
 bool g_wasPlayingBeforeDrag = false;
 bool g_resumePlayAfterSeek = false;
@@ -93,6 +99,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     twc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     twc.hbrBackground = nullptr; // custom paint
     RegisterClass(&twc);
+
+    WNDCLASS trc = {};
+    trc.lpfnWndProc = TimelineResizeBarProc;
+    trc.hInstance = hInstance;
+    trc.lpszClassName = L"TimelineResizeBarClass";
+    trc.hCursor = LoadCursor(nullptr, IDC_SIZENS);
+    trc.hbrBackground = nullptr; // custom paint
+    RegisterClass(&trc);
 
     WNDCLASS owc = {};
     owc.lpfnWndProc = OptionsProc;
@@ -405,6 +419,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+    ShutdownEmbeddedTenVadRuntime();
     curl_global_cleanup();
     CoUninitialize();
     return 0;

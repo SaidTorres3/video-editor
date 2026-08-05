@@ -4,3 +4,4 @@
 
 void CreateControls(HWND hwnd);
 void RepositionControls(HWND hwnd);
+void RepositionTimelineArea(HWND hwnd);

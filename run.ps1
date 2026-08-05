@@ -3,6 +3,14 @@ param(
     [switch]$Static
 )
 
+# Stop the previous build before inspecting or cleaning its output. Waiting for
+# process termination prevents stale EXEs/DLLs from surviving a static rebuild.
+taskkill /F /IM VideoEditor.exe 2>$null | Out-Null
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    if (-not (Get-Process VideoEditor -ErrorAction SilentlyContinue)) { break }
+    Start-Sleep -Milliseconds 100
+}
+
 # 0) Clean the build/Release folder based on conditions
 $releaseDir = Join-Path $PSScriptRoot 'build\Release'
 if (Test-Path $releaseDir) {
@@ -18,7 +26,8 @@ if (Test-Path $releaseDir) {
     elseif ($count -eq 1 -and -not $Static) {
         try {
             Write-Host "Switching to dynamic mode..." -ForegroundColor Yellow
-            Remove-Item -Path (Join-Path $PSScriptRoot 'build') -Recurse -Force
+            Get-ChildItem -LiteralPath $releaseDir -Force |
+                Remove-Item -Recurse -Force -ErrorAction Stop
         } catch {
             Write-Host "ERROR: Could not remove the 'build' folder. Stopping execution." -ForegroundColor Red
             exit 1
@@ -27,7 +36,8 @@ if (Test-Path $releaseDir) {
     elseif ($count -gt 1 -and $Static) {
         try {
             Write-Host "Switching to static mode..." -ForegroundColor Yellow
-            Remove-Item -Path (Join-Path $PSScriptRoot 'build') -Recurse -Force
+            Get-ChildItem -LiteralPath $releaseDir -Force |
+                Remove-Item -Recurse -Force -ErrorAction Stop
         } catch {
             Write-Host "ERROR: Could not remove the 'build' folder. Stopping execution." -ForegroundColor Red
             exit 1
@@ -205,7 +215,6 @@ foreach ($p in $required) {
 }
 Write-Host "FFmpeg validated at: $FFmpegPath" -ForegroundColor Green
 
-taskkill /F /IM VideoEditor.exe 2>$null;
 # 5) vcpkg toolchain
 if ($Static.IsPresent) {
     if (-not (Test-Path "C:\tools\vcpkg")) {
