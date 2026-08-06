@@ -196,10 +196,15 @@ static bool GenerateLongSpeedTestVideo(const std::wstring& outputPath,
     return exitCode == 0 && std::filesystem::exists(outputPath);
 }
 
-// Deliberately exceeds sequential high-speed decode throughput on typical
-// hardware: even at 30 fps, 10x playback requires decoding 300 4K frames per
-// second. The 4:4:4 10-bit profile also keeps the workload on the software
-// decoder instead of silently taking a consumer H.264 hardware-decode path.
+static bool IsCircleCiRunner() {
+    return GetEnvironmentVariableW(L"CIRCLECI", nullptr, 0) > 0;
+}
+
+// Deliberately exceeds sequential 10x decode throughput on the host. Local
+// runs retain the 4K workload; CircleCI uses 1080p because its shared six-core
+// executor cannot sustain even 4x decoding of the pathological 4K source.
+// The 4:4:4 10-bit profile keeps both variants on the software decoder instead
+// of silently taking a consumer H.264 hardware-decode path.
 static bool GenerateHeavySpeedTestVideo(const std::wstring& outputPath,
                                         const std::wstring& ffmpegDir) {
     std::wstring ffmpegExe;
@@ -209,9 +214,15 @@ static bool GenerateHeavySpeedTestVideo(const std::wstring& outputPath,
     else
         ffmpegExe = L"ffmpeg";
 
+    const std::wstring fixtureSize = IsCircleCiRunner()
+        ? L"1920x1080"
+        : L"3840x2160";
+    std::wcout << L"  Heavy playback fixture: " << fixtureSize
+               << L" 10-bit 4:4:4" << std::endl;
+
     std::wstring cmd = ffmpegExe +
         L" -y -hide_banner -loglevel error "
-        L"-f lavfi -i \"testsrc2=size=3840x2160:rate=30:duration=18\" "
+        L"-f lavfi -i \"testsrc2=size=" + fixtureSize + L":rate=30:duration=18\" "
         L"-an -c:v libx264 -preset ultrafast -crf 34 -pix_fmt yuv444p10le "
         L"-bf 3 -g 60 -keyint_min 60 -sc_threshold 0 \"" + outputPath + L"\"";
 
