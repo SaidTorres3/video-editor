@@ -490,9 +490,15 @@ VideoDecoder::BufferedReceiveResult VideoDecoder::ReceiveBufferedFrame(
         const double clockTarget = m_player->GetPlaybackClockTarget();
         const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        const bool highSpeedDeliveryOverdue = speed >= 8.0 &&
-            (m_player->m_lastHighSpeedFrameDeliveryNs == 0 ||
-             nowNs - m_player->m_lastHighSpeedFrameDeliveryNs >= 16666667);
+        // Every high-speed mode uses clock-based frame dropping. On a source
+        // that is expensive enough to remain late, 4x-7.9x could otherwise
+        // discard every decoded frame forever because the overdue-delivery
+        // escape hatch used to begin only at 8x. Still publish at display
+        // cadence so delivered progress advances and the catch-up seek logic
+        // can recover against the wall clock on constrained CPUs.
+        const bool highSpeedDeliveryOverdue =
+            m_player->m_lastHighSpeedFrameDeliveryNs == 0 ||
+            nowNs - m_player->m_lastHighSpeedFrameDeliveryNs >= 16666667;
 
         const double displayMediaStep = speed / 60.0;
         const bool cadenceDue = m_lastHighSpeedFrameDeliveryPts < 0.0 ||
