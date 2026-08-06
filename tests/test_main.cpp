@@ -196,9 +196,10 @@ static bool GenerateLongSpeedTestVideo(const std::wstring& outputPath,
     return exitCode == 0 && std::filesystem::exists(outputPath);
 }
 
-// Deliberately exceeds sequential 10x decode throughput on typical hardware.
-// The 4:4:4 10-bit profile also avoids silently making the regression easy via
-// the common consumer H.264 hardware-decode path.
+// Deliberately exceeds sequential high-speed decode throughput on typical
+// hardware: even at 30 fps, 10x playback requires decoding 300 4K frames per
+// second. The 4:4:4 10-bit profile also keeps the workload on the software
+// decoder instead of silently taking a consumer H.264 hardware-decode path.
 static bool GenerateHeavySpeedTestVideo(const std::wstring& outputPath,
                                         const std::wstring& ffmpegDir) {
     std::wstring ffmpegExe;
@@ -210,9 +211,9 @@ static bool GenerateHeavySpeedTestVideo(const std::wstring& outputPath,
 
     std::wstring cmd = ffmpegExe +
         L" -y -hide_banner -loglevel error "
-        L"-f lavfi -i \"testsrc2=size=3840x2160:rate=60:duration=20\" "
+        L"-f lavfi -i \"testsrc2=size=3840x2160:rate=30:duration=18\" "
         L"-an -c:v libx264 -preset ultrafast -crf 34 -pix_fmt yuv444p10le "
-        L"-bf 3 -g 120 -keyint_min 120 -sc_threshold 0 \"" + outputPath + L"\"";
+        L"-bf 3 -g 60 -keyint_min 60 -sc_threshold 0 \"" + outputPath + L"\"";
 
     STARTUPINFOW si = {};
     si.cb = sizeof(si);
@@ -223,15 +224,33 @@ static bool GenerateHeavySpeedTestVideo(const std::wstring& outputPath,
                         CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
         return false;
 
-    // The 4K 10-bit fixture can exceed 30 seconds on a busy CI machine. A
-    // fixture timeout is not a playback result, so allow generation to finish
-    // instead of producing a misleading test-suite failure before tests run.
-    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 60000);
+    // Fixture generation is setup, not a playback benchmark. Give low-core CI
+    // executors enough headroom while retaining a finite timeout and cleaning
+    // up the child if FFmpeg genuinely hangs.
+    constexpr DWORD fixtureTimeoutMs = 180000;
+    const DWORD waitResult = WaitForSingleObject(pi.hProcess, fixtureTimeoutMs);
     DWORD exitCode = 1;
     if (waitResult == WAIT_OBJECT_0)
         GetExitCodeProcess(pi.hProcess, &exitCode);
+    else if (waitResult == WAIT_TIMEOUT)
+    {
+        std::cerr << "  FFmpeg timed out after "
+                  << (fixtureTimeoutMs / 1000)
+                  << " seconds while generating the heavy fixture."
+                  << std::endl;
+        TerminateProcess(pi.hProcess, ERROR_TIMEOUT);
+        WaitForSingleObject(pi.hProcess, 5000);
+    }
+    else
+    {
+        std::cerr << "  Failed waiting for FFmpeg; Win32 error: "
+                  << GetLastError() << std::endl;
+    }
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
+    if (waitResult == WAIT_OBJECT_0 && exitCode != 0)
+        std::cerr << "  FFmpeg exited with code " << exitCode
+                  << " while generating the heavy fixture." << std::endl;
     return exitCode == 0 && std::filesystem::exists(outputPath);
 }
 
