@@ -16,6 +16,7 @@
 extern std::wstring g_testVideoPath;
 extern std::wstring g_testLongVideoPath;
 extern std::wstring g_testHeavyVideoPath;
+extern std::wstring g_testHighSpeedResumeVideoPath;
 extern std::wstring g_testSparseSeekVideoPath;
 extern std::wstring g_testSparseIndexVideoPath;
 extern std::wstring g_testAv1OpusVideoPath;
@@ -616,6 +617,46 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "100x playback should remain tied to its wall-clock target");
         TEST_ASSERT_GE(presentedChanges, 5,
                        "100x playback should keep presenting frames while catching up");
+    });
+
+    suite.addTest("PlaybackSpeed_60xRetainsRateAfterPauseAndResume", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testHighSpeedResumeVideoPath),
+                    "60x pause/resume regression source must load");
+        player.SetPlaybackSpeed(60.0);
+        TEST_ASSERT(player.Play(), "initial 60x playback must start");
+
+        TEST_ASSERT(WaitForPresentedFrames(
+                        player, player.GetPresentedPlaybackFrameCount() + 1,
+                        std::chrono::seconds(3)),
+                    "initial 60x playback must present its first frame");
+        const double initialStart = player.GetCurrentTime();
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        player.Pause();
+        const double pausedAt = player.GetCurrentTime();
+        TEST_ASSERT_GT(pausedAt - initialStart, 10.0,
+                       "initial 60x playback must reach its requested high-speed rate");
+        TEST_ASSERT(!player.IsBackwardPrefetchSuspendedForTesting(),
+                    "pause must prime the reverse-frame cache");
+
+        TEST_ASSERT(player.Play(), "60x playback must resume after pausing");
+        TEST_ASSERT(player.IsBackwardPrefetchSuspendedForTesting(),
+                    "resuming playback must stop the competing reverse-frame decoder");
+        TEST_ASSERT(WaitForPresentedFrames(
+                        player, player.GetPresentedPlaybackFrameCount() + 1,
+                        std::chrono::seconds(3)),
+                    "resumed 60x playback must present its first frame");
+        const double resumedStart = player.GetCurrentTime();
+        TEST_ASSERT_GE(resumedStart, pausedAt - 0.1,
+                       "60x resume must not restart before the paused position");
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        player.Pause();
+        const double resumedAdvance = player.GetCurrentTime() - resumedStart;
+
+        TEST_ASSERT_GT(resumedAdvance, 10.0,
+                       "resumed 60x playback must not collapse to sequential decode speed");
+        TEST_ASSERT_LT(resumedAdvance, 28.0,
+                       "resumed 60x playback must remain tied to its restarted wall clock");
     });
 
     suite.addTest("PlaybackSpeed_500xTracksWallClockWithoutCapping", []() {

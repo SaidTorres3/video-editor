@@ -22,6 +22,7 @@ extern "C" {
 std::wstring g_testVideoPath;
 std::wstring g_testLongVideoPath;
 std::wstring g_testHeavyVideoPath;
+std::wstring g_testHighSpeedResumeVideoPath;
 std::wstring g_testSparseSeekVideoPath;
 std::wstring g_testSparseIndexVideoPath;
 std::wstring g_testAv1OpusVideoPath;
@@ -191,6 +192,47 @@ static bool GenerateLongSpeedTestVideo(const std::wstring& outputPath,
     DWORD exitCode = 1;
     if (waitResult == WAIT_OBJECT_0)
         GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return exitCode == 0 && std::filesystem::exists(outputPath);
+}
+
+// Long enough for two measured 60x epochs, while 4:4:4 decoding keeps the
+// sequential software path well below 60x without the multi-frame startup
+// latency of the pathological 4K fixture.
+static bool GenerateHighSpeedResumeTestVideo(const std::wstring& outputPath,
+                                             const std::wstring& ffmpegDir) {
+    std::wstring ffmpegExe;
+    const std::wstring bundledExe = ffmpegDir + L"\\bin\\ffmpeg.exe";
+    if (!ffmpegDir.empty() && std::filesystem::exists(bundledExe))
+        ffmpegExe = L"\"" + bundledExe + L"\"";
+    else
+        ffmpegExe = L"ffmpeg";
+
+    std::wstring cmd = ffmpegExe +
+        L" -y -hide_banner -loglevel error "
+        L"-f lavfi -i \"testsrc2=size=1920x1080:rate=30:duration=75\" "
+        L"-an -c:v libx264 -preset ultrafast -crf 34 -pix_fmt yuv444p10le "
+        L"-bf 2 -g 30 -keyint_min 30 -sc_threshold 0 \"" + outputPath + L"\"";
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;
+
+    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 60000);
+    DWORD exitCode = 1;
+    if (waitResult == WAIT_OBJECT_0)
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    else if (waitResult == WAIT_TIMEOUT)
+    {
+        TerminateProcess(pi.hProcess, ERROR_TIMEOUT);
+        WaitForSingleObject(pi.hProcess, 5000);
+    }
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     return exitCode == 0 && std::filesystem::exists(outputPath);
@@ -705,6 +747,20 @@ int wmain(int argc, wchar_t* argv[]) {
     if (!GenerateLongSpeedTestVideo(g_testLongVideoPath, ffmpegDir)) {
         TestColors::SetRed();
         std::cerr << "FATAL: Could not generate long high-speed test video." << std::endl;
+        TestColors::Reset();
+        DestroyWindow(g_testHwnd);
+        CoUninitialize();
+        return 1;
+    }
+
+    g_testHighSpeedResumeVideoPath =
+        g_testTempDir + L"\\test_speed_pause_resume.mp4";
+    std::cout << "[Setup] Generating 60x pause/resume test video..." << std::endl;
+    if (!GenerateHighSpeedResumeTestVideo(g_testHighSpeedResumeVideoPath,
+                                          ffmpegDir)) {
+        TestColors::SetRed();
+        std::cerr << "FATAL: Could not generate 60x pause/resume test video."
+                  << std::endl;
         TestColors::Reset();
         DestroyWindow(g_testHwnd);
         CoUninitialize();

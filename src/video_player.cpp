@@ -313,19 +313,39 @@ bool VideoPlayer::Play()
         return false;
     CancelPendingSeekRefinement();
 
+    // Pause primes the reverse-frame cache so a subsequent ',' is instant.
+    // Once playback resumes that CPU decoder is no longer useful, and leaving
+    // it active competes with the playback decoder and can collapse high-speed
+    // playback to the source's sequential decode rate.
+    SuspendBwdPrefetch();
+
     const bool hasInterruptedSeek =
         m_resumeSeekPending.exchange(false, std::memory_order_acq_rel);
     const double interruptedSeekTarget =
         m_resumeSeekTarget.load(std::memory_order_acquire);
-    const bool resumeBufferedPlayback =
-        !hasInterruptedSeek &&
+    const bool hasPausedPlaybackBuffer =
         m_pausedPlaybackBufferResumable.exchange(false,
                                                   std::memory_order_acq_rel);
+    // At very high rates the retained queue belongs to a decoder GOP that was
+    // already being aggressively thinned and clock-corrected. Reusing that
+    // partial epoch after pause can leave the decoder advancing only as fast
+    // as it can process frames sequentially. Start a clean asynchronous epoch
+    // at the visible paused timestamp instead.
+    const bool restartHighSpeedPlayback =
+        !hasInterruptedSeek && hasPausedPlaybackBuffer &&
+        GetPlaybackSpeed() >= 32.0;
+    const bool requiresResumeSeek =
+        hasInterruptedSeek || restartHighSpeedPlayback;
+    const double resumeSeekTarget = restartHighSpeedPlayback
+        ? currentPts
+        : interruptedSeekTarget;
+    const bool resumeBufferedPlayback =
+        !requiresResumeSeek && hasPausedPlaybackBuffer;
 
     // If backward frame stepping used the prefetch cache, the main formatContext
     // was never seeked.  Resync it now so the playback thread decodes from the
     // correct position instead of the old pre-step position.
-    if (m_decoderOutOfSync && !hasInterruptedSeek)
+    if (m_decoderOutOfSync && !requiresResumeSeek)
     {
         // Seeking can update currentPts even when it ultimately reports that
         // it did not reach the requested frame (for example, a demuxer parked
@@ -378,14 +398,14 @@ bool VideoPlayer::Play()
     if (!resumeBufferedPlayback)
         ClearPlaybackBuffer();
 
-    if (hasInterruptedSeek)
+    if (requiresResumeSeek)
     {
         // Publish the interrupted target before either worker starts. The
         // presentation thread therefore cannot consume a frame from the old
         // decoder position, and the decode thread performs the exact recovery
         // off the UI thread.
         std::lock_guard<std::mutex> wakeLock(playbackWakeMutex);
-        m_playbackSeekTarget.store(interruptedSeekTarget,
+        m_playbackSeekTarget.store(resumeSeekTarget,
                                    std::memory_order_relaxed);
         m_playbackSeekExact.store(true, std::memory_order_relaxed);
         m_playbackSeekPending.store(true, std::memory_order_release);
@@ -1633,6 +1653,12 @@ uint64_t VideoPlayer::GetAudioClientStartCountForTesting() const
 uint64_t VideoPlayer::GetAudioClientStartFailureCountForTesting() const
 {
     return m_audioPlayer->GetClientStartFailureCountForTesting();
+}
+
+bool VideoPlayer::IsBackwardPrefetchSuspendedForTesting()
+{
+    std::lock_guard<std::mutex> lock(m_bwdPrefetch->mtx);
+    return m_bwdPrefetch->suspended;
 }
 #endif
 
