@@ -7,6 +7,7 @@
 #include <string>
 #include <commctrl.h>
 #include <cmath>
+#include <atomic>
 
 // Forward declarations
 std::wstring FormatTime(double totalSeconds, bool showMilliseconds);
@@ -21,6 +22,29 @@ extern double g_previewSeekTime;
 extern bool g_isPanelVisible;
 
 extern bool g_resumePlayAfterSeek;
+
+namespace {
+std::atomic<VideoPlayer*> g_pendingPreviewReleasePlayer{nullptr};
+std::atomic<uint64_t> g_previewReleaseAfterPresentation{0};
+}
+
+void FinalizePlayingUiSeek(VideoPlayer* player, double seconds)
+{
+    if (!player || !player->IsLoaded())
+        return;
+
+    // A playing seek only needs a nearby decodable frame. Requesting an exact
+    // refinement here makes long-GOP/high-resolution inputs decode a large run
+    // before playback can resume.
+    player->SeekWhilePlaying(seconds, false);
+
+    // Release the pinned cursor after this seek generation presents a frame.
+    // A time-only >= check would release backward seeks before they land.
+    g_previewReleaseAfterPresentation.store(
+        player->GetPresentedPlaybackFrameCount() + 1,
+        std::memory_order_relaxed);
+    g_pendingPreviewReleasePlayer.store(player, std::memory_order_release);
+}
 
 void UpdateControls()
 {
@@ -172,9 +196,19 @@ void UpdateTimeline()
     {
         double frameDur = g_videoPlayer->frameRate > 0.0
                           ? (1.0 / g_videoPlayer->frameRate) : 0.033;
-        if (std::fabs(g_videoPlayer->GetCurrentTime() - g_previewSeekTime) <= frameDur * 1.5)
+        const bool landedAtPreview =
+            std::fabs(g_videoPlayer->GetCurrentTime() - g_previewSeekTime) <=
+            frameDur * 1.5;
+        const bool presentedAfterPlayingSeek =
+            g_pendingPreviewReleasePlayer.load(std::memory_order_acquire) ==
+                g_videoPlayer &&
+            g_videoPlayer->GetPresentedPlaybackFrameCount() >=
+                g_previewReleaseAfterPresentation.load(std::memory_order_relaxed);
+        if (landedAtPreview || presentedAfterPlayingSeek)
         {
             g_previewSeekTime = -1.0;
+            g_pendingPreviewReleasePlayer.store(nullptr, std::memory_order_release);
+            g_previewReleaseAfterPresentation.store(0, std::memory_order_relaxed);
 
             // If playback was deferred until the seek completed, resume now.
             if (g_resumePlayAfterSeek)

@@ -197,6 +197,50 @@ void VideoDecoder::ResetBufferedDecodeState() {
     m_bufferedFlushSent = false;
 }
 
+int VideoDecoder::ReceiveBufferedCodecFrame(AVFrame* frame) {
+#ifdef VIDEO_EDITOR_TESTING
+    // A receive attempt is the operation FFmpeg requires after send EAGAIN.
+    // Clearing this before the real call also models asynchronous hardware,
+    // where the first poll may itself still report EAGAIN.
+    m_testInjectedEagainNeedsReceive = false;
+#endif
+    return avcodec_receive_frame(m_player->codecContext, frame);
+}
+
+int VideoDecoder::SendBufferedCodecPacket(const AVPacket* packet) {
+#ifdef VIDEO_EDITOR_TESTING
+    if (packet && m_testForceSendEagain &&
+        m_testAcceptedPacketCount >= m_testInjectEagainAfterPackets &&
+        (m_testInjectedEagainCount == 0 || m_testInjectedEagainNeedsReceive))
+    {
+        m_testInjectedEagainNeedsReceive = true;
+        ++m_testInjectedEagainCount;
+        return AVERROR(EAGAIN);
+    }
+#endif
+
+    const int result = avcodec_send_packet(m_player->codecContext, packet);
+#ifdef VIDEO_EDITOR_TESTING
+    if (packet && result == 0)
+        ++m_testAcceptedPacketCount;
+#endif
+    return result;
+}
+
+#ifdef VIDEO_EDITOR_TESTING
+void VideoDecoder::ForceBufferedSendEagainAfterPacketsForTesting(int acceptedPackets) {
+    m_testForceSendEagain = true;
+    m_testInjectedEagainNeedsReceive = false;
+    m_testAcceptedPacketCount = 0;
+    m_testInjectEagainAfterPackets = std::max(0, acceptedPackets);
+    m_testInjectedEagainCount = 0;
+}
+
+uint64_t VideoDecoder::GetInjectedBufferedSendEagainCountForTesting() const {
+    return m_testInjectedEagainCount;
+}
+#endif
+
 bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool generateImage) {
     if (!m_player->isLoaded)
         return false;
@@ -210,7 +254,7 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
         {
             // Only reset to beginning (Stop) if we were actually playing
             // If paused and manually seeking, stay at current position
-            if (m_player->isPlaying)
+            if (m_player->isPlaying && presentFrame)
                 m_player->Stop();
             return false;
         }
@@ -325,7 +369,7 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
 
 VideoDecoder::BufferedReceiveResult VideoDecoder::ReceiveBufferedFrame(
     AVFrame* outputFrame, double& pts, int64_t& frameNumber) {
-    const int ret = avcodec_receive_frame(m_player->codecContext, m_player->hwFrame);
+    const int ret = ReceiveBufferedCodecFrame(m_player->hwFrame);
     if (ret == AVERROR(EAGAIN))
         return BufferedReceiveResult::NeedPacket;
     if (ret == AVERROR_EOF)
@@ -467,7 +511,7 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
         if (m_bufferedPacketPending)
         {
             const int sendResult =
-                avcodec_send_packet(m_player->codecContext, m_player->packet);
+                SendBufferedCodecPacket(m_player->packet);
             if (sendResult == 0)
             {
                 av_packet_unref(m_player->packet);
@@ -495,7 +539,7 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                 return BufferedDecodeResult::EndOfStream;
 
             const int flushResult =
-                avcodec_send_packet(m_player->codecContext, nullptr);
+                SendBufferedCodecPacket(nullptr);
             if (flushResult == 0 || flushResult == AVERROR_EOF)
             {
                 m_bufferedFlushSent = true;

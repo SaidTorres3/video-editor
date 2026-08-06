@@ -1,5 +1,8 @@
 #include "test_framework.h"
 #include "../src/video_player.h"
+#include "../src/ui_updates.h"
+#include "../src/timeline.h"
+#include "../src/window_proc.h"
 #include <thread>
 #include <chrono>
 #include <cmath>
@@ -12,6 +15,10 @@ extern std::wstring g_testVideoPath;
 extern std::wstring g_testLongVideoPath;
 extern std::wstring g_testHeavyVideoPath;
 extern HWND g_testHwnd;
+extern double g_previewSeekTime;
+extern VideoPlayer* g_videoPlayer;
+extern HWND g_hTimeline;
+extern bool g_isTimelineDragging;
 
 namespace {
 struct TimedPlaybackMeasurement {
@@ -140,6 +147,51 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "1x playback should keep advancing without catch-up seek stalls");
         TEST_ASSERT_LT(player.GetCurrentTime(), 1.0,
                        "1x playback should remain close to its wall clock");
+    });
+
+    suite.addTest("Playback_DefaultSpeedOutlivesThreeFrameQueueAndSeek", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testHeavyVideoPath),
+                    "three-frame queue regression source must load");
+        player.ForceBufferedDecoderEagainAfterPacketsForTesting(3);
+        player.ForcePlaybackBufferCapacityForTesting(3);
+        TEST_ASSERT(player.Play(),
+                    "play from the beginning must start at default speed");
+        TEST_ASSERT_EQ(player.GetPlaybackBufferCapacity(), static_cast<size_t>(3),
+                       "regression source must exercise the real three-frame queue");
+
+        const uint64_t startPresentations = player.GetPresentedPlaybackFrameCount();
+        const uint64_t beyondInitialQueue = startPresentations +
+            static_cast<uint64_t>(player.GetPlaybackBufferCapacity()) + 12;
+        const bool continuedFromBeginning = WaitForPresentedFrames(
+            player, beyondInitialQueue, std::chrono::seconds(6));
+        TEST_ASSERT(continuedFromBeginning,
+                    "default-speed playback must not stop after its first three frames; delivered=" +
+                    std::to_string(player.GetPresentedPlaybackFrameCount() - startPresentations) +
+                    ", playing=" + std::to_string(player.IsPlaying()) +
+                    ", eof=" + std::to_string(player.HasPlaybackDecoderEnded()));
+        TEST_ASSERT(player.IsPlaying(),
+                    "player must still be running after the initial queue is drained");
+        TEST_ASSERT(!player.HasPlaybackDecoderEnded(),
+                    "decoder must not scan to EOF after the initial queue is drained");
+        TEST_ASSERT_EQ(player.GetInjectedBufferedDecoderEagainCountForTesting(),
+                       static_cast<uint64_t>(1),
+                       "test must force send_packet(EAGAIN), drain output, and retry the retained packet once");
+
+        player.SeekWhilePlaying(2.0, false);
+        const uint64_t beforeSeekRecovery = player.GetPresentedPlaybackFrameCount();
+        const bool continuedAfterSeek = WaitForPresentedFrames(
+            player, beforeSeekRecovery + 12, std::chrono::seconds(6));
+        TEST_ASSERT(continuedAfterSeek,
+                    "seeking a stuck-looking playing instance must keep delivering frames; delivered=" +
+                    std::to_string(player.GetPresentedPlaybackFrameCount() - beforeSeekRecovery) +
+                    ", playing=" + std::to_string(player.IsPlaying()) +
+                    ", eof=" + std::to_string(player.HasPlaybackDecoderEnded()));
+        TEST_ASSERT(player.IsPlaying(),
+                    "player must remain playable after the in-playback seek");
+        TEST_ASSERT_GT(player.GetCurrentTime(), 2.1,
+                       "playback must advance beyond the seek target");
+        player.Pause();
     });
 
     suite.addTest("Playback_ResumeContinuesWithoutStalling", []() {
@@ -688,6 +740,97 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Pause();
     });
 
+    suite.addTest("HeavySeekImmediatePauseResume_NeverFallsBackToBeginning", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testHeavyVideoPath),
+                    "heavy pause/resume regression source must load");
+        TEST_ASSERT(player.Play(), "heavy source must start before seeking");
+        TEST_ASSERT(WaitForPresentedFrames(player, 3, std::chrono::seconds(3)),
+                    "heavy source must visibly advance before seeking");
+
+        // Match the actual timeline sequence: mouse-down requests a preview,
+        // then mouse-up publishes the final target before Pause can race both.
+        player.SeekWhilePlaying(14.5, false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        constexpr double seekTarget = 15.0;
+        player.SeekWhilePlaying(seekTarget, false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        player.Pause();
+        TEST_ASSERT(!player.IsPlaying(),
+                    "immediate pause must complete while the seek is in flight");
+
+        const uint64_t beforeResume = player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT(player.Play(), "Play must accept resume after an interrupted seek");
+        TEST_ASSERT(WaitForPresentedFrames(player, beforeResume + 1,
+                                           std::chrono::seconds(3)),
+                    "resume must present a frame instead of draining to EOF");
+        TEST_ASSERT(player.IsPlaying(),
+                    "resume after an interrupted seek must not Stop at EOF");
+        TEST_ASSERT_GE(player.GetCurrentTime(), seekTarget - 0.3,
+                       "first resumed frame must remain at the requested seek, not the beginning");
+
+        const double firstResumedPosition = player.GetCurrentTime();
+        TEST_ASSERT(WaitForPresentedFrames(player, beforeResume + 5,
+                                           std::chrono::seconds(2)),
+                    "resumed playback must continue beyond its first frame");
+        TEST_ASSERT_GT(player.GetCurrentTime(), firstResumedPosition,
+                       "timeline must continue advancing after interrupted-seek resume");
+        player.Pause();
+    });
+
+    suite.addTest("TimelineMouseAndPlayButton_ResumeAtSelectedPosition", []() {
+        struct UiStateReset {
+            VideoPlayer* previousPlayer = g_videoPlayer;
+            HWND previousTimeline = g_hTimeline;
+            ~UiStateReset() {
+                g_previewSeekTime = -1.0;
+                g_isTimelineDragging = false;
+                g_hTimeline = previousTimeline;
+                g_videoPlayer = previousPlayer;
+            }
+        } uiStateReset;
+
+        VideoPlayer player(g_testHwnd);
+        g_videoPlayer = &player;
+        g_hTimeline = g_testHwnd;
+        TEST_ASSERT(player.LoadVideo(g_testHeavyVideoPath),
+                    "event-level resume regression source must load");
+
+        WindowProc(g_testHwnd, WM_COMMAND, MAKEWPARAM(1002, BN_CLICKED), 0);
+        TEST_ASSERT(player.IsPlaying(), "Play button handler must start playback");
+        TEST_ASSERT(WaitForPresentedFrames(player, 3, std::chrono::seconds(3)),
+                    "event-level source must visibly advance before seeking");
+
+        RECT timelineRect{};
+        GetClientRect(g_testHwnd, &timelineRect);
+        const int seekX = timelineRect.right * 3 / 4;
+        const int seekY = timelineRect.bottom / 2;
+        const LPARAM seekPoint = MAKELPARAM(seekX, seekY);
+        TimelineProc(g_testHwnd, WM_LBUTTONDOWN, MK_LBUTTON, seekPoint);
+        TimelineProc(g_testHwnd, WM_LBUTTONUP, 0, seekPoint);
+        WindowProc(g_testHwnd, WM_COMMAND, MAKEWPARAM(1003, BN_CLICKED), 0);
+        TEST_ASSERT(!player.IsPlaying(),
+                    "Pause button handler must stop while timeline seek is in flight");
+
+        const double expectedTarget = player.GetDuration() * 0.75;
+        const uint64_t beforeResume = player.GetPresentedPlaybackFrameCount();
+        WindowProc(g_testHwnd, WM_COMMAND, MAKEWPARAM(1002, BN_CLICKED), 0);
+        TEST_ASSERT(player.IsPlaying(), "Play button handler must accept resume");
+        TEST_ASSERT(WaitForPresentedFrames(player, beforeResume + 1,
+                                           std::chrono::seconds(3)),
+                    "real timeline/Play event path must present after resume");
+        TEST_ASSERT_GE(player.GetCurrentTime(), expectedTarget - 0.3,
+                       "real timeline/Play event path must not present from the beginning");
+        TEST_ASSERT(WaitForPresentedFrames(player, beforeResume + 5,
+                                           std::chrono::seconds(2)),
+                    "real timeline/Play event path must keep presenting frames");
+        TEST_ASSERT(player.IsPlaying(),
+                    "real timeline/Play event path must not reset through Stop at EOF");
+        TEST_ASSERT_GE(player.GetCurrentTime(), expectedTarget - 0.3,
+                       "timeline must remain at the selected region while playback advances");
+        player.Pause();
+    });
+
     suite.addTest("PlaybackBuffer_PrefillsAndStaysBounded", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);
@@ -724,6 +867,113 @@ void RegisterPlaybackTests(TestSuite& suite) {
         TEST_ASSERT_GE(player.GetCurrentTime(), 1.8,
                        "Asynchronous seek should reach the requested playback position");
         TEST_ASSERT(player.IsPlaying(), "Seek should not pause playback");
+        player.Pause();
+    });
+
+    suite.addTest("PlayingTimelineAndJLSeek_StayPlayingAndNeverRestartAtBeginning", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testLongVideoPath),
+                    "playing UI-seek regression source must load");
+        TEST_ASSERT(player.Play(), "playback must start before a timeline/J/L seek");
+
+        const uint64_t initialPresentation = player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT(WaitForPresentedFrames(player, initialPresentation + 6,
+                                           std::chrono::seconds(2)),
+                    "playback must be visibly advancing before the UI seek");
+
+        constexpr double futureTarget = 90.0;
+        player.ForceNextPrimarySeekNoOpForTesting();
+        const uint64_t beforeFutureSeek = player.GetPresentedPlaybackFrameCount();
+        player.SeekWhilePlaying(futureTarget, false);
+        const bool futureFramesPresented = WaitForPresentedFrames(
+            player, beforeFutureSeek + 6, std::chrono::seconds(3));
+
+        TEST_ASSERT_EQ(player.GetInjectedPrimarySeekNoOpCountForTesting(),
+                       static_cast<uint64_t>(1),
+                       "regression must force a demux seek that lies about succeeding");
+        TEST_ASSERT(player.IsPlaying(),
+                    "timeline/L seek while playing must not pause playback");
+        TEST_ASSERT(futureFramesPresented,
+                    "timeline/L seek must continue presenting frames while playing");
+        TEST_ASSERT_GE(player.GetCurrentTime(), futureTarget - 0.2,
+                       "timeline/L seek must display from the requested future position, not the beginning");
+
+        constexpr double backwardTarget = 40.0;
+        player.ForceNextPrimarySeekNoOpForTesting();
+        const uint64_t beforeBackwardSeek = player.GetPresentedPlaybackFrameCount();
+        player.SeekWhilePlaying(backwardTarget, false);
+        const bool backwardFramesPresented = WaitForPresentedFrames(
+            player, beforeBackwardSeek + 6, std::chrono::seconds(3));
+        TEST_ASSERT(player.IsPlaying(),
+                    "J seek while playing must not pause playback");
+        TEST_ASSERT(backwardFramesPresented,
+                    "J seek must continue presenting frames while playing");
+        TEST_ASSERT_EQ(player.GetInjectedPrimarySeekNoOpCountForTesting(),
+                       static_cast<uint64_t>(2),
+                       "both forward and backward UI seeks must reject false demux success");
+        TEST_ASSERT_GE(player.GetCurrentTime(), backwardTarget - 0.2,
+                       "J seek must not restart playback at the beginning");
+        TEST_ASSERT_LT(player.GetCurrentTime(), backwardTarget + 2.0,
+                       "J seek must land near its requested backward position");
+
+        player.Pause();
+        const double pausedAt = player.GetCurrentTime();
+        const uint64_t beforeResume = player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT(player.Play(), "manual unpause after a UI seek must succeed");
+        TEST_ASSERT(WaitForPresentedFrames(player, beforeResume + 6,
+                                           std::chrono::seconds(2)),
+                    "manual unpause after a UI seek must keep displaying frames");
+        TEST_ASSERT_GE(player.GetCurrentTime(), pausedAt - 2.0,
+                       "unpausing after a UI seek must not restart at the beginning");
+        player.Pause();
+    });
+
+    suite.addTest("PlayingUiSeek_StartsPromptlyAndReleasesTimelineCursor", []() {
+        struct PreviewSeekReset {
+            VideoPlayer* previousPlayer = g_videoPlayer;
+            ~PreviewSeekReset() {
+                g_previewSeekTime = -1.0;
+                g_videoPlayer = previousPlayer;
+            }
+        } previewSeekReset;
+
+        VideoPlayer player(g_testHwnd);
+        g_videoPlayer = &player;
+        TEST_ASSERT(player.LoadVideo(g_testHeavyVideoPath),
+                    "playing UI-seek latency regression source must load");
+        TEST_ASSERT(player.Play(), "playback must start before a UI seek");
+        TEST_ASSERT(WaitForPresentedFrames(player, 3, std::chrono::seconds(3)),
+                    "heavy regression source must visibly play before seeking");
+
+        constexpr double seekTarget = 12.0;
+        g_previewSeekTime = seekTarget;
+        const uint64_t beforeSeek = player.GetPresentedPlaybackFrameCount();
+        const auto seekStarted = std::chrono::steady_clock::now();
+        FinalizePlayingUiSeek(&player, seekTarget);
+
+        const auto deadline = seekStarted + std::chrono::milliseconds(1500);
+        while ((player.GetPresentedPlaybackFrameCount() <= beforeSeek ||
+                player.GetCurrentTime() < seekTarget - 0.25) &&
+               player.IsPlaying() &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        const auto startupLatency = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - seekStarted);
+        TEST_ASSERT_LT(startupLatency.count(), static_cast<int64_t>(1500),
+                       "playing UI seek must not block playback for multiple seconds");
+        TEST_ASSERT_GE(player.GetCurrentTime(), seekTarget - 0.25,
+                       "playing UI seek must present from the requested position");
+        TEST_ASSERT_LT(g_previewSeekTime, 0.0,
+                       "timeline cursor must unpin after the first post-seek frame");
+
+        const double firstSeekPosition = player.GetCurrentTime();
+        const uint64_t firstSeekPresentation = player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT(WaitForPresentedFrames(player, firstSeekPresentation + 5,
+                                           std::chrono::seconds(2)),
+                    "playback must keep presenting after the UI seek starts");
+        TEST_ASSERT_GT(player.GetCurrentTime(), firstSeekPosition,
+                       "timeline position must advance after the cursor unpins");
         player.Pause();
     });
 
@@ -776,6 +1026,67 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.SeekToTime(2.5, 1, true, true);
         TEST_ASSERT(player.d2dBitmap != nullptr,
                     "Paused seek should present its quick frame before exact refinement finishes");
+    });
+
+    suite.addTest("PausedTimelineSeek_ResumeStartsAtSeekTargetAndKeepsAdvancing", []() {
+        struct PreviewSeekReset {
+            VideoPlayer* previousPlayer = g_videoPlayer;
+            ~PreviewSeekReset() {
+                g_previewSeekTime = -1.0;
+                g_videoPlayer = previousPlayer;
+            }
+        } previewSeekReset;
+
+        VideoPlayer player(g_testHwnd);
+        g_videoPlayer = &player;
+        TEST_ASSERT(player.LoadVideo(g_testLongVideoPath),
+                    "paused timeline seek regression source must load");
+
+        TEST_ASSERT(player.Play(), "initial playback must start before the paused scrub");
+        const auto initialDeadline = std::chrono::steady_clock::now() +
+                                     std::chrono::seconds(2);
+        while (player.GetCurrentTime() < 0.1 &&
+               std::chrono::steady_clock::now() < initialDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        player.Pause();
+
+        // Match the timeline's real paused drag sequence: exact mouse-down,
+        // inexpensive previews while moving, then an exact mouse-up seek.
+        player.SeekToTime(60.0, INT_MAX, false, false);
+        player.SeekToTime(70.0, 0, true, true);
+        player.SeekToTime(120.0, 0, true, true);
+        constexpr double seekTarget = 90.0;
+        // Some real inputs reject the stream-specific seek used by the player.
+        // Releasing the cursor backward after a preview makes an ignored failure
+        // visible: decoding resumes from the preview position instead of target.
+        player.ForceNextPrimarySeekFailureForTesting();
+        g_previewSeekTime = seekTarget;
+        player.SeekToTime(seekTarget, INT_MAX, false, false);
+        TEST_ASSERT_EQ(player.GetInjectedPrimarySeekFailureCountForTesting(),
+                       static_cast<uint64_t>(1),
+                       "regression must exercise a failed primary demux seek");
+        TEST_ASSERT_NEAR(player.GetCurrentTime(), seekTarget, 0.2,
+                         "paused timeline release must land on its requested frame");
+        TEST_ASSERT_LT(g_previewSeekTime, 0.0,
+                       "timeline cursor must unpin once the exact paused seek lands");
+
+        const uint64_t presentationsBeforeResume =
+            player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT(player.Play(), "Play must resume after a paused timeline seek");
+        TEST_ASSERT(WaitForPresentedFrames(player, presentationsBeforeResume + 1,
+                                           std::chrono::seconds(3)),
+                    "resume must present a frame after the paused seek");
+        TEST_ASSERT_GE(player.GetCurrentTime(), seekTarget - 0.2,
+                       "the first resumed playback frame must not jump back to the beginning");
+
+        TEST_ASSERT(WaitForPresentedFrames(player, presentationsBeforeResume + 12,
+                                           std::chrono::seconds(3)),
+                    "playback must keep presenting after a paused timeline seek");
+        TEST_ASSERT_GT(player.GetCurrentTime(), seekTarget + 0.2,
+                       "timeline position must advance beyond the paused seek target");
+        TEST_ASSERT(player.IsPlaying(),
+                    "player must remain playable after resuming a paused timeline seek");
+        player.Pause();
     });
 
     suite.addTest("Stop_ResetsPosition", []() {

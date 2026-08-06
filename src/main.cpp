@@ -198,7 +198,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
             {
                 bool wasPlaying = g_videoPlayer->IsPlaying();
                 if (wasPlaying)
-                    g_videoPlayer->SeekWhilePlaying(g_previewSeekTime);
+                    FinalizePlayingUiSeek(g_videoPlayer, g_previewSeekTime);
                 else
                 {
                     g_videoPlayer->SeekToTimeExact(g_previewSeekTime);

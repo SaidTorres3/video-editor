@@ -240,18 +240,33 @@ private:
     // Keeping decoder ownership on that thread avoids pause/join/restart stalls.
     std::atomic<bool> m_playbackSeekPending;
     std::atomic<bool> m_playbackSeekInProgress;
+    std::atomic<uint64_t> m_playbackSeekGeneration;
     std::atomic<double> m_playbackSeekTarget;
     std::atomic<bool> m_playbackSeekExact;
+    // Pause can arrive before the decode thread consumes an asynchronous seek.
+    // Preserve that target so the next Play cannot resume from the old/start
+    // demux position.
+    std::atomic<bool> m_resumeSeekPending;
+    std::atomic<double> m_resumeSeekTarget;
     std::atomic<double> m_playbackSpeed;
     std::atomic<bool> m_playbackSpeedChangePending;
     std::atomic<double> m_playbackClockStartPts;
     std::atomic<int64_t> m_playbackClockStartNs;
     std::atomic<uint64_t> m_presentedPlaybackFrameCount;
     int64_t m_lastHighSpeedFrameDeliveryNs;
+#ifdef VIDEO_EDITOR_TESTING
+    size_t m_testPlaybackBufferCapacity = 0;
+    std::atomic<bool> m_testFailNextPrimarySeek{false};
+    std::atomic<uint64_t> m_testInjectedPrimarySeekFailures{0};
+    std::atomic<bool> m_testNoOpNextPrimarySeek{false};
+    std::atomic<uint64_t> m_testInjectedPrimarySeekNoOps{0};
+#endif
     std::atomic<ULONGLONG> m_speedOverlayDeadline;
 
     void ResetPlaybackClock(double pts);
     double GetPlaybackClockTarget() const;
+    bool SeekDemuxer(double seconds, AVStream* stream, int64_t streamTimestamp,
+                     bool skipPrimarySeek = false);
 
     // Background backward-frame prefetch: owns a completely separate
     // AVFormatContext so it never races with the main player.
@@ -341,7 +356,7 @@ public:
 
     void SeekToFrame(int64_t frameNumber);
     void StepFrame(int direction);
-    void SeekToTime(double seconds, int decodeCount = 3, bool renderFastFrame = true, bool allowAsyncRefine = true);
+    bool SeekToTime(double seconds, int decodeCount = 3, bool renderFastFrame = true, bool allowAsyncRefine = true);
     void SeekToTimeExact(double seconds);  // Seek to exact timestamp for keyframe editing
     void SeekWhilePlaying(double seconds, bool exact = true);
 
@@ -354,6 +369,15 @@ public:
     }
     size_t GetBufferedPlaybackFrameCount() const;
     bool HasPlaybackDecoderEnded() const;
+#ifdef VIDEO_EDITOR_TESTING
+    void ForceBufferedDecoderEagainAfterPacketsForTesting(int acceptedPackets);
+    uint64_t GetInjectedBufferedDecoderEagainCountForTesting() const;
+    void ForcePlaybackBufferCapacityForTesting(size_t capacity);
+    void ForceNextPrimarySeekFailureForTesting();
+    uint64_t GetInjectedPrimarySeekFailureCountForTesting() const;
+    void ForceNextPrimarySeekNoOpForTesting();
+    uint64_t GetInjectedPrimarySeekNoOpCountForTesting() const;
+#endif
     size_t GetPlaybackBufferCapacity() const { return playbackBufferCapacity; }
 
     // Crop timeline helpers
@@ -406,7 +430,9 @@ public:
 private:
     bool SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine,
                             bool forceExact, bool hardSeek = false,
-                            bool renderFastFrame = true, bool abortOnPendingSeek = true);
+                            bool renderFastFrame = true, bool abortOnPendingSeek = true,
+                            bool skipPrimarySeek = false,
+                            bool* seekPositionValid = nullptr);
     std::uint64_t BeginSeekOperation();
     void QueueSeekRefinement(double seconds, std::uint64_t generation);
     void CancelPendingSeekRefinement();

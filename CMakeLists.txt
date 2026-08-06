@@ -300,6 +300,7 @@ if(BUILD_TESTS)
         ${FFMPEG_INCLUDE_DIR}
         ${RNNOISE_INCLUDE_DIR}
     )
+    target_compile_definitions(VideoEditorTests PRIVATE VIDEO_EDITOR_TESTING)
     if(USE_STATIC_FFMPEG)
         target_compile_definitions(VideoEditorTests PRIVATE TEN_VAD_IN_MEMORY)
     endif()

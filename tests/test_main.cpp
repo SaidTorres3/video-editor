@@ -220,7 +220,10 @@ static bool GenerateHeavySpeedTestVideo(const std::wstring& outputPath,
                         CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
         return false;
 
-    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 30000);
+    // The 4K 10-bit fixture can exceed 30 seconds on a busy CI machine. A
+    // fixture timeout is not a playback result, so allow generation to finish
+    // instead of producing a misleading test-suite failure before tests run.
+    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 60000);
     DWORD exitCode = 1;
     if (waitResult == WAIT_OBJECT_0)
         GetExitCodeProcess(pi.hProcess, &exitCode);

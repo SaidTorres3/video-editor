@@ -17,6 +17,7 @@
 #include <cstring>
 #include <chrono>
 #include <climits>
+#include <cerrno>
 
 void UpdateControls();
 void UpdateTimeline();
@@ -54,8 +55,11 @@ VideoPlayer::VideoPlayer(HWND parent)
             m_decoderOutOfSync(false),
             m_playbackSeekPending(false),
             m_playbackSeekInProgress(false),
+            m_playbackSeekGeneration(0),
             m_playbackSeekTarget(0.0),
             m_playbackSeekExact(true),
+            m_resumeSeekPending(false),
+            m_resumeSeekTarget(0.0),
             m_playbackSpeed(1.0),
             m_playbackSpeedChangePending(false),
             m_playbackClockStartPts(0.0),
@@ -307,15 +311,23 @@ bool VideoPlayer::Play()
         return false;
     CancelPendingSeekRefinement();
 
+    const bool hasInterruptedSeek =
+        m_resumeSeekPending.exchange(false, std::memory_order_acq_rel);
+    const double interruptedSeekTarget =
+        m_resumeSeekTarget.load(std::memory_order_acquire);
+
     // If backward frame stepping used the prefetch cache, the main formatContext
     // was never seeked.  Resync it now so the playback thread decodes from the
     // correct position instead of the old pre-step position.
-    if (m_decoderOutOfSync)
+    if (m_decoderOutOfSync && !hasInterruptedSeek)
     {
         // hardSeek=true bypasses the smartSeek optimisation which would skip
         // av_seek_frame when seconds==currentPts, leaving the formatContext at
         // the wrong position when we consumed a prefetch-cache frame.
-        SeekToTimeInternal(currentPts, INT_MAX, false, true, true);
+        if (!SeekToTimeInternal(currentPts, INT_MAX, false, true, true) &&
+            !SeekToTimeInternal(currentPts, INT_MAX, false, true, true,
+                                true, true, true))
+            return false;
         // m_decoderOutOfSync is cleared inside SeekToTimeInternal
     }
 
@@ -335,13 +347,33 @@ bool VideoPlayer::Play()
         1, static_cast<size_t>(frameWidth) * static_cast<size_t>(frameHeight) * 4);
     const size_t memoryLimitedFrames = std::max<size_t>(3, (128ull * 1024ull * 1024ull) / bytesPerFrame);
     playbackBufferCapacity = std::min(desiredFrames, memoryLimitedFrames);
+#ifdef VIDEO_EDITOR_TESTING
+    if (m_testPlaybackBufferCapacity > 0)
+        playbackBufferCapacity = m_testPlaybackBufferCapacity;
+#endif
     playbackPrebufferFrames = std::min(playbackBufferCapacity, std::max<size_t>(2, playbackBufferCapacity / 2));
     if (GetPlaybackSpeed() >= 4.0)
         playbackPrebufferFrames = 1;
     ClearPlaybackBuffer();
+
+    if (hasInterruptedSeek)
+    {
+        // Publish the interrupted target before either worker starts. The
+        // presentation thread therefore cannot consume a frame from the old
+        // decoder position, and the decode thread performs the exact recovery
+        // off the UI thread.
+        std::lock_guard<std::mutex> wakeLock(playbackWakeMutex);
+        m_playbackSeekTarget.store(interruptedSeekTarget,
+                                   std::memory_order_relaxed);
+        m_playbackSeekExact.store(true, std::memory_order_relaxed);
+        m_playbackSeekPending.store(true, std::memory_order_release);
+        m_playbackSeekGeneration.fetch_add(1, std::memory_order_release);
+    }
     playbackThreadRunning = true;
     playbackDecodeThread = std::thread(&VideoPlayer::PlaybackDecodeThreadFunction, this);
     playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
+    playbackWakeCondition.notify_all();
+    playbackBufferCondition.notify_all();
     return true;
 }
 
@@ -349,6 +381,18 @@ void VideoPlayer::Pause()
 {
     if (isPlaying)
     {
+        const bool interruptedSeek =
+            m_playbackSeekPending.load(std::memory_order_acquire) ||
+            m_playbackSeekInProgress.load(std::memory_order_acquire);
+        if (interruptedSeek)
+        {
+            std::lock_guard<std::mutex> wakeLock(playbackWakeMutex);
+            m_resumeSeekTarget.store(
+                m_playbackSeekTarget.load(std::memory_order_relaxed),
+                std::memory_order_release);
+            m_resumeSeekPending.store(true, std::memory_order_release);
+        }
+
         isPlaying = false;
         clipPreviewActive = false;
         m_playbackSeekPending.store(false, std::memory_order_release);
@@ -409,6 +453,7 @@ void VideoPlayer::Stop()
 {
     clipPreviewActive = false;
     Pause();
+    m_resumeSeekPending.store(false, std::memory_order_release);
     ClearPlaybackBuffer();
     CancelPendingSeekRefinement();
     currentFrame = 0;
@@ -1168,14 +1213,27 @@ void VideoPlayer::BwdPrefetchThreadFunc()
     closeCtx();
 }
 
-void VideoPlayer::SeekToTime(double seconds, int decodeCount, bool renderFastFrame, bool allowAsyncRefine)
+bool VideoPlayer::SeekToTime(double seconds, int decodeCount, bool renderFastFrame, bool allowAsyncRefine)
 {
-    SeekToTimeInternal(seconds, decodeCount, allowAsyncRefine, false, false, renderFastFrame);
+    if (!isPlaying)
+        m_resumeSeekPending.store(false, std::memory_order_release);
+    bool reached = SeekToTimeInternal(seconds, decodeCount, allowAsyncRefine,
+                                      false, false, renderFastFrame);
+    if (!reached && decodeCount == INT_MAX && !allowAsyncRefine)
+    {
+        reached = SeekToTimeInternal(seconds, decodeCount, false, false, true,
+                                     renderFastFrame, true, true);
+    }
+    return reached;
 }
 
 void VideoPlayer::SeekToTimeExact(double seconds)
 {
-    SeekToTimeInternal(seconds, INT_MAX, false, true);
+    if (!isPlaying)
+        m_resumeSeekPending.store(false, std::memory_order_release);
+    if (!SeekToTimeInternal(seconds, INT_MAX, false, true))
+        SeekToTimeInternal(seconds, INT_MAX, false, true, true,
+                           true, true, true);
 }
 
 void VideoPlayer::SeekWhilePlaying(double seconds, bool exact)
@@ -1203,21 +1261,81 @@ void VideoPlayer::SeekWhilePlaying(double seconds, bool exact)
         m_playbackSeekTarget.store(seconds, std::memory_order_relaxed);
         m_playbackSeekExact.store(exact, std::memory_order_relaxed);
         m_playbackSeekPending.store(true, std::memory_order_release);
+        // Unlike the pending/in-progress flags, this generation cannot change
+        // to a new value and back between two presentation-thread checks.
+        m_playbackSeekGeneration.fetch_add(1, std::memory_order_release);
     }
     playbackWakeCondition.notify_all();
     playbackBufferCondition.notify_all();
 }
 
+bool VideoPlayer::SeekDemuxer(double seconds, AVStream* stream, int64_t streamTimestamp,
+                              bool skipPrimarySeek)
+{
+    if (!formatContext || !stream || videoStreamIndex < 0)
+        return false;
+
+    const int64_t globalTimestamp = static_cast<int64_t>(std::llround(
+        (seconds + startTimeOffset) * static_cast<double>(AV_TIME_BASE)));
+    int seekResult = AVERROR(EIO);
+    if (!skipPrimarySeek)
+    {
+#ifdef VIDEO_EDITOR_TESTING
+        if (m_testNoOpNextPrimarySeek.exchange(false, std::memory_order_acq_rel))
+        {
+            m_testInjectedPrimarySeekNoOps.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        if (m_testFailNextPrimarySeek.exchange(false, std::memory_order_acq_rel))
+        {
+            m_testInjectedPrimarySeekFailures.fetch_add(1, std::memory_order_relaxed);
+            seekResult = AVERROR(EIO);
+        }
+        else
+#endif
+        {
+            seekResult = av_seek_frame(formatContext, videoStreamIndex,
+                                       streamTimestamp, AVSEEK_FLAG_BACKWARD);
+        }
+        if (seekResult >= 0)
+            return true;
+    }
+
+    // Some demuxers cannot service av_seek_frame with a stream timestamp even
+    // though their more precise seek_file implementation works. This is common
+    // with sparse/missing indexes and was previously ignored, leaving playback
+    // to decode from an unrelated position while the timeline stayed pinned.
+    seekResult = avformat_seek_file(formatContext, videoStreamIndex,
+                                    INT64_MIN, streamTimestamp, streamTimestamp,
+                                    AVSEEK_FLAG_BACKWARD);
+    if (seekResult >= 0)
+        return true;
+
+    // Finally retry in AV_TIME_BASE units. Demuxers that do not support a
+    // per-stream seek can still support a global container-timeline seek.
+    seekResult = avformat_seek_file(formatContext, -1,
+                                    INT64_MIN, globalTimestamp, globalTimestamp,
+                                    AVSEEK_FLAG_BACKWARD);
+    if (seekResult >= 0)
+        return true;
+
+    return av_seek_frame(formatContext, -1, globalTimestamp,
+                         AVSEEK_FLAG_BACKWARD) >= 0;
+}
+
 bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine,
                                      bool forceExact, bool hardSeek,
-                                     bool renderFastFrame, bool abortOnPendingSeek)
+                                     bool renderFastFrame, bool abortOnPendingSeek,
+                                     bool skipPrimarySeek,
+                                     bool* seekPositionValid)
 {
+    if (seekPositionValid)
+        *seekPositionValid = false;
     if (!isLoaded)
         return false;
 
     if (m_decoderOutOfSync) {
         hardSeek = true;
-        m_decoderOutOfSync = false;
     }
 
     std::uint64_t generation = BeginSeekOperation();
@@ -1248,10 +1366,41 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
 
         AVStream *vs = formatContext->streams[videoStreamIndex];
         int64_t ts = static_cast<int64_t>((seconds + startTimeOffset) / av_q2d(vs->time_base));
+        const AVIndexEntry *entry = avformat_index_get_entry_from_timestamp(
+            vs, ts, AVSEEK_FLAG_BACKWARD);
+
+        if (!SeekDemuxer(seconds, vs, ts, skipPrimarySeek))
+        {
+            m_decoderOutOfSync = true;
+            return false;
+        }
+
+        // Some demuxers report success without changing their read position.
+        // When an index entry is available, reject that false success before
+        // flushing the codec or decoding old-position packets. avio_tell can be
+        // ahead by one IO buffer, so allow bounded buffering around entry->pos.
+        if (!skipPrimarySeek && entry && entry->pos >= 0 && formatContext->pb)
+        {
+            const int64_t actualPosition = avio_tell(formatContext->pb);
+            const int64_t ioTolerance = std::max<int64_t>(
+                256 * 1024,
+                formatContext->pb->buffer_size > 0
+                    ? static_cast<int64_t>(formatContext->pb->buffer_size) * 4
+                    : 0);
+            if (actualPosition >= 0 &&
+                std::llabs(actualPosition - entry->pos) > ioTolerance)
+            {
+                if (!SeekDemuxer(seconds, vs, ts, true))
+                {
+                    m_decoderOutOfSync = true;
+                    return false;
+                }
+            }
+        }
 
         m_decoder->ResetBufferedDecodeState();
-        av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
         avcodec_flush_buffers(codecContext);
+        m_decoderOutOfSync = false;
 
         for (auto &track : audioTracks)
         {
@@ -1264,7 +1413,6 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
                 tr->buffer.clear();
         }
 
-        const AVIndexEntry *entry = avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
         if (entry)
         {
             int64_t keyTs = entry->timestamp;
@@ -1333,7 +1481,19 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     for (unsigned i = 0; i < formatContext->nb_streams; ++i)
         formatContext->streams[i]->discard = previousDiscard[i];
 
-    const bool reachedTarget = currentPts >= seconds - (frameDuration * 0.5);
+    // A demuxer can report seek success without moving. Do not trust the index
+    // timestamp alone: a hard seek is successful only after decoding a frame
+    // at (and not materially beyond) the requested position.
+    const bool decodedAfterDemuxSeek = smartSeek || !needAtLeastOneFrame;
+    const double validSeekLag = std::max(2.0, frameDuration * 60.0);
+    const bool decodedInTargetRegion = decodedAfterDemuxSeek &&
+                                       currentPts >= seconds - validSeekLag &&
+                                       currentPts <= seconds + std::max(0.25, frameDuration * 3.0);
+    if (seekPositionValid)
+        *seekPositionValid = decodedInTargetRegion;
+    const bool reachedTarget = decodedAfterDemuxSeek &&
+                               currentPts >= seconds - (frameDuration * 0.5) &&
+                               currentPts <= seconds + (frameDuration * 2.0);
     const bool superseded = abortOnPendingSeek && isPlaying &&
                             m_playbackSeekPending.load(std::memory_order_acquire);
     bool willRefineAsync = !reachedTarget && allowAsyncRefine && !forceExact && !isPlaying;
@@ -1375,6 +1535,43 @@ bool VideoPlayer::HasPlaybackDecoderEnded() const
     std::lock_guard<std::mutex> lock(playbackBufferMutex);
     return playbackDecodeEof;
 }
+
+#ifdef VIDEO_EDITOR_TESTING
+void VideoPlayer::ForceBufferedDecoderEagainAfterPacketsForTesting(int acceptedPackets)
+{
+    m_decoder->ForceBufferedSendEagainAfterPacketsForTesting(acceptedPackets);
+}
+
+uint64_t VideoPlayer::GetInjectedBufferedDecoderEagainCountForTesting() const
+{
+    return m_decoder->GetInjectedBufferedSendEagainCountForTesting();
+}
+
+void VideoPlayer::ForcePlaybackBufferCapacityForTesting(size_t capacity)
+{
+    m_testPlaybackBufferCapacity = std::max<size_t>(1, capacity);
+}
+
+void VideoPlayer::ForceNextPrimarySeekFailureForTesting()
+{
+    m_testFailNextPrimarySeek.store(true, std::memory_order_release);
+}
+
+uint64_t VideoPlayer::GetInjectedPrimarySeekFailureCountForTesting() const
+{
+    return m_testInjectedPrimarySeekFailures.load(std::memory_order_acquire);
+}
+
+void VideoPlayer::ForceNextPrimarySeekNoOpForTesting()
+{
+    m_testNoOpNextPrimarySeek.store(true, std::memory_order_release);
+}
+
+uint64_t VideoPlayer::GetInjectedPrimarySeekNoOpCountForTesting() const
+{
+    return m_testInjectedPrimarySeekNoOps.load(std::memory_order_acquire);
+}
+#endif
 
 bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vector<uint8_t>& pixels) const
 {
@@ -2353,8 +2550,33 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
                     target = m_playbackSeekTarget.load(std::memory_order_acquire);
                     exact = m_playbackSeekExact.load(std::memory_order_acquire);
                 }
-                SeekToTimeInternal(target, exact ? INT_MAX : 12, false, exact,
-                                   true, true, exact);
+                const double positionBeforeSeek = currentPts;
+                bool seekPositionValid = false;
+                SeekToTimeInternal(
+                    target, exact ? INT_MAX : 12, false, exact,
+                    true, true, exact, false, &seekPositionValid);
+
+                // av_seek_frame can return success without moving the demuxer.
+                // The decoded-position validation above catches that lie; retry
+                // via avformat_seek_file instead of playing from the old/start
+                // position while the UI remains pinned to the requested time.
+                if (!seekPositionValid &&
+                    !m_playbackSeekPending.load(std::memory_order_acquire))
+                {
+                    SeekToTimeInternal(
+                        target, exact ? INT_MAX : 12, false, exact,
+                        true, true, exact, true, &seekPositionValid);
+                }
+
+                // If neither seek API can reach the target, retain the last
+                // playable position rather than leaving the decoder at EOF or
+                // an unrelated beginning position.
+                if (!seekPositionValid &&
+                    !m_playbackSeekPending.load(std::memory_order_acquire))
+                {
+                    SeekToTimeInternal(positionBeforeSeek, INT_MAX, false, true,
+                                       true, false, true, true);
+                }
             }
             while (m_playbackSeekPending.exchange(false, std::memory_order_acq_rel));
 
@@ -2518,9 +2740,19 @@ void VideoPlayer::PlaybackThreadFunction()
     bool clockStarted = false;
     auto startTime = masterStartTime;
     double startPts = masterStartPts;
+    uint64_t observedSeekGeneration =
+        m_playbackSeekGeneration.load(std::memory_order_acquire);
 
     while (playbackThreadRunning)
     {
+        const uint64_t loopSeekGeneration =
+            m_playbackSeekGeneration.load(std::memory_order_acquire);
+        if (loopSeekGeneration != observedSeekGeneration)
+        {
+            observedSeekGeneration = loopSeekGeneration;
+            clockStarted = false;
+        }
+
         BufferedPlaybackFrame bufferedFrame;
         {
             std::unique_lock<std::mutex> lock(playbackBufferMutex);
@@ -2584,6 +2816,18 @@ void VideoPlayer::PlaybackThreadFunction()
         }
         playbackBufferCondition.notify_all();
 
+        // The producer can process an entire seek while this thread is between
+        // checks, making both transient flags false again. The generation still
+        // changes, so discard the frame from the old clock epoch and restart.
+        uint64_t latestSeekGeneration =
+            m_playbackSeekGeneration.load(std::memory_order_acquire);
+        if (latestSeekGeneration != observedSeekGeneration)
+        {
+            observedSeekGeneration = latestSeekGeneration;
+            clockStarted = false;
+            continue;
+        }
+
         if (!clockStarted)
         {
             // The seek flag can change after a frame is removed from the
@@ -2639,6 +2883,15 @@ void VideoPlayer::PlaybackThreadFunction()
             return;
         if (m_playbackSeekPending.load(std::memory_order_acquire))
         {
+            clockStarted = false;
+            continue;
+        }
+
+        latestSeekGeneration =
+            m_playbackSeekGeneration.load(std::memory_order_acquire);
+        if (latestSeekGeneration != observedSeekGeneration)
+        {
+            observedSeekGeneration = latestSeekGeneration;
             clockStarted = false;
             continue;
         }
