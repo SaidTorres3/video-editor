@@ -10,30 +10,20 @@ if(POLICY CMP0111)
     cmake_policy(SET CMP0111 NEW)
 endif()
 
-if(POLICY CMP0169)
-    cmake_policy(SET CMP0169 OLD)
-endif()
-
 project(VideoEditor C CXX)
 
-include(FetchContent)
-
-# Rubber Band provides real-time time stretching without changing pitch. Pin
-# the exact revision so local and CI audio behaviour cannot drift over time.
-FetchContent_Declare(
-    rubberband_src
-    GIT_REPOSITORY https://github.com/breakfastquay/rubberband.git
-    GIT_TAG 1d95888bec3ae0a17c0c4af791810d5a63f6bc35
-)
-FetchContent_GetProperties(rubberband_src)
-if(NOT rubberband_src_POPULATED)
-    FetchContent_Populate(rubberband_src)
+# Rubber Band provides real-time time stretching without changing pitch. Its
+# pinned source is vendored so configuration and CI builds remain offline.
+set(RUBBERBAND_ROOT "${CMAKE_SOURCE_DIR}/vendor/rubberband")
+if(NOT EXISTS "${RUBBERBAND_ROOT}/single/RubberBandSingle.cpp" OR
+   NOT EXISTS "${RUBBERBAND_ROOT}/rubberband/RubberBandStretcher.h")
+    message(FATAL_ERROR "Vendored Rubber Band source is missing from ${RUBBERBAND_ROOT}")
 endif()
 add_library(rubberband_vendor STATIC
-    "${rubberband_src_SOURCE_DIR}/single/RubberBandSingle.cpp"
+    "${RUBBERBAND_ROOT}/single/RubberBandSingle.cpp"
 )
 target_include_directories(rubberband_vendor PUBLIC
-    "${rubberband_src_SOURCE_DIR}"
+    "${RUBBERBAND_ROOT}"
 )
 target_compile_definitions(rubberband_vendor PRIVATE
     RUBBERBAND_STATIC NOMINMAX _USE_MATH_DEFINES
