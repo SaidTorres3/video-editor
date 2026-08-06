@@ -1,14 +1,18 @@
 #include "test_framework.h"
+#include "../src/pitch_preserving_stretcher.h"
 #include "../src/ten_vad_embedded.h"
 #include "../src/video_player.h"
 #include "../src/options_window.h"
 #include "../src/timeline.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <thread>
+#include <vector>
 
 // ============================================================================
 // Integration tests for audio track management
@@ -57,11 +61,13 @@ bool WaitForCondition(const std::function<bool()>& condition,
 
 void VerifyAudioContinuesAfterPlayingSeek(const std::wstring& mediaPath,
                                           double seekTarget,
-                                          std::chrono::milliseconds timeout)
+                                          std::chrono::milliseconds timeout,
+                                          double playbackSpeed = 1.0)
 {
     VideoPlayer player(g_testHwnd);
     TEST_ASSERT(player.LoadVideo(mediaPath),
                 "audio seek regression source must load");
+    player.SetPlaybackSpeed(playbackSpeed);
 
     // A Windows test runner without an audio endpoint cannot exercise WASAPI.
     // The generated-media and real-media variants run the full check whenever
@@ -106,6 +112,63 @@ void VerifyAudioContinuesAfterPlayingSeek(const std::wstring& mediaPath,
                 "an audio restart must not stop video playback after seeking");
     player.Pause();
 }
+
+std::vector<float> StretchTestTone(double speed)
+{
+    constexpr int sampleRate = 48000;
+    constexpr int inputFrames = sampleRate * 2;
+    constexpr double toneHz = 440.0;
+    constexpr double pi = 3.14159265358979323846;
+    constexpr size_t blockFrames = 512;
+
+    std::vector<float> input(inputFrames);
+    for (int frame = 0; frame < inputFrames; ++frame)
+    {
+        input[frame] = static_cast<float>(
+            0.6 * std::sin(2.0 * pi * toneHz * frame / sampleRate));
+    }
+
+    PitchPreservingStretcher stretcher(sampleRate, 1, speed);
+    std::vector<float> output;
+    std::vector<float> retrieved(4096);
+    size_t offset = 0;
+    while (offset < input.size())
+    {
+        const size_t remaining = input.size() - offset;
+        const size_t block = remaining < blockFrames ? remaining : blockFrames;
+        const bool final = offset + block == input.size();
+        stretcher.ProcessInterleaved(input.data() + offset, block, final);
+        offset += block;
+
+        while (true)
+        {
+            const size_t count = stretcher.RetrieveInterleaved(
+                retrieved.data(), retrieved.size());
+            if (count == 0)
+                break;
+            output.insert(output.end(), retrieved.begin(),
+                          retrieved.begin() + count);
+        }
+    }
+    return output;
+}
+
+double EstimateToneFrequency(const std::vector<float>& samples)
+{
+    constexpr double sampleRate = 48000.0;
+    const size_t begin = samples.size() / 4;
+    const size_t end = samples.size() * 3 / 4;
+    size_t risingCrossings = 0;
+    for (size_t index = begin + 1; index < end; ++index)
+    {
+        if (samples[index - 1] <= 0.0f && samples[index] > 0.0f)
+            ++risingCrossings;
+    }
+    const double measuredSeconds = (end - begin) / sampleRate;
+    return measuredSeconds > 0.0
+        ? risingCrossings / measuredSeconds
+        : 0.0;
+}
 } // namespace
 
 void RegisterAudioTests(TestSuite& suite) {
@@ -113,6 +176,25 @@ void RegisterAudioTests(TestSuite& suite) {
     suite.addTest("PlayingSeek_AudioContinues", []() {
         VerifyAudioContinuesAfterPlayingSeek(
             g_testVideoPath, 3.0, std::chrono::seconds(5));
+    });
+
+    suite.addTest("VariableSpeed_PreservesPitchAndAudioContinues", []() {
+        for (const double speed : {0.5, 2.0})
+        {
+            const std::vector<float> stretched = StretchTestTone(speed);
+            const double expectedFrames = 48000.0 * 2.0 / speed;
+            TEST_ASSERT_GT(stretched.size(),
+                           static_cast<size_t>(expectedFrames * 0.85),
+                           "time-stretched tone must have the expected duration");
+            TEST_ASSERT_LT(stretched.size(),
+                           static_cast<size_t>(expectedFrames * 1.15),
+                           "time-stretched tone duration must remain bounded");
+            TEST_ASSERT_NEAR(EstimateToneFrequency(stretched), 440.0, 15.0,
+                             "playback speed must not change a tone's pitch");
+
+            VerifyAudioContinuesAfterPlayingSeek(
+                g_testVideoPath, 3.0, std::chrono::seconds(7), speed);
+        }
     });
 
     wchar_t* externalMediaValue = nullptr;
@@ -136,7 +218,7 @@ void RegisterAudioTests(TestSuite& suite) {
                 seekTarget = probe.GetDuration() * 0.5;
             }
             VerifyAudioContinuesAfterPlayingSeek(
-                externalMediaPath, seekTarget, std::chrono::seconds(10));
+                externalMediaPath, seekTarget, std::chrono::seconds(10), 2.0);
         });
     }
 

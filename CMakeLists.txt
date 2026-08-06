@@ -10,7 +10,38 @@ if(POLICY CMP0111)
     cmake_policy(SET CMP0111 NEW)
 endif()
 
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+
 project(VideoEditor C CXX)
+
+include(FetchContent)
+
+# Rubber Band provides real-time time stretching without changing pitch. Pin
+# the exact revision so local and CI audio behaviour cannot drift over time.
+FetchContent_Declare(
+    rubberband_src
+    GIT_REPOSITORY https://github.com/breakfastquay/rubberband.git
+    GIT_TAG 1d95888bec3ae0a17c0c4af791810d5a63f6bc35
+)
+FetchContent_GetProperties(rubberband_src)
+if(NOT rubberband_src_POPULATED)
+    FetchContent_Populate(rubberband_src)
+endif()
+add_library(rubberband_vendor STATIC
+    "${rubberband_src_SOURCE_DIR}/single/RubberBandSingle.cpp"
+)
+target_include_directories(rubberband_vendor PUBLIC
+    "${rubberband_src_SOURCE_DIR}"
+)
+target_compile_definitions(rubberband_vendor PRIVATE
+    RUBBERBAND_STATIC NOMINMAX _USE_MATH_DEFINES
+)
+if(MSVC AND USE_STATIC_FFMPEG)
+    set_property(TARGET rubberband_vendor PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # Ultra-light neural VAD. TEN publishes an import library and DLL for Windows,
 # not a static archive. Dynamic builds keep the DLL beside the executable.
@@ -144,6 +175,7 @@ add_executable(VideoEditor WIN32
     src/utils.cpp
     src/video_decoder.cpp
     src/audio_player.cpp
+    src/pitch_preserving_stretcher.cpp
     src/video_renderer.cpp
     src/video_cutter.cpp
     src/video_player.cpp
@@ -225,6 +257,7 @@ target_link_libraries(VideoEditor PRIVATE
     ${PLATFORM_LIBS}
     ${FFMPEG_LIBS}
     ${RNNOISE_LIBRARY}
+    rubberband_vendor
     VENDOR_LIBCURL
     VENDOR_ZLIB
 )
@@ -267,6 +300,7 @@ if(BUILD_TESTS)
         src/utils.cpp
         src/video_decoder.cpp
         src/audio_player.cpp
+        src/pitch_preserving_stretcher.cpp
         src/video_renderer.cpp
         src/video_cutter.cpp
         src/video_player.cpp
@@ -330,6 +364,7 @@ if(BUILD_TESTS)
         ${PLATFORM_LIBS}
         ${FFMPEG_LIBS}
         ${RNNOISE_LIBRARY}
+        rubberband_vendor
         VENDOR_LIBCURL
         VENDOR_ZLIB
     )

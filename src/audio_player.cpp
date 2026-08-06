@@ -1,4 +1,5 @@
 #include "audio_player.h"
+#include "pitch_preserving_stretcher.h"
 #include "video_player.h"
 #include <algorithm>
 #include <chrono>
@@ -461,6 +462,7 @@ void AudioPlayer::AudioThreadFunction() {
     auto startTime = m_player->masterStartTime;
     double startPts = m_player->masterStartPts;
     bool deviceStarted = false;
+    ResetPitchPreservingTimeStretch(startPts);
 
     // Starting an empty WASAPI client produces an immediate underrun.  Wait
     // for a modest preroll instead; video can begin rendering meanwhile.
@@ -576,14 +578,19 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
     memset(outputBuffer, 0, static_cast<size_t>(frameCount) * m_player->audioFormat->nBlockAlign);
     int16_t *outInt16 = reinterpret_cast<int16_t*>(outputBuffer);
     float *outFloat = reinterpret_cast<float*>(outputBuffer);
-    const double speed = m_player->GetPlaybackSpeed();
     const double sampleDuration = 1.0 / m_player->audioSampleRate;
-    const bool normalSpeed = std::fabs(speed - 1.0) < 0.0001;
+
+    if (m_timeStretcher)
+    {
+        MixPitchPreservedAudio(outputBuffer, frameCount);
+        return;
+    }
+
     std::vector<int32_t> mix(static_cast<size_t>(channels));
 
     for (int frame = 0; frame < frameCount; ++frame)
     {
-        const double samplePts = startPts + frame * speed * sampleDuration;
+        const double samplePts = startPts + frame * sampleDuration;
         std::fill(mix.begin(), mix.end(), 0);
         for (auto& track : m_player->audioTracks)
         {
@@ -604,31 +611,13 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
                 track->buffer.size() < static_cast<size_t>(channels))
                 continue;
 
-            if (normalSpeed)
+            for (int ch = 0; ch < channels; ++ch)
             {
-                for (int ch = 0; ch < channels; ++ch)
-                {
-                    const int16_t val = track->buffer.front();
-                    track->buffer.pop_front();
-                    mix[ch] += static_cast<int32_t>(val * track->volume * m_masterVolume);
-                }
-                track->bufferPts += sampleDuration;
+                const int16_t val = track->buffer.front();
+                track->buffer.pop_front();
+                mix[ch] += static_cast<int32_t>(val * track->volume * m_masterVolume);
             }
-            else
-            {
-                // Linear interpolation avoids the harsh repeated/dropped-sample
-                // edges produced by nearest-neighbour speed conversion.
-                const double fraction = std::clamp(
-                    (samplePts - track->bufferPts) / sampleDuration, 0.0, 1.0);
-                const bool hasNext = track->buffer.size() >= static_cast<size_t>(channels * 2);
-                for (int ch = 0; ch < channels; ++ch)
-                {
-                    const double first = track->buffer[ch];
-                    const double second = hasNext ? track->buffer[channels + ch] : first;
-                    const double value = first + (second - first) * fraction;
-                    mix[ch] += static_cast<int32_t>(value * track->volume * m_masterVolume);
-                }
-            }
+            track->bufferPts += sampleDuration;
         }
         for (int ch = 0; ch < channels; ++ch)
         {
@@ -644,6 +633,132 @@ void AudioPlayer::MixAudioTracks(uint8_t* outputBuffer, int frameCount, double s
     }
 }
 
+void AudioPlayer::ResetPitchPreservingTimeStretch(double startPts)
+{
+    m_timeStretcher.reset();
+    m_stretchedOutput.clear();
+    m_stretchInputBuffer.clear();
+    m_stretchRetrieveBuffer.clear();
+    m_nextStretchSourcePts = startPts;
+
+    const double speed = m_player->GetPlaybackSpeed();
+    if (std::fabs(speed - 1.0) >= 0.0001 && speed < 4.0)
+    {
+        m_timeStretcher = std::make_unique<PitchPreservingStretcher>(
+            m_player->audioSampleRate, m_player->audioChannels, speed);
+    }
+}
+
+void AudioPlayer::MixSourceFramesForTimeStretch(int frameCount)
+{
+    const int channels = std::max(1, m_player->audioChannels);
+    const double sampleDuration = 1.0 / std::max(1, m_player->audioSampleRate);
+    m_stretchInputBuffer.assign(
+        static_cast<size_t>(frameCount) * channels, 0.0f);
+
+    for (int frame = 0; frame < frameCount; ++frame)
+    {
+        const double samplePts = m_nextStretchSourcePts;
+        for (auto& track : m_player->audioTracks)
+        {
+            if (track->isMuted)
+                continue;
+
+            while (!track->buffer.empty() &&
+                   track->bufferPts + sampleDuration <= samplePts)
+            {
+                for (int channel = 0;
+                     channel < channels && !track->buffer.empty(); ++channel)
+                {
+                    track->buffer.pop_front();
+                }
+                track->bufferPts += sampleDuration;
+            }
+
+            if (track->bufferPts > samplePts + sampleDuration * 0.5 ||
+                track->buffer.size() < static_cast<size_t>(channels))
+            {
+                continue;
+            }
+
+            for (int channel = 0; channel < channels; ++channel)
+            {
+                const float sample =
+                    static_cast<float>(track->buffer.front()) / 32768.0f;
+                track->buffer.pop_front();
+                m_stretchInputBuffer[
+                    static_cast<size_t>(frame) * channels + channel] +=
+                    sample * track->volume * m_masterVolume;
+            }
+            track->bufferPts += sampleDuration;
+        }
+        m_nextStretchSourcePts += sampleDuration;
+    }
+}
+
+void AudioPlayer::MixPitchPreservedAudio(uint8_t* outputBuffer, int frameCount)
+{
+    const int channels = std::max(1, m_player->audioChannels);
+    constexpr int kMaximumFeedIterations = 32;
+    int feedIterations = 0;
+
+    while (m_stretchedOutput.size() <
+               static_cast<size_t>(frameCount) * channels &&
+           feedIterations++ < kMaximumFeedIterations)
+    {
+        const size_t retrieveFrames = std::min<size_t>(
+            4096, static_cast<size_t>(frameCount) -
+                      m_stretchedOutput.size() / channels);
+        m_stretchRetrieveBuffer.resize(retrieveFrames * channels);
+        const size_t retrieved = m_timeStretcher->RetrieveInterleaved(
+            m_stretchRetrieveBuffer.data(), retrieveFrames);
+        if (retrieved > 0)
+        {
+            m_stretchedOutput.insert(
+                m_stretchedOutput.end(), m_stretchRetrieveBuffer.begin(),
+                m_stretchRetrieveBuffer.begin() + retrieved * channels);
+            continue;
+        }
+
+        const int availableSource =
+            GetAvailableSourceFrameCount(m_nextStretchSourcePts);
+        if (availableSource <= 0)
+            break;
+        size_t required = m_timeStretcher->GetSamplesRequired();
+        if (required == 0)
+            required = 512;
+        const int inputFrames = std::min(
+            availableSource,
+            static_cast<int>(std::clamp<size_t>(required, 1, 4096)));
+        MixSourceFramesForTimeStretch(inputFrames);
+        m_timeStretcher->ProcessInterleaved(
+            m_stretchInputBuffer.data(), static_cast<size_t>(inputFrames), false);
+    }
+
+    const bool outputIsFloat = m_player->audioOutputIsFloat;
+    auto* outInt16 = reinterpret_cast<int16_t*>(outputBuffer);
+    auto* outFloat = reinterpret_cast<float*>(outputBuffer);
+    for (int frame = 0; frame < frameCount; ++frame)
+    {
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            float sample = 0.0f;
+            if (!m_stretchedOutput.empty())
+            {
+                sample = m_stretchedOutput.front();
+                m_stretchedOutput.pop_front();
+            }
+            sample = std::clamp(sample, -1.0f, 1.0f);
+            const size_t index = static_cast<size_t>(frame) * channels + channel;
+            if (outputIsFloat)
+                outFloat[index] = sample;
+            else
+                outInt16[index] = static_cast<int16_t>(
+                    std::lround(sample * (sample < 0.0f ? 32768.0f : 32767.0f)));
+        }
+    }
+}
+
 bool AudioPlayer::HasBufferedAudio() const {
     for (const auto& track : m_player->audioTracks)
     {
@@ -653,40 +768,48 @@ bool AudioPlayer::HasBufferedAudio() const {
     return false;
 }
 
-int AudioPlayer::GetAvailableFrameCount(double startPts) const {
-    int maxFrames = 0;
-    bool hasTrack = false;
+int AudioPlayer::GetAvailableSourceFrameCount(double startPts) const {
+    int64_t maxFrames = 0;
     const int channels = std::max(1, m_player->audioChannels);
     const double sampleRate = std::max(1, m_player->audioSampleRate);
-    const double speed = std::max(0.1, m_player->GetPlaybackSpeed());
 
     for (const auto& track : m_player->audioTracks)
     {
         if (track->isMuted)
             continue;
 
-        hasTrack = true;
-        int64_t sourceFrames = static_cast<int64_t>(track->buffer.size() / channels);
-        if (sourceFrames <= 0)
+        const int64_t bufferedFrames =
+            static_cast<int64_t>(track->buffer.size() / channels);
+        if (bufferedFrames <= 0)
             continue;
-
-        if (startPts > track->bufferPts)
-        {
-            const int64_t staleFrames = static_cast<int64_t>(
-                std::floor((startPts - track->bufferPts) * sampleRate + 1e-6));
-            sourceFrames = std::max<int64_t>(0, sourceFrames - staleFrames);
-        }
-        if (sourceFrames <= 0)
+        const double endPts = track->bufferPts + bufferedFrames / sampleRate;
+        if (endPts <= startPts)
             continue;
-
-        int64_t outputFrames = sourceFrames;
-        if (std::fabs(speed - 1.0) >= 0.0001)
-            outputFrames = static_cast<int64_t>(std::floor((sourceFrames - 1) / speed)) + 1;
-
-        outputFrames = std::min<int64_t>(outputFrames, INT_MAX);
-        maxFrames = std::max(maxFrames, static_cast<int>(outputFrames));
+        const int64_t available = static_cast<int64_t>(
+            std::floor((endPts - startPts) * sampleRate + 1e-6));
+        maxFrames = std::max(maxFrames, available);
     }
-    if (!hasTrack)
-        return 0;
-    return maxFrames;
+    return static_cast<int>(std::min<int64_t>(maxFrames, INT_MAX));
+}
+
+int AudioPlayer::GetAvailableFrameCount(double startPts) const {
+    const int channels = std::max(1, m_player->audioChannels);
+    const double speed = std::max(0.1, m_player->GetPlaybackSpeed());
+    const double sourcePts = m_timeStretcher
+        ? m_nextStretchSourcePts
+        : startPts;
+    const int64_t sourceFrames = GetAvailableSourceFrameCount(sourcePts);
+    int64_t estimatedOutputFrames = sourceFrames;
+    if (std::fabs(speed - 1.0) >= 0.0001)
+        estimatedOutputFrames = static_cast<int64_t>(sourceFrames / speed);
+
+    int64_t readyOutputFrames =
+        static_cast<int64_t>(m_stretchedOutput.size() / channels);
+    if (m_timeStretcher)
+    {
+        readyOutputFrames += static_cast<int64_t>(
+            m_timeStretcher->GetAvailableFrameCount());
+    }
+    return static_cast<int>(std::min<int64_t>(
+        std::max(estimatedOutputFrames, readyOutputFrames), INT_MAX));
 }
