@@ -191,6 +191,9 @@ public:
     size_t playbackBufferCapacity;
     size_t playbackPrebufferFrames;
     bool playbackDecodeEof;
+    // Ordinary pause/resume keeps decoded-ahead frames so resuming does not
+    // depend on a demuxer seek, which is unreliable for sparse-index inputs.
+    std::atomic<bool> m_pausedPlaybackBufferResumable;
 
     // Audio components
     std::vector<std::unique_ptr<AudioTrack>> audioTracks;
@@ -236,6 +239,13 @@ private:
     // seeking the main formatContext (so Play() must resync before decoding).
     bool m_decoderOutOfSync;
 
+    // DecodeNextFrame may synthesize a timestamp when a codec frame has no
+    // PTS. That is adequate for continuous playback, but it cannot prove that
+    // a demuxer seek actually moved to the requested part of the file.
+    std::atomic<bool> m_lastDecodedFrameHadTimestamp{false};
+    std::atomic<bool> m_lastReadVideoPacketHadTimestamp{false};
+    std::atomic<double> m_lastReadVideoPacketPts{0.0};
+
     // Seeks requested while playing are consumed by the playback thread.
     // Keeping decoder ownership on that thread avoids pause/join/restart stalls.
     std::atomic<bool> m_playbackSeekPending;
@@ -260,6 +270,7 @@ private:
     std::atomic<uint64_t> m_testInjectedPrimarySeekFailures{0};
     std::atomic<bool> m_testNoOpNextPrimarySeek{false};
     std::atomic<uint64_t> m_testInjectedPrimarySeekNoOps{0};
+    std::atomic<uint64_t> m_testFallbackSeekCount{0};
 #endif
     std::atomic<ULONGLONG> m_speedOverlayDeadline;
 
@@ -377,6 +388,7 @@ public:
     uint64_t GetInjectedPrimarySeekFailureCountForTesting() const;
     void ForceNextPrimarySeekNoOpForTesting();
     uint64_t GetInjectedPrimarySeekNoOpCountForTesting() const;
+    uint64_t GetFallbackSeekCountForTesting() const;
 #endif
     size_t GetPlaybackBufferCapacity() const { return playbackBufferCapacity; }
 

@@ -22,6 +22,9 @@ extern "C" {
 std::wstring g_testVideoPath;
 std::wstring g_testLongVideoPath;
 std::wstring g_testHeavyVideoPath;
+std::wstring g_testSparseSeekVideoPath;
+std::wstring g_testSparseIndexVideoPath;
+std::wstring g_testAv1OpusVideoPath;
 std::wstring g_testTempDir;
 HWND g_testHwnd = nullptr;
 
@@ -223,6 +226,81 @@ static bool GenerateHeavySpeedTestVideo(const std::wstring& outputPath,
     // The 4K 10-bit fixture can exceed 30 seconds on a busy CI machine. A
     // fixture timeout is not a playback result, so allow generation to finish
     // instead of producing a misleading test-suite failure before tests run.
+    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 60000);
+    DWORD exitCode = 1;
+    if (waitResult == WAIT_OBJECT_0)
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return exitCode == 0 && std::filesystem::exists(outputPath);
+}
+
+// A single long GOP reproduces timeline seeks that can only land on the first
+// keyframe and must decode forward to reach the requested presentation time.
+static bool GenerateSparseSeekTestVideo(const std::wstring& outputPath,
+                                        const std::wstring& ffmpegDir) {
+    std::wstring ffmpegExe;
+    const std::wstring bundledExe = ffmpegDir + L"\\bin\\ffmpeg.exe";
+    if (!ffmpegDir.empty() && std::filesystem::exists(bundledExe))
+        ffmpegExe = L"\"" + bundledExe + L"\"";
+    else
+        ffmpegExe = L"ffmpeg";
+
+    std::wstring cmd = ffmpegExe +
+        L" -y -hide_banner -loglevel error "
+        L"-f lavfi -i \"testsrc2=size=320x180:rate=30:duration=20\" "
+        L"-an -c:v libx264 -preset ultrafast -crf 28 -bf 2 "
+        L"-g 900 -keyint_min 900 -sc_threshold 0 \"" + outputPath + L"\"";
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;
+
+    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 30000);
+    DWORD exitCode = 1;
+    if (waitResult == WAIT_OBJECT_0)
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return exitCode == 0 && std::filesystem::exists(outputPath);
+}
+
+// Mirrors the codec/container combination that exposed paused-seek packet
+// loss in a long screen recording. The output is deliberately large enough
+// that a valid indexed MP4 seek can leave avio_tell() far from entry->pos;
+// physical IO position is not a valid way to reject the logical seek.
+static bool GenerateAv1OpusSeekTestVideo(const std::wstring& outputPath,
+                                         const std::wstring& ffmpegDir) {
+    std::wstring ffmpegExe;
+    const std::wstring bundledExe = ffmpegDir + L"\\bin\\ffmpeg.exe";
+    if (!ffmpegDir.empty() && std::filesystem::exists(bundledExe))
+        ffmpegExe = L"\"" + bundledExe + L"\"";
+    else
+        ffmpegExe = L"ffmpeg";
+
+    std::wstring cmd = ffmpegExe +
+        L" -y -hide_banner -loglevel error "
+        L"-f lavfi -i \"testsrc2=size=640x360:rate=30:duration=12\" "
+        L"-f lavfi -i \"sine=frequency=440:sample_rate=48000:duration=12\" "
+        L"-map 0:v -map 1:a -c:v libaom-av1 -deadline realtime "
+        L"-cpu-used 8 -row-mt 1 -crf 32 -g 150 "
+        L"-c:a libopus -b:a 64k -movflags +faststart -shortest \"" +
+        outputPath + L"\"";
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;
+
     const DWORD waitResult = WaitForSingleObject(pi.hProcess, 60000);
     DWORD exitCode = 1;
     if (waitResult == WAIT_OBJECT_0)
@@ -608,6 +686,39 @@ int wmain(int argc, wchar_t* argv[]) {
     if (!GenerateHeavySpeedTestVideo(g_testHeavyVideoPath, ffmpegDir)) {
         TestColors::SetRed();
         std::cerr << "FATAL: Could not generate heavy 10x regression video." << std::endl;
+        TestColors::Reset();
+        DestroyWindow(g_testHwnd);
+        CoUninitialize();
+        return 1;
+    }
+
+    g_testSparseSeekVideoPath = g_testTempDir + L"\\test_sparse_seek.mp4";
+    std::cout << "[Setup] Generating sparse-keyframe seek video..." << std::endl;
+    if (!GenerateSparseSeekTestVideo(g_testSparseSeekVideoPath, ffmpegDir)) {
+        TestColors::SetRed();
+        std::cerr << "FATAL: Could not generate sparse-keyframe seek video." << std::endl;
+        TestColors::Reset();
+        DestroyWindow(g_testHwnd);
+        CoUninitialize();
+        return 1;
+    }
+
+    g_testSparseIndexVideoPath = g_testTempDir + L"\\test_sparse_index.ts";
+    std::cout << "[Setup] Generating sparse-index resume video..." << std::endl;
+    if (!GenerateSparseSeekTestVideo(g_testSparseIndexVideoPath, ffmpegDir)) {
+        TestColors::SetRed();
+        std::cerr << "FATAL: Could not generate sparse-index resume video." << std::endl;
+        TestColors::Reset();
+        DestroyWindow(g_testHwnd);
+        CoUninitialize();
+        return 1;
+    }
+
+    g_testAv1OpusVideoPath = g_testTempDir + L"\\test_av1_opus_seek.mp4";
+    std::cout << "[Setup] Generating AV1/Opus paused-seek regression video..." << std::endl;
+    if (!GenerateAv1OpusSeekTestVideo(g_testAv1OpusVideoPath, ffmpegDir)) {
+        TestColors::SetRed();
+        std::cerr << "FATAL: Could not generate AV1/Opus seek regression video." << std::endl;
         TestColors::Reset();
         DestroyWindow(g_testHwnd);
         CoUninitialize();

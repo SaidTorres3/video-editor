@@ -249,26 +249,74 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
 
     while (true)
     {
-        int ret = av_read_frame(m_player->formatContext, m_player->packet);
-        if (ret < 0)
+        bool hasVideoPacket = m_bufferedPacketPending;
+        int ret = 0;
+        if (!hasVideoPacket)
         {
-            // Only reset to beginning (Stop) if we were actually playing
-            // If paused and manually seeking, stay at current position
-            if (m_player->isPlaying && presentFrame)
-                m_player->Stop();
-            return false;
+            ret = av_read_frame(m_player->formatContext, m_player->packet);
+            if (ret < 0)
+            {
+                // Decoder exhaustion must never have Stop semantics. Stop() is
+                // a user command that seeks to zero; treating EOF as Stop made
+                // any decoder path that exhausted immediately after unpausing
+                // reset the timeline to the beginning. Release decodeMutex
+                // before Pause because Pause may join a worker waiting on it.
+                const bool pauseAtEof = m_player->isPlaying && presentFrame;
+                lock.unlock();
+                if (pauseAtEof)
+                {
+                    m_player->Pause();
+                    PostMessage(m_player->parentWindow, WM_TIMER, 1006, 0);
+                }
+                return false;
+            }
+
+            hasVideoPacket =
+                m_player->packet->stream_index == m_player->videoStreamIndex;
+            if (hasVideoPacket)
+            {
+                const int64_t packetTimestamp =
+                    m_player->packet->pts != AV_NOPTS_VALUE
+                        ? m_player->packet->pts
+                        : m_player->packet->dts;
+                if (packetTimestamp != AV_NOPTS_VALUE)
+                {
+                    AVStream* stream = m_player->formatContext->streams[
+                        m_player->videoStreamIndex];
+                    m_player->m_lastReadVideoPacketPts.store(
+                        packetTimestamp * av_q2d(stream->time_base) -
+                            m_player->startTimeOffset,
+                        std::memory_order_relaxed);
+                    m_player->m_lastReadVideoPacketHadTimestamp.store(
+                        true, std::memory_order_relaxed);
+                }
+                m_bufferedPacketPending = true;
+            }
         }
 
-        if (m_player->packet->stream_index == m_player->videoStreamIndex)
+        if (hasVideoPacket)
         {
-            ret = avcodec_send_packet(m_player->codecContext, m_player->packet);
-            av_packet_unref(m_player->packet);
-            if (ret < 0)
+            // A frame-threaded decoder can return EAGAIN while it still owns
+            // output from earlier packets. Retain this exact packet, drain one
+            // or more frames, and retry it on the next iteration/call. The old
+            // path unref'd every EAGAIN packet and eventually walked an AV1
+            // MP4 all the way to EOF after a paused timeline seek.
+            ret = SendBufferedCodecPacket(m_player->packet);
+            if (ret == 0)
+            {
+                av_packet_unref(m_player->packet);
+                m_bufferedPacketPending = false;
+            }
+            else if (ret != AVERROR(EAGAIN))
+            {
+                av_packet_unref(m_player->packet);
+                m_bufferedPacketPending = false;
                 continue;
+            }
 
             while (true)
             {
-                ret = avcodec_receive_frame(m_player->codecContext, m_player->hwFrame);
+                ret = ReceiveBufferedCodecFrame(m_player->hwFrame);
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
                     break;
                 if (ret < 0)
@@ -280,19 +328,27 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
                     if (m_player->useHwAccel && m_player->hwFrame->format == m_player->hwPixelFormat)
                     {
                         if (av_hwframe_transfer_data(m_player->frame, m_player->hwFrame, 0) < 0)
+                        {
+                            av_frame_unref(m_player->hwFrame);
                             return false;
+                        }
                         swFrame = m_player->frame;
                     }
                 }
 
                 AVStream *vs = m_player->formatContext->streams[m_player->videoStreamIndex];
                 double pts = 0.0;
+                const bool hasFrameTimestamp =
+                    swFrame->best_effort_timestamp != AV_NOPTS_VALUE ||
+                    swFrame->pts != AV_NOPTS_VALUE;
                 if (swFrame->best_effort_timestamp != AV_NOPTS_VALUE)
                     pts = swFrame->best_effort_timestamp * av_q2d(vs->time_base);
                 else if (swFrame->pts != AV_NOPTS_VALUE)
                     pts = swFrame->pts * av_q2d(vs->time_base);
                 else
                     pts = m_player->currentPts + (m_player->frameRate > 0 ? 1.0 / m_player->frameRate : 0.0);
+                m_player->m_lastDecodedFrameHadTimestamp.store(
+                    hasFrameTimestamp, std::memory_order_relaxed);
                 m_player->currentPts = pts - m_player->startTimeOffset;
                 if (m_player->currentPts < 0.0)
                     m_player->currentPts = 0.0;

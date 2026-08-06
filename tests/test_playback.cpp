@@ -6,6 +6,8 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
 
 // ============================================================================
 // Integration tests for playback, seeking, and frame stepping
@@ -14,6 +16,9 @@
 extern std::wstring g_testVideoPath;
 extern std::wstring g_testLongVideoPath;
 extern std::wstring g_testHeavyVideoPath;
+extern std::wstring g_testSparseSeekVideoPath;
+extern std::wstring g_testSparseIndexVideoPath;
+extern std::wstring g_testAv1OpusVideoPath;
 extern HWND g_testHwnd;
 extern double g_previewSeekTime;
 extern VideoPlayer* g_videoPlayer;
@@ -692,20 +697,29 @@ void RegisterPlaybackTests(TestSuite& suite) {
         TEST_ASSERT(!player.IsPlaying(), "Should not be playing after pause");
     });
 
-    suite.addTest("PauseResume_RestartsPlayback", []() {
+    suite.addTest("PauseResume_ContinuesFromPausedPosition", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);
         TEST_ASSERT(player.Play(), "Initial play should succeed");
 
-        auto firstDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (player.GetCurrentTime() < 0.1 &&
+        auto firstDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (player.GetCurrentTime() < 1.0 &&
                std::chrono::steady_clock::now() < firstDeadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
         player.Pause();
         const double pausedAt = player.GetCurrentTime();
+        const uint64_t beforeResume = player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT_GE(pausedAt, 1.0,
+                       "regression must pause far enough from zero to detect a restart");
         TEST_ASSERT(!player.IsPlaying(), "Player should be paused before resuming");
         TEST_ASSERT(player.Play(), "Play should succeed after pausing");
+
+        TEST_ASSERT(WaitForPresentedFrames(player, beforeResume + 1,
+                                           std::chrono::seconds(2)),
+                    "resume must present its first post-pause frame");
+        TEST_ASSERT_GE(player.GetCurrentTime(), pausedAt - 0.1,
+                       "first resumed frame must not restart from the beginning");
 
         auto resumeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (player.GetCurrentTime() <= pausedAt + 0.05 &&
@@ -977,6 +991,77 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Pause();
     });
 
+    suite.addTest("PauseResume_SparseIndexKeepsPausedPosition", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testSparseIndexVideoPath),
+                    "sparse-index resume regression source must load");
+        TEST_ASSERT(player.Play(), "sparse-index playback must start before pause");
+
+        const auto pauseDeadline = std::chrono::steady_clock::now() +
+                                   std::chrono::seconds(3);
+        while (player.GetCurrentTime() < 1.0 && player.IsPlaying() &&
+               std::chrono::steady_clock::now() < pauseDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        player.Pause();
+
+        const double pausedAt = player.GetCurrentTime();
+        const uint64_t beforeResume = player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT_GE(pausedAt, 1.0,
+                       "regression must pause far enough from zero to detect a restart");
+        player.ForceNextPrimarySeekNoOpForTesting();
+        TEST_ASSERT(player.Play(), "resume must continue without a demuxer resync");
+        TEST_ASSERT_EQ(player.GetInjectedPrimarySeekNoOpCountForTesting(),
+                       static_cast<uint64_t>(0),
+                       "ordinary unpause must reuse buffered frames instead of seeking");
+        const auto resumeDeadline = std::chrono::steady_clock::now() +
+                                    std::chrono::seconds(2);
+        while (player.GetPresentedPlaybackFrameCount() < beforeResume + 1 &&
+               player.IsPlaying() &&
+               std::chrono::steady_clock::now() < resumeDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        TEST_ASSERT_GE(player.GetPresentedPlaybackFrameCount(), beforeResume + 1,
+                       "resume must present a retained decoded frame");
+        TEST_ASSERT_GE(player.GetCurrentTime(), pausedAt - 0.2,
+                       "ordinary unpause must not restart at the beginning");
+        player.Pause();
+    });
+
+    suite.addTest("PlayingUiSeek_LongGopDoesNotReturnToBeginning", []() {
+        struct PreviewSeekReset {
+            VideoPlayer* previousPlayer = g_videoPlayer;
+            ~PreviewSeekReset() {
+                g_previewSeekTime = -1.0;
+                g_videoPlayer = previousPlayer;
+            }
+        } previewSeekReset;
+
+        VideoPlayer player(g_testHwnd);
+        g_videoPlayer = &player;
+        TEST_ASSERT(player.LoadVideo(g_testSparseSeekVideoPath),
+                    "sparse-keyframe regression source must load");
+        TEST_ASSERT(player.Play(), "sparse-keyframe source must start playing");
+        TEST_ASSERT(WaitForPresentedFrames(player, 3, std::chrono::seconds(2)),
+                    "sparse-keyframe source must visibly advance before seeking");
+
+        constexpr double seekTarget = 15.0;
+        g_previewSeekTime = seekTarget;
+        const uint64_t beforeSeek = player.GetPresentedPlaybackFrameCount();
+        FinalizePlayingUiSeek(&player, seekTarget);
+
+        TEST_ASSERT(WaitForPresentedFrames(player, beforeSeek + 1,
+                                           std::chrono::seconds(3)),
+                    "long-GOP timeline seek must produce a frame");
+        TEST_ASSERT_GE(player.GetCurrentTime(), seekTarget - 0.2,
+                       "long-GOP timeline seek must not restore playback to the beginning");
+        TEST_ASSERT_LT(player.GetCurrentTime(), seekTarget + 1.0,
+                       "long-GOP timeline seek must land near the selected time");
+        TEST_ASSERT_LT(g_previewSeekTime, 0.0,
+                       "timeline cursor must unpin after the exact seek lands");
+        TEST_ASSERT(player.IsPlaying(),
+                    "playback must continue after a long-GOP timeline seek");
+        player.Pause();
+    });
+
     suite.addTest("SeekWhilePlaying_CoalescesRapidRequests", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);
@@ -1089,6 +1174,75 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Pause();
     });
 
+    suite.addTest("PausedAv1OpusTimelineSeek_UnpauseKeepsPlaying", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testAv1OpusVideoPath),
+                    "AV1/Opus paused-seek regression source must load");
+
+        constexpr double seekTarget = 8.0;
+        // Model the real AV1 decoder backpressure that exposed the bug. The
+        // packet must survive EAGAIN while output is drained, then be retried.
+        player.ForceBufferedDecoderEagainAfterPacketsForTesting(0);
+        player.SeekToTimeExact(seekTarget);
+
+        TEST_ASSERT_GT(player.GetInjectedBufferedDecoderEagainCountForTesting(),
+                       static_cast<uint64_t>(0),
+                       "paused seek must exercise decoder EAGAIN packet retention");
+        TEST_ASSERT_EQ(player.GetFallbackSeekCountForTesting(),
+                       static_cast<uint64_t>(0),
+                       "a valid indexed MP4 seek must not be rejected using raw IO position");
+        TEST_ASSERT_NEAR(player.GetCurrentTime(), seekTarget, 0.15,
+                         "paused AV1 seek must land at the selected timestamp");
+
+        const uint64_t beforeResume = player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT(player.Play(), "AV1/Opus playback must unpause after seeking");
+        TEST_ASSERT(WaitForPresentedFrames(player, beforeResume + 12,
+                                           std::chrono::seconds(5)),
+                    "unpaused AV1 playback must continue beyond the initial decoder frames");
+        TEST_ASSERT(player.IsPlaying(),
+                    "AV1 playback must not immediately pause after a timeline seek");
+        TEST_ASSERT_GT(player.GetCurrentTime(), seekTarget + 0.2,
+                       "AV1 playback must advance beyond the selected timestamp");
+        player.Pause();
+    });
+
+    wchar_t* externalMediaValue = nullptr;
+    size_t externalMediaLength = 0;
+    _wdupenv_s(&externalMediaValue, &externalMediaLength,
+               L"VIDEO_EDITOR_REAL_MEDIA");
+    const std::wstring externalMediaPath = externalMediaValue
+        ? externalMediaValue
+        : L"";
+    std::free(externalMediaValue);
+    if (!externalMediaPath.empty() &&
+        std::filesystem::exists(externalMediaPath))
+    {
+        suite.addTest("ExternalMedia_PausedTimelineSeek_UnpauseKeepsPlaying",
+                      [externalMediaPath]() {
+            VideoPlayer player(g_testHwnd);
+            TEST_ASSERT(player.LoadVideo(externalMediaPath),
+                        "external paused-seek regression source must load");
+
+            const double seekTarget = player.GetDuration() * 0.5;
+            player.SeekToTimeExact(seekTarget);
+            TEST_ASSERT_NEAR(player.GetCurrentTime(), seekTarget, 0.2,
+                             "external media seek must land at its midpoint");
+
+            const uint64_t beforeResume =
+                player.GetPresentedPlaybackFrameCount();
+            TEST_ASSERT(player.Play(),
+                        "external media must accept unpause after seeking");
+            TEST_ASSERT(WaitForPresentedFrames(player, beforeResume + 12,
+                                               std::chrono::seconds(8)),
+                        "external media must keep presenting after unpause");
+            TEST_ASSERT(player.IsPlaying(),
+                        "external media must not immediately pause after unpause");
+            TEST_ASSERT_GT(player.GetCurrentTime(), seekTarget + 0.2,
+                           "external media must advance after unpause");
+            player.Pause();
+        });
+    }
+
     suite.addTest("Stop_ResetsPosition", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);
@@ -1098,6 +1252,29 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Stop();
         TEST_ASSERT(!player.IsPlaying(), "Should not be playing after stop");
         TEST_ASSERT_NEAR(player.GetCurrentTime(), 0.0, 0.1, "Position should be at start after stop");
+    });
+
+    suite.addTest("PlaybackEof_KeepsLastPresentedPosition", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
+                    "EOF position regression source must load");
+
+        const double duration = player.GetDuration();
+        player.SeekToTimeExact(duration - 0.5);
+        const double positionBeforePlay = player.GetCurrentTime();
+        TEST_ASSERT_GT(positionBeforePlay, 1.0,
+                       "regression must begin far enough from zero to detect a reset");
+        player.SetPlaybackSpeed(4.0);
+        TEST_ASSERT(player.Play(), "playback near EOF must start");
+
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(3);
+        while (player.IsPlaying() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        TEST_ASSERT(!player.IsPlaying(), "playback must pause after draining EOF");
+        TEST_ASSERT_GE(player.GetCurrentTime(), positionBeforePlay - 0.1,
+                       "EOF must retain the final visible position instead of resetting to zero");
     });
 
     suite.addTest("SeekToTime_Middle", []() {

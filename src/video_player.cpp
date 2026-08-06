@@ -49,6 +49,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       audioInitialized(false), audioOutputIsFloat(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       playbackBufferCapacity(3), playbackPrebufferFrames(2), playbackDecodeEof(false),
+      m_pausedPlaybackBufferResumable(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
             dropAudioDuringStepping(false),
@@ -315,19 +316,38 @@ bool VideoPlayer::Play()
         m_resumeSeekPending.exchange(false, std::memory_order_acq_rel);
     const double interruptedSeekTarget =
         m_resumeSeekTarget.load(std::memory_order_acquire);
+    const bool resumeBufferedPlayback =
+        !hasInterruptedSeek &&
+        m_pausedPlaybackBufferResumable.exchange(false,
+                                                  std::memory_order_acq_rel);
 
     // If backward frame stepping used the prefetch cache, the main formatContext
     // was never seeked.  Resync it now so the playback thread decodes from the
     // correct position instead of the old pre-step position.
     if (m_decoderOutOfSync && !hasInterruptedSeek)
     {
+        // Seeking can update currentPts even when it ultimately reports that
+        // it did not reach the requested frame (for example, a demuxer parked
+        // at EOF may set it to -1). Preserve the actual paused position so
+        // every recovery attempt targets the same timestamp instead of using
+        // that failed attempt's corrupted value and clamping it to zero.
+        const double pausedPosition = currentPts;
         // hardSeek=true bypasses the smartSeek optimisation which would skip
         // av_seek_frame when seconds==currentPts, leaving the formatContext at
         // the wrong position when we consumed a prefetch-cache frame.
-        if (!SeekToTimeInternal(currentPts, INT_MAX, false, true, true) &&
-            !SeekToTimeInternal(currentPts, INT_MAX, false, true, true,
+        if (!SeekToTimeInternal(pausedPosition, INT_MAX, false, true, true) &&
+            !SeekToTimeInternal(pausedPosition, INT_MAX, false, true, true,
                                 true, true, true))
+        {
+            // Keep the visible timeline at the user's paused position even if
+            // this input cannot be resynchronized. Play() returns false, but
+            // it must never destroy the selected timestamp as a side effect.
+            currentPts = pausedPosition;
+            currentFrame = frameRate > 0.0
+                ? static_cast<int64_t>(pausedPosition * frameRate + 0.5)
+                : 0;
             return false;
+        }
         // m_decoderOutOfSync is cleared inside SeekToTimeInternal
     }
 
@@ -354,7 +374,8 @@ bool VideoPlayer::Play()
     playbackPrebufferFrames = std::min(playbackBufferCapacity, std::max<size_t>(2, playbackBufferCapacity / 2));
     if (GetPlaybackSpeed() >= 4.0)
         playbackPrebufferFrames = 1;
-    ClearPlaybackBuffer();
+    if (!resumeBufferedPlayback)
+        ClearPlaybackBuffer();
 
     if (hasInterruptedSeek)
     {
@@ -432,10 +453,13 @@ void VideoPlayer::Pause()
             codecContext->skip_loop_filter = AVDISCARD_DEFAULT;
         }
 
-        // The decode thread is positioned after every frame it prefetched,
-        // while currentPts identifies the last frame actually presented.
-        // Force Play() to realign those positions before it discards the queue.
-        m_decoderOutOfSync = true;
+        // Keep the decoded-ahead queue and the decoder position as one
+        // continuous stream. Re-seeking on every unpause is both unnecessary
+        // and unsafe for sparse/missing indexes: a failed demux seek can land
+        // at timestamp zero. Play() resumes from this retained queue instead.
+        m_pausedPlaybackBufferResumable.store(
+            !interruptedSeek && !m_decoderOutOfSync,
+            std::memory_order_release);
 
         // The presentation thread starts audio after the video buffer has
         // prefilled. Stop it only after both playback threads are shut down so
@@ -454,6 +478,7 @@ void VideoPlayer::Stop()
     clipPreviewActive = false;
     Pause();
     m_resumeSeekPending.store(false, std::memory_order_release);
+    m_pausedPlaybackBufferResumable.store(false, std::memory_order_release);
     ClearPlaybackBuffer();
     CancelPendingSeekRefinement();
     currentFrame = 0;
@@ -1277,6 +1302,11 @@ bool VideoPlayer::SeekDemuxer(double seconds, AVStream* stream, int64_t streamTi
 
     const int64_t globalTimestamp = static_cast<int64_t>(std::llround(
         (seconds + startTimeOffset) * static_cast<double>(AV_TIME_BASE)));
+
+#ifdef VIDEO_EDITOR_TESTING
+    if (skipPrimarySeek)
+        m_testFallbackSeekCount.fetch_add(1, std::memory_order_relaxed);
+#endif
     int seekResult = AVERROR(EIO);
     if (!skipPrimarySeek)
     {
@@ -1300,7 +1330,6 @@ bool VideoPlayer::SeekDemuxer(double seconds, AVStream* stream, int64_t streamTi
         if (seekResult >= 0)
             return true;
     }
-
     // Some demuxers cannot service av_seek_frame with a stream timestamp even
     // though their more precise seek_file implementation works. This is common
     // with sparse/missing indexes and was previously ignored, leaving playback
@@ -1319,8 +1348,9 @@ bool VideoPlayer::SeekDemuxer(double seconds, AVStream* stream, int64_t streamTi
     if (seekResult >= 0)
         return true;
 
-    return av_seek_frame(formatContext, -1, globalTimestamp,
-                         AVSEEK_FLAG_BACKWARD) >= 0;
+    seekResult = av_seek_frame(formatContext, -1, globalTimestamp,
+                               AVSEEK_FLAG_BACKWARD);
+    return seekResult >= 0;
 }
 
 bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine,
@@ -1333,6 +1363,14 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
         *seekPositionValid = false;
     if (!isLoaded)
         return false;
+
+    // A paused seek replaces the timeline position, so decoded-ahead frames
+    // retained by Pause() no longer belong to the requested playback stream.
+    if (!isPlaying)
+    {
+        m_pausedPlaybackBufferResumable.store(false, std::memory_order_release);
+        ClearPlaybackBuffer();
+    }
 
     if (m_decoderOutOfSync) {
         hardSeek = true;
@@ -1375,31 +1413,10 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
             return false;
         }
 
-        // Some demuxers report success without changing their read position.
-        // When an index entry is available, reject that false success before
-        // flushing the codec or decoding old-position packets. avio_tell can be
-        // ahead by one IO buffer, so allow bounded buffering around entry->pos.
-        if (!skipPrimarySeek && entry && entry->pos >= 0 && formatContext->pb)
-        {
-            const int64_t actualPosition = avio_tell(formatContext->pb);
-            const int64_t ioTolerance = std::max<int64_t>(
-                256 * 1024,
-                formatContext->pb->buffer_size > 0
-                    ? static_cast<int64_t>(formatContext->pb->buffer_size) * 4
-                    : 0);
-            if (actualPosition >= 0 &&
-                std::llabs(actualPosition - entry->pos) > ioTolerance)
-            {
-                if (!SeekDemuxer(seconds, vs, ts, true))
-                {
-                    m_decoderOutOfSync = true;
-                    return false;
-                }
-            }
-        }
-
         m_decoder->ResetBufferedDecodeState();
         avcodec_flush_buffers(codecContext);
+        m_lastDecodedFrameHadTimestamp.store(false, std::memory_order_relaxed);
+        m_lastReadVideoPacketHadTimestamp.store(false, std::memory_order_relaxed);
         m_decoderOutOfSync = false;
 
         for (auto &track : audioTracks)
@@ -1432,6 +1449,9 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     const int maxDecodeFrames = std::max(1000, std::min(maxSyncFrames, 10000));
     int decoded = 0;
     bool needAtLeastOneFrame = !smartSeek;
+    bool decodedTimestampedFrame = smartSeek;
+    bool decodedPacketNearTarget = smartSeek;
+    const double validSeekLag = std::max(2.0, frameDuration * 60.0);
 
     // During seek catch-up, asking the demuxer to discard non-video streams
     // avoids walking and unref'ing every audio/subtitle packet in a long GOP.
@@ -1451,7 +1471,12 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
             m_playbackSeekPending.load(std::memory_order_acquire))
             break;
 
-        if (!needAtLeastOneFrame && currentPts >= seconds - (frameDuration * 0.5))
+        // A synthesized timestamp cannot establish that the demuxer reached
+        // the target. Keep draining delayed/reordered codec output until a
+        // frame supplies an authoritative PTS (or the decode budget expires).
+        if (!needAtLeastOneFrame &&
+            (decodedTimestampedFrame || decodedPacketNearTarget) &&
+            currentPts >= seconds - (frameDuration * 0.5))
             break;
         if (!exactMode && decoded >= maxSyncFrames)
             break;
@@ -1475,6 +1500,16 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
             break;
 
         decoded++;
+        decodedTimestampedFrame = decodedTimestampedFrame ||
+            m_lastDecodedFrameHadTimestamp.load(std::memory_order_relaxed);
+        if (m_lastReadVideoPacketHadTimestamp.load(std::memory_order_relaxed))
+        {
+            const double packetPts =
+                m_lastReadVideoPacketPts.load(std::memory_order_relaxed);
+            decodedPacketNearTarget = decodedPacketNearTarget ||
+                (packetPts >= seconds - validSeekLag &&
+                 packetPts <= seconds + std::max(0.25, frameDuration * 3.0));
+        }
         needAtLeastOneFrame = false;
     }
     codecContext->skip_frame = AVDISCARD_DEFAULT;
@@ -1484,8 +1519,9 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     // A demuxer can report seek success without moving. Do not trust the index
     // timestamp alone: a hard seek is successful only after decoding a frame
     // at (and not materially beyond) the requested position.
-    const bool decodedAfterDemuxSeek = smartSeek || !needAtLeastOneFrame;
-    const double validSeekLag = std::max(2.0, frameDuration * 60.0);
+    const bool decodedAfterDemuxSeek =
+        (smartSeek || !needAtLeastOneFrame) &&
+        (decodedTimestampedFrame || decodedPacketNearTarget);
     const bool decodedInTargetRegion = decodedAfterDemuxSeek &&
                                        currentPts >= seconds - validSeekLag &&
                                        currentPts <= seconds + std::max(0.25, frameDuration * 3.0);
@@ -1570,6 +1606,11 @@ void VideoPlayer::ForceNextPrimarySeekNoOpForTesting()
 uint64_t VideoPlayer::GetInjectedPrimarySeekNoOpCountForTesting() const
 {
     return m_testInjectedPrimarySeekNoOps.load(std::memory_order_acquire);
+}
+
+uint64_t VideoPlayer::GetFallbackSeekCountForTesting() const
+{
+    return m_testFallbackSeekCount.load(std::memory_order_acquire);
 }
 #endif
 
@@ -2785,8 +2826,8 @@ void VideoPlayer::PlaybackThreadFunction()
                     // EOF and a user seek can arrive together. Give the seek
                     // publisher a short hand-off window and re-check while
                     // holding the queue lock; otherwise this thread can decide
-                    // to Stop just as the producer clears EOF and restarts at
-                    // the new position, killing the recovered playback.
+                    // playback has ended just as the producer clears EOF and
+                    // restarts at the new position, killing the recovered seek.
                     playbackBufferCondition.wait_for(
                         lock, std::chrono::milliseconds(50), [this]() {
                             return !playbackThreadRunning ||
@@ -2804,7 +2845,15 @@ void VideoPlayer::PlaybackThreadFunction()
                         continue;
                     }
                     lock.unlock();
-                    Stop();
+                    // Reaching EOF is not the same operation as the user
+                    // pressing Stop. Stop() seeks the demuxer and resets the
+                    // visible cursor to zero, so a premature EOF reported
+                    // immediately after unpausing made the entire timeline
+                    // jump back to the beginning. Leave the last presented
+                    // position visible and only transition playback to paused.
+                    Pause();
+                    m_pausedPlaybackBufferResumable.store(
+                        false, std::memory_order_release);
                     PostMessage(parentWindow, WM_TIMER, 1006, 0);
                     return;
                 }

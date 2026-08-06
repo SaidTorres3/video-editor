@@ -33,10 +33,12 @@ void FinalizePlayingUiSeek(VideoPlayer* player, double seconds)
     if (!player || !player->IsLoaded())
         return;
 
-    // A playing seek only needs a nearby decodable frame. Requesting an exact
-    // refinement here makes long-GOP/high-resolution inputs decode a large run
-    // before playback can resume.
-    player->SeekWhilePlaying(seconds, false);
+    // Drag previews use a bounded, inexpensive seek, but the final mouse-up
+    // position must be exact. With a long GOP, treating a nearby keyframe as
+    // final can leave playback at its pre-seek position (commonly zero).
+    // SeekWhilePlaying performs this work on the decode thread, so the UI stays
+    // responsive while the decoder advances to the requested frame.
+    player->SeekWhilePlaying(seconds, true);
 
     // Release the pinned cursor after this seek generation presents a frame.
     // A time-only >= check would release backward seeks before they land.
