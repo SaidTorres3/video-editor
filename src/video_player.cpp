@@ -1613,6 +1613,27 @@ uint64_t VideoPlayer::GetFallbackSeekCountForTesting() const
 {
     return m_testFallbackSeekCount.load(std::memory_order_acquire);
 }
+
+bool VideoPlayer::IsAudioOutputAvailableForTesting() const
+{
+    return audioInitialized && audioClient && renderClient &&
+           !audioTracks.empty();
+}
+
+uint64_t VideoPlayer::GetSubmittedAudioFrameCountForTesting() const
+{
+    return m_audioPlayer->GetSubmittedFrameCountForTesting();
+}
+
+uint64_t VideoPlayer::GetAudioClientStartCountForTesting() const
+{
+    return m_audioPlayer->GetClientStartCountForTesting();
+}
+
+uint64_t VideoPlayer::GetAudioClientStartFailureCountForTesting() const
+{
+    return m_audioPlayer->GetClientStartFailureCountForTesting();
+}
 #endif
 
 bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vector<uint8_t>& pixels) const

@@ -277,11 +277,10 @@ void AudioPlayer::StartThread() {
 
     if (!m_player->audioTracks.empty() && m_player->audioInitialized)
     {
-        HRESULT hr = m_player->audioClient->Start();
-        if (FAILED(hr))
-        {
-            // Continue without audio or handle error appropriately
-        }
+        // The worker owns the WASAPI start/stop lifecycle. In particular, it
+        // must fill the first buffer before Start(): starting here launches an
+        // empty client, and the worker's post-preroll Start() then fails with
+        // AUDCLNT_E_NOT_STOPPED. That used to kill audio after every seek.
         m_framesWritten = 0;
         m_player->audioThreadRunning = true;
         m_player->audioThread = std::thread(&AudioPlayer::AudioThreadFunction, this);
@@ -546,9 +545,18 @@ void AudioPlayer::AudioThreadFunction() {
             continue;
 
         m_framesWritten += framesNeeded;
+#ifdef VIDEO_EDITOR_TESTING
+        m_submittedFrameCount.fetch_add(framesNeeded, std::memory_order_release);
+#endif
         if (!deviceStarted)
         {
             hr = m_player->audioClient->Start();
+#ifdef VIDEO_EDITOR_TESTING
+            if (FAILED(hr))
+                m_clientStartFailureCount.fetch_add(1, std::memory_order_release);
+            else
+                m_clientStartCount.fetch_add(1, std::memory_order_release);
+#endif
             if (FAILED(hr))
                 break;
             deviceStarted = true;

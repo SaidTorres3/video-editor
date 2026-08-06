@@ -5,6 +5,10 @@
 #include "../src/timeline.h"
 
 #include <array>
+#include <chrono>
+#include <filesystem>
+#include <functional>
+#include <thread>
 
 // ============================================================================
 // Integration tests for audio track management
@@ -37,9 +41,104 @@ std::size_t CountLegacyTenVadTempDirectories()
     FindClose(find);
     return count;
 }
+
+bool WaitForCondition(const std::function<bool()>& condition,
+                      std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (condition())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return condition();
+}
+
+void VerifyAudioContinuesAfterPlayingSeek(const std::wstring& mediaPath,
+                                          double seekTarget,
+                                          std::chrono::milliseconds timeout)
+{
+    VideoPlayer player(g_testHwnd);
+    TEST_ASSERT(player.LoadVideo(mediaPath),
+                "audio seek regression source must load");
+
+    // A Windows test runner without an audio endpoint cannot exercise WASAPI.
+    // The generated-media and real-media variants run the full check whenever
+    // an endpoint is available.
+    if (!player.IsAudioOutputAvailableForTesting())
+        return;
+
+    TEST_ASSERT(player.Play(), "playback must start for the audio seek test");
+    TEST_ASSERT(WaitForCondition([&player]() {
+                    return player.GetAudioClientStartCountForTesting() >= 1 &&
+                           player.GetSubmittedAudioFrameCountForTesting() > 0;
+                }, timeout),
+                "audio output must start and submit samples before seeking");
+
+    const uint64_t submittedBeforeSeek =
+        player.GetSubmittedAudioFrameCountForTesting();
+    const uint64_t startsBeforeSeek =
+        player.GetAudioClientStartCountForTesting();
+    const uint64_t presentedBeforeSeek =
+        player.GetPresentedPlaybackFrameCount();
+    const int sampleRate = player.GetAudioSampleRateForTesting();
+    const uint64_t continuedAudioFrames = static_cast<uint64_t>(
+        sampleRate > 0 ? sampleRate / 4 : 1);
+
+    player.SeekWhilePlaying(seekTarget, true);
+
+    TEST_ASSERT(WaitForCondition([&player, presentedBeforeSeek, startsBeforeSeek,
+                                  submittedBeforeSeek, continuedAudioFrames,
+                                  seekTarget]() {
+                    return player.GetPresentedPlaybackFrameCount() > presentedBeforeSeek &&
+                           player.GetAudioClientStartCountForTesting() > startsBeforeSeek &&
+                           player.GetSubmittedAudioFrameCountForTesting() >
+                               submittedBeforeSeek + continuedAudioFrames &&
+                           player.GetCurrentTime() >= seekTarget - 0.25 &&
+                           player.GetCurrentTime() <= seekTarget + 2.0;
+                }, timeout),
+                "audio must restart and submit at least 250 ms after a playing seek");
+    TEST_ASSERT_EQ(player.GetAudioClientStartFailureCountForTesting(),
+                   static_cast<uint64_t>(0),
+                   "WASAPI must never be started twice for the same playback epoch");
+    TEST_ASSERT(player.IsPlaying(),
+                "an audio restart must not stop video playback after seeking");
+    player.Pause();
+}
 } // namespace
 
 void RegisterAudioTests(TestSuite& suite) {
+
+    suite.addTest("PlayingSeek_AudioContinues", []() {
+        VerifyAudioContinuesAfterPlayingSeek(
+            g_testVideoPath, 3.0, std::chrono::seconds(5));
+    });
+
+    wchar_t* externalMediaValue = nullptr;
+    size_t externalMediaLength = 0;
+    _wdupenv_s(&externalMediaValue, &externalMediaLength,
+               L"VIDEO_EDITOR_REAL_MEDIA");
+    const std::wstring externalMediaPath = externalMediaValue
+        ? externalMediaValue
+        : L"";
+    std::free(externalMediaValue);
+    if (!externalMediaPath.empty() &&
+        std::filesystem::exists(externalMediaPath))
+    {
+        suite.addTest("ExternalMedia_PlayingSeek_AudioContinues",
+                      [externalMediaPath]() {
+            double seekTarget = 0.0;
+            {
+                VideoPlayer probe(g_testHwnd);
+                TEST_ASSERT(probe.LoadVideo(externalMediaPath),
+                            "external audio seek regression source must load");
+                seekTarget = probe.GetDuration() * 0.5;
+            }
+            VerifyAudioContinuesAfterPlayingSeek(
+                externalMediaPath, seekTarget, std::chrono::seconds(10));
+        });
+    }
 
     suite.addTest("ExportMasterGain_DbConversion", []() {
         const int savedGainDb = g_exportMasterGainDb;

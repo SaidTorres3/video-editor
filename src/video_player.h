@@ -389,6 +389,11 @@ public:
     void ForceNextPrimarySeekNoOpForTesting();
     uint64_t GetInjectedPrimarySeekNoOpCountForTesting() const;
     uint64_t GetFallbackSeekCountForTesting() const;
+    bool IsAudioOutputAvailableForTesting() const;
+    uint64_t GetSubmittedAudioFrameCountForTesting() const;
+    uint64_t GetAudioClientStartCountForTesting() const;
+    uint64_t GetAudioClientStartFailureCountForTesting() const;
+    int GetAudioSampleRateForTesting() const { return audioSampleRate; }
 #endif
     size_t GetPlaybackBufferCapacity() const { return playbackBufferCapacity; }
 
