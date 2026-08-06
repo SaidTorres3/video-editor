@@ -135,6 +135,14 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "200% speed should advance substantially faster than real time");
     });
 
+    suite.addTest("TestDecoder_UsesDeterministicSoftwarePath", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
+                    "software-decoder regression source must load");
+        TEST_ASSERT(!player.useHwAccel,
+                    "automated tests must not depend on a hosted runner's partial GPU device");
+    });
+
     suite.addTest("PlaybackSpeed_OneXStartsPromptlyAndTracksWallClock", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);

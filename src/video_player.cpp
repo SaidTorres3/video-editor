@@ -18,6 +18,7 @@
 #include <chrono>
 #include <climits>
 #include <cerrno>
+#include <libavutil/pixdesc.h>
 
 void UpdateControls();
 void UpdateTimeline();
@@ -1669,7 +1670,9 @@ bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vecto
             }
         }
         for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-            if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+            const AVPixFmtDescriptor* descriptor = av_pix_fmt_desc_get(*p);
+            if (descriptor &&
+                (descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL) == 0) {
                 *hwFmt = AV_PIX_FMT_NONE;
                 return *p;
             }
@@ -1834,7 +1837,9 @@ void VideoPlayer::InitThumbnailCtx()
             }
         }
         for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-            if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+            const AVPixFmtDescriptor* descriptor = av_pix_fmt_desc_get(*p);
+            if (descriptor &&
+                (descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL) == 0) {
                 thumb->hwPixelFormat = AV_PIX_FMT_NONE;
                 return *p;
             }

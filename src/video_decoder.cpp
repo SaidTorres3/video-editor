@@ -42,7 +42,9 @@ bool VideoDecoder::Initialize() {
             }
         }
         for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-            if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+            const AVPixFmtDescriptor* descriptor = av_pix_fmt_desc_get(*p);
+            if (descriptor &&
+                (descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL) == 0) {
                 vp->hwPixelFormat = AV_PIX_FMT_NONE;
                 return *p;
             }
@@ -68,6 +70,11 @@ bool VideoDecoder::Initialize() {
         sourceFormat->log2_chroma_w == 1 && sourceFormat->log2_chroma_h == 1 &&
         sourceFormat->comp[0].depth <= 10;
 
+    // Automated tests must not depend on whatever partial GPU device a hosted
+    // Windows runner exposes. CircleCI can create a DXVA2 device but cannot
+    // allocate decode surfaces, which leaves the codec on a one-thread failed
+    // hardware path and turns playback assertions into VM-driver benchmarks.
+#ifndef VIDEO_EDITOR_TESTING
     // Try hardware acceleration only when both the codec and source pixel
     // format have a compatible device path: D3D11VA first, then DXVA2.
     AVHWDeviceType hwTypes[] = { AV_HWDEVICE_TYPE_D3D11VA, AV_HWDEVICE_TYPE_DXVA2 };
@@ -97,6 +104,7 @@ bool VideoDecoder::Initialize() {
             break;
         }
     }
+#endif
 
     // Configure threading.
     if (m_player->useHwAccel)
@@ -246,79 +254,113 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
         return false;
 
     std::unique_lock<std::mutex> lock(m_player->decodeMutex);
+    const auto finishAtEof = [&]() {
+        // Decoder exhaustion must never have Stop semantics. Stop() is a user
+        // command that seeks to zero. Release decodeMutex before Pause because
+        // Pause may join a worker waiting on it.
+        const bool pauseAtEof = m_player->isPlaying && presentFrame;
+        lock.unlock();
+        if (pauseAtEof)
+        {
+            m_player->Pause();
+            PostMessage(m_player->parentWindow, WM_TIMER, 1006, 0);
+        }
+        return false;
+    };
 
     while (true)
     {
         bool hasVideoPacket = m_bufferedPacketPending;
+        bool drainingDecoder = m_bufferedDemuxEof;
         int ret = 0;
-        if (!hasVideoPacket)
+        if (!hasVideoPacket && !drainingDecoder)
         {
             ret = av_read_frame(m_player->formatContext, m_player->packet);
             if (ret < 0)
             {
-                // Decoder exhaustion must never have Stop semantics. Stop() is
-                // a user command that seeks to zero; treating EOF as Stop made
-                // any decoder path that exhausted immediately after unpausing
-                // reset the timeline to the beginning. Release decodeMutex
-                // before Pause because Pause may join a worker waiting on it.
-                const bool pauseAtEof = m_player->isPlaying && presentFrame;
-                lock.unlock();
-                if (pauseAtEof)
-                {
-                    m_player->Pause();
-                    PostMessage(m_player->parentWindow, WM_TIMER, 1006, 0);
-                }
-                return false;
+                if (ret == AVERROR(EAGAIN))
+                    continue;
+                if (ret != AVERROR_EOF)
+                    return false;
+
+                // av_read_frame EOF is not codec EOF. Frame-threaded decoders
+                // can still own delayed output (about 0.6s for the test H.264
+                // stream), so enter drain mode and send the flush packet below.
+                m_bufferedDemuxEof = true;
+                drainingDecoder = true;
             }
 
-            hasVideoPacket =
-                m_player->packet->stream_index == m_player->videoStreamIndex;
-            if (hasVideoPacket)
+            if (!drainingDecoder)
             {
-                const int64_t packetTimestamp =
-                    m_player->packet->pts != AV_NOPTS_VALUE
-                        ? m_player->packet->pts
-                        : m_player->packet->dts;
-                if (packetTimestamp != AV_NOPTS_VALUE)
+                hasVideoPacket =
+                    m_player->packet->stream_index == m_player->videoStreamIndex;
+                if (hasVideoPacket)
                 {
-                    AVStream* stream = m_player->formatContext->streams[
-                        m_player->videoStreamIndex];
-                    m_player->m_lastReadVideoPacketPts.store(
-                        packetTimestamp * av_q2d(stream->time_base) -
-                            m_player->startTimeOffset,
-                        std::memory_order_relaxed);
-                    m_player->m_lastReadVideoPacketHadTimestamp.store(
-                        true, std::memory_order_relaxed);
+                    const int64_t packetTimestamp =
+                        m_player->packet->pts != AV_NOPTS_VALUE
+                            ? m_player->packet->pts
+                            : m_player->packet->dts;
+                    if (packetTimestamp != AV_NOPTS_VALUE)
+                    {
+                        AVStream* stream = m_player->formatContext->streams[
+                            m_player->videoStreamIndex];
+                        m_player->m_lastReadVideoPacketPts.store(
+                            packetTimestamp * av_q2d(stream->time_base) -
+                                m_player->startTimeOffset,
+                            std::memory_order_relaxed);
+                        m_player->m_lastReadVideoPacketHadTimestamp.store(
+                            true, std::memory_order_relaxed);
+                    }
+                    m_bufferedPacketPending = true;
                 }
-                m_bufferedPacketPending = true;
             }
         }
 
-        if (hasVideoPacket)
+        if (hasVideoPacket || drainingDecoder)
         {
             // A frame-threaded decoder can return EAGAIN while it still owns
             // output from earlier packets. Retain this exact packet, drain one
             // or more frames, and retry it on the next iteration/call. The old
             // path unref'd every EAGAIN packet and eventually walked an AV1
             // MP4 all the way to EOF after a paused timeline seek.
-            ret = SendBufferedCodecPacket(m_player->packet);
-            if (ret == 0)
+            if (drainingDecoder)
             {
-                av_packet_unref(m_player->packet);
-                m_bufferedPacketPending = false;
+                if (!m_bufferedFlushSent)
+                {
+                    ret = SendBufferedCodecPacket(nullptr);
+                    if (ret == 0 || ret == AVERROR_EOF)
+                        m_bufferedFlushSent = true;
+                    else if (ret != AVERROR(EAGAIN))
+                        return false;
+                }
             }
-            else if (ret != AVERROR(EAGAIN))
+            else
             {
-                av_packet_unref(m_player->packet);
-                m_bufferedPacketPending = false;
-                continue;
+                ret = SendBufferedCodecPacket(m_player->packet);
+                if (ret == 0)
+                {
+                    av_packet_unref(m_player->packet);
+                    m_bufferedPacketPending = false;
+                }
+                else if (ret != AVERROR(EAGAIN))
+                {
+                    av_packet_unref(m_player->packet);
+                    m_bufferedPacketPending = false;
+                    continue;
+                }
             }
 
             while (true)
             {
                 ret = ReceiveBufferedCodecFrame(m_player->hwFrame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                if (ret == AVERROR_EOF)
+                    return finishAtEof();
+                if (ret == AVERROR(EAGAIN))
+                {
+                    if (drainingDecoder && m_bufferedFlushSent)
+                        return finishAtEof();
                     break;
+                }
                 if (ret < 0)
                     return false;
 
