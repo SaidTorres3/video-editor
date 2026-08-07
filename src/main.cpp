@@ -247,6 +247,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                 }
                 else if (msg.message == WM_KEYDOWN)
                 {
+                    const bool controlPressed = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                    const bool isNumberRowSpeedShortcut = msg.wParam >= '1' && msg.wParam <= '9';
+                    const bool isNumpadSpeedShortcut = msg.wParam >= VK_NUMPAD1 && msg.wParam <= VK_NUMPAD9;
+                    if (controlPressed && (isNumberRowSpeedShortcut || isNumpadSpeedShortcut))
+                    {
+                        const double speed = isNumberRowSpeedShortcut
+                            ? static_cast<double>(msg.wParam - '0')
+                            : static_cast<double>(msg.wParam - VK_NUMPAD0);
+                        g_videoPlayer->SetPlaybackSpeed(speed);
+                        UpdateControls();
+                        continue;
+                    }
+
                     double speedMultiplier = (GetKeyState(VK_SHIFT) & 0x8000) ? 10.0 : 1.0;
 
                     bool handled = true;
