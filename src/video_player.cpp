@@ -17,6 +17,8 @@
 #include <cstring>
 #include <chrono>
 #include <climits>
+#include <cerrno>
+#include <libavutil/pixdesc.h>
 
 void UpdateControls();
 void UpdateTimeline();
@@ -31,27 +33,42 @@ VideoPlayer::VideoPlayer(HWND parent)
       frame(nullptr), frameRGB(nullptr), hwFrame(nullptr), hwDeviceCtx(nullptr),
       hwPixelFormat(AV_PIX_FMT_NONE), useHwAccel(false), packet(nullptr), swsContext(nullptr),
       swsSourceFormat(AV_PIX_FMT_NONE),
-      buffer(nullptr), rgbBufferSize(0), videoStreamIndex(-1), frameWidth(0), frameHeight(0),
+      buffer(nullptr), rgbBufferSize(0), playbackSwsContext(nullptr),
+      playbackSwsSourceFormat(AV_PIX_FMT_NONE), playbackRgbWidth(0), playbackRgbHeight(0),
+      playbackRgbStride(0), displayUsesPlaybackBuffer(false), videoStreamIndex(-1),
+      frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
       clipPreviewActive(false), clipPreviewEndTime(0.0),
       cropRect{0,0,0,0}, cropTimeline(), hasCrop(false), cropOutputWidth(0), cropOutputHeight(0),
       selectingCrop(false), cropStart{0,0}, cropCurrent{0,0},
       videoWindow(nullptr),
-      d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr), playbackTimer(0),
+      d2dFactory(nullptr), d2dRenderTarget(nullptr), d2dBitmap(nullptr),
+      dwriteFactory(nullptr), speedTextFormat(nullptr), playbackTimer(0),
       deviceEnumerator(nullptr), audioDevice(nullptr), audioClient(nullptr),
       renderClient(nullptr), audioFormat(nullptr), bufferFrameCount(0),
       audioInitialized(false), audioOutputIsFloat(false), audioThreadRunning(false),
       playbackThreadRunning(false),
       playbackBufferCapacity(3), playbackPrebufferFrames(2), playbackDecodeEof(false),
+      m_pausedPlaybackBufferResumable(false),
       audioSampleRate(44100), audioChannels(2), audioSampleFormat(AV_SAMPLE_FMT_S16),
     originalVideoWndProc(nullptr),
             dropAudioDuringStepping(false),
             m_decoderOutOfSync(false),
             m_playbackSeekPending(false),
             m_playbackSeekInProgress(false),
+            m_playbackSeekGeneration(0),
             m_playbackSeekTarget(0.0),
             m_playbackSeekExact(true),
+            m_resumeSeekPending(false),
+            m_resumeSeekTarget(0.0),
+            m_playbackSpeed(1.0),
+            m_playbackSpeedChangePending(false),
+            m_playbackClockStartPts(0.0),
+            m_playbackClockStartNs(0),
+            m_presentedPlaybackFrameCount(0),
+            m_lastHighSpeedFrameDeliveryNs(0),
+            m_speedOverlayDeadline(0),
             seekRefineThreadExit(false), seekRefinePending(false), seekRefineTarget(0.0),
             seekRefineGeneration(0)
 {
@@ -296,15 +313,62 @@ bool VideoPlayer::Play()
         return false;
     CancelPendingSeekRefinement();
 
+    // Pause primes the reverse-frame cache so a subsequent ',' is instant.
+    // Once playback resumes that CPU decoder is no longer useful, and leaving
+    // it active competes with the playback decoder and can collapse high-speed
+    // playback to the source's sequential decode rate.
+    SuspendBwdPrefetch();
+
+    const bool hasInterruptedSeek =
+        m_resumeSeekPending.exchange(false, std::memory_order_acq_rel);
+    const double interruptedSeekTarget =
+        m_resumeSeekTarget.load(std::memory_order_acquire);
+    const bool hasPausedPlaybackBuffer =
+        m_pausedPlaybackBufferResumable.exchange(false,
+                                                  std::memory_order_acq_rel);
+    // At very high rates the retained queue belongs to a decoder GOP that was
+    // already being aggressively thinned and clock-corrected. Reusing that
+    // partial epoch after pause can leave the decoder advancing only as fast
+    // as it can process frames sequentially. Start a clean asynchronous epoch
+    // at the visible paused timestamp instead.
+    const bool restartHighSpeedPlayback =
+        !hasInterruptedSeek && hasPausedPlaybackBuffer &&
+        GetPlaybackSpeed() >= 32.0;
+    const bool requiresResumeSeek =
+        hasInterruptedSeek || restartHighSpeedPlayback;
+    const double resumeSeekTarget = restartHighSpeedPlayback
+        ? currentPts
+        : interruptedSeekTarget;
+    const bool resumeBufferedPlayback =
+        !requiresResumeSeek && hasPausedPlaybackBuffer;
+
     // If backward frame stepping used the prefetch cache, the main formatContext
     // was never seeked.  Resync it now so the playback thread decodes from the
     // correct position instead of the old pre-step position.
-    if (m_decoderOutOfSync)
+    if (m_decoderOutOfSync && !requiresResumeSeek)
     {
+        // Seeking can update currentPts even when it ultimately reports that
+        // it did not reach the requested frame (for example, a demuxer parked
+        // at EOF may set it to -1). Preserve the actual paused position so
+        // every recovery attempt targets the same timestamp instead of using
+        // that failed attempt's corrupted value and clamping it to zero.
+        const double pausedPosition = currentPts;
         // hardSeek=true bypasses the smartSeek optimisation which would skip
         // av_seek_frame when seconds==currentPts, leaving the formatContext at
         // the wrong position when we consumed a prefetch-cache frame.
-        SeekToTimeInternal(currentPts, INT_MAX, false, true, true);
+        if (!SeekToTimeInternal(pausedPosition, INT_MAX, false, true, true) &&
+            !SeekToTimeInternal(pausedPosition, INT_MAX, false, true, true,
+                                true, true, true))
+        {
+            // Keep the visible timeline at the user's paused position even if
+            // this input cannot be resynchronized. Play() returns false, but
+            // it must never destroy the selected timestamp as a side effect.
+            currentPts = pausedPosition;
+            currentFrame = frameRate > 0.0
+                ? static_cast<int64_t>(pausedPosition * frameRate + 0.5)
+                : 0;
+            return false;
+        }
         // m_decoderOutOfSync is cleared inside SeekToTimeInternal
     }
 
@@ -312,6 +376,9 @@ bool VideoPlayer::Play()
 
     masterStartPts = currentPts;
     masterStartTime = std::chrono::high_resolution_clock::now();
+    m_playbackClockStartPts.store(currentPts, std::memory_order_relaxed);
+    m_playbackClockStartNs.store(0, std::memory_order_release);
+    m_lastHighSpeedFrameDeliveryNs = 0;
 
     // Keep roughly 350 ms of decoded video ready, while capping worst-case
     // memory usage (4 bytes/pixel is a conservative estimate for CPU frames).
@@ -321,11 +388,34 @@ bool VideoPlayer::Play()
         1, static_cast<size_t>(frameWidth) * static_cast<size_t>(frameHeight) * 4);
     const size_t memoryLimitedFrames = std::max<size_t>(3, (128ull * 1024ull * 1024ull) / bytesPerFrame);
     playbackBufferCapacity = std::min(desiredFrames, memoryLimitedFrames);
+#ifdef VIDEO_EDITOR_TESTING
+    if (m_testPlaybackBufferCapacity > 0)
+        playbackBufferCapacity = m_testPlaybackBufferCapacity;
+#endif
     playbackPrebufferFrames = std::min(playbackBufferCapacity, std::max<size_t>(2, playbackBufferCapacity / 2));
-    ClearPlaybackBuffer();
+    if (GetPlaybackSpeed() >= 4.0)
+        playbackPrebufferFrames = 1;
+    if (!resumeBufferedPlayback)
+        ClearPlaybackBuffer();
+
+    if (requiresResumeSeek)
+    {
+        // Publish the interrupted target before either worker starts. The
+        // presentation thread therefore cannot consume a frame from the old
+        // decoder position, and the decode thread performs the exact recovery
+        // off the UI thread.
+        std::lock_guard<std::mutex> wakeLock(playbackWakeMutex);
+        m_playbackSeekTarget.store(resumeSeekTarget,
+                                   std::memory_order_relaxed);
+        m_playbackSeekExact.store(true, std::memory_order_relaxed);
+        m_playbackSeekPending.store(true, std::memory_order_release);
+        m_playbackSeekGeneration.fetch_add(1, std::memory_order_release);
+    }
     playbackThreadRunning = true;
     playbackDecodeThread = std::thread(&VideoPlayer::PlaybackDecodeThreadFunction, this);
     playbackThread = std::thread(&VideoPlayer::PlaybackThreadFunction, this);
+    playbackWakeCondition.notify_all();
+    playbackBufferCondition.notify_all();
     return true;
 }
 
@@ -333,6 +423,18 @@ void VideoPlayer::Pause()
 {
     if (isPlaying)
     {
+        const bool interruptedSeek =
+            m_playbackSeekPending.load(std::memory_order_acquire) ||
+            m_playbackSeekInProgress.load(std::memory_order_acquire);
+        if (interruptedSeek)
+        {
+            std::lock_guard<std::mutex> wakeLock(playbackWakeMutex);
+            m_resumeSeekTarget.store(
+                m_playbackSeekTarget.load(std::memory_order_relaxed),
+                std::memory_order_release);
+            m_resumeSeekPending.store(true, std::memory_order_release);
+        }
+
         isPlaying = false;
         clipPreviewActive = false;
         m_playbackSeekPending.store(false, std::memory_order_release);
@@ -358,12 +460,38 @@ void VideoPlayer::Pause()
             }
         }
 
+        // A packet may be intentionally retained when avcodec_send_packet
+        // reports EAGAIN. Playback is now stopped, so discard that pending
+        // ownership before any paused seek or frame-step uses the decoder.
+        m_decoder->ResetBufferedDecodeState();
+
+        // High-speed playback temporarily enables decoder discard options.
+        // Restore full-quality decoding before paused seeks/frame stepping.
+        if (codecContext)
+        {
+            codecContext->skip_frame = AVDISCARD_DEFAULT;
+            codecContext->skip_idct = AVDISCARD_DEFAULT;
+            codecContext->skip_loop_filter = AVDISCARD_DEFAULT;
+        }
+
+        // Keep the decoded-ahead queue and the decoder position as one
+        // continuous stream. Re-seeking on every unpause is both unnecessary
+        // and unsafe for sparse/missing indexes: a failed demux seek can land
+        // at timestamp zero. Play() resumes from this retained queue instead.
+        m_pausedPlaybackBufferResumable.store(
+            !interruptedSeek && !m_decoderOutOfSync,
+            std::memory_order_release);
+
         // The presentation thread starts audio after the video buffer has
         // prefilled. Stop it only after both playback threads are shut down so
         // it cannot race this pause and launch a new audio thread behind us.
         // Leaving the old std::thread joinable makes the next Play() terminate
         // the process when AudioPlayer::StartThread assigns its replacement.
-        m_audioPlayer->StopThread();
+        // Reset the stopped WASAPI client as well. A stopped client retains its
+        // queued padding; if pause catches a full device buffer, that padding
+        // cannot drain and the resumed worker has no writable frames with which
+        // to trigger Start(), leaving audio silent until a seek resets it.
+        m_audioPlayer->StopThread(true);
 
         // When paused, pre-decode the previous frame so the first ',' is instant
         RequestBwdPrefetch(currentFrame - 1);
@@ -374,12 +502,15 @@ void VideoPlayer::Stop()
 {
     clipPreviewActive = false;
     Pause();
+    m_resumeSeekPending.store(false, std::memory_order_release);
+    m_pausedPlaybackBufferResumable.store(false, std::memory_order_release);
     ClearPlaybackBuffer();
     CancelPendingSeekRefinement();
     currentFrame = 0;
     currentPts = 0.0;
     if (isLoaded)
     {
+        m_decoder->ResetBufferedDecodeState();
         av_seek_frame(formatContext, videoStreamIndex, 0, AVSEEK_FLAG_FRAME);
         avcodec_flush_buffers(codecContext);
         
@@ -395,6 +526,7 @@ void VideoPlayer::Stop()
         for (auto& tr : audioTracks)
             tr->buffer.clear();
     }
+    m_decoderOutOfSync = false;
 }
 
 std::uint64_t VideoPlayer::BeginSeekOperation()
@@ -634,6 +766,61 @@ void VideoPlayer::SeekToFrame(int64_t frameNumber)
     RequestBwdPrefetch(currentFrame - 1);
 }
 
+void VideoPlayer::SetPlaybackSpeed(double speed)
+{
+    if (!std::isfinite(speed))
+        return;
+    speed = std::max(0.1, std::round(speed * 10.0) / 10.0);
+    const double previous = m_playbackSpeed.exchange(speed, std::memory_order_acq_rel);
+    if (isPlaying && std::fabs(previous - speed) > 0.0001)
+    {
+        m_playbackSpeedChangePending.store(true, std::memory_order_release);
+        playbackWakeCondition.notify_all();
+    }
+
+    m_speedOverlayDeadline.store(GetTickCount64() + 4000, std::memory_order_release);
+    if (videoWindow)
+        InvalidateRect(videoWindow, nullptr, FALSE);
+}
+
+void VideoPlayer::ResetPlaybackClock(double pts)
+{
+    const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    m_playbackClockStartPts.store(pts, std::memory_order_relaxed);
+    m_playbackClockStartNs.store(nowNs, std::memory_order_release);
+}
+
+double VideoPlayer::GetPlaybackClockTarget() const
+{
+    const int64_t startNs = m_playbackClockStartNs.load(std::memory_order_acquire);
+    const double startPts = m_playbackClockStartPts.load(std::memory_order_relaxed);
+    if (startNs == 0)
+        return startPts;
+
+    const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const double elapsed = std::max<int64_t>(0, nowNs - startNs) / 1000000000.0;
+    return startPts + elapsed * GetPlaybackSpeed();
+}
+
+bool VideoPlayer::IsPlaybackSpeedOverlayVisible() const
+{
+    const ULONGLONG deadline = m_speedOverlayDeadline.load(std::memory_order_acquire);
+    return deadline != 0 && GetTickCount64() < deadline;
+}
+
+void VideoPlayer::UpdatePlaybackSpeedOverlay()
+{
+    ULONGLONG deadline = m_speedOverlayDeadline.load(std::memory_order_acquire);
+    if (deadline != 0 && GetTickCount64() >= deadline &&
+        m_speedOverlayDeadline.compare_exchange_strong(deadline, 0, std::memory_order_acq_rel))
+    {
+        if (videoWindow)
+            InvalidateRect(videoWindow, nullptr, FALSE);
+    }
+}
+
 void VideoPlayer::StepFrame(int direction)
 {
     if (!isLoaded || direction == 0)
@@ -817,6 +1004,7 @@ bool VideoPlayer::ConsumeBwdPrefetch(int64_t frame, bool waitForFrame)
                     dst += 4;
                     src += 3;
                 }
+                displayUsesPlaybackBuffer = false;
             }
             currentFrame = frame;
             currentPts   = it->second.pts;
@@ -1075,14 +1263,27 @@ void VideoPlayer::BwdPrefetchThreadFunc()
     closeCtx();
 }
 
-void VideoPlayer::SeekToTime(double seconds, int decodeCount, bool renderFastFrame, bool allowAsyncRefine)
+bool VideoPlayer::SeekToTime(double seconds, int decodeCount, bool renderFastFrame, bool allowAsyncRefine)
 {
-    SeekToTimeInternal(seconds, decodeCount, allowAsyncRefine, false, false, renderFastFrame);
+    if (!isPlaying)
+        m_resumeSeekPending.store(false, std::memory_order_release);
+    bool reached = SeekToTimeInternal(seconds, decodeCount, allowAsyncRefine,
+                                      false, false, renderFastFrame);
+    if (!reached && decodeCount == INT_MAX && !allowAsyncRefine)
+    {
+        reached = SeekToTimeInternal(seconds, decodeCount, false, false, true,
+                                     renderFastFrame, true, true);
+    }
+    return reached;
 }
 
 void VideoPlayer::SeekToTimeExact(double seconds)
 {
-    SeekToTimeInternal(seconds, INT_MAX, false, true);
+    if (!isPlaying)
+        m_resumeSeekPending.store(false, std::memory_order_release);
+    if (!SeekToTimeInternal(seconds, INT_MAX, false, true))
+        SeekToTimeInternal(seconds, INT_MAX, false, true, true,
+                           true, true, true);
 }
 
 void VideoPlayer::SeekWhilePlaying(double seconds, bool exact)
@@ -1110,21 +1311,94 @@ void VideoPlayer::SeekWhilePlaying(double seconds, bool exact)
         m_playbackSeekTarget.store(seconds, std::memory_order_relaxed);
         m_playbackSeekExact.store(exact, std::memory_order_relaxed);
         m_playbackSeekPending.store(true, std::memory_order_release);
+        // Unlike the pending/in-progress flags, this generation cannot change
+        // to a new value and back between two presentation-thread checks.
+        m_playbackSeekGeneration.fetch_add(1, std::memory_order_release);
     }
     playbackWakeCondition.notify_all();
     playbackBufferCondition.notify_all();
 }
 
+bool VideoPlayer::SeekDemuxer(double seconds, AVStream* stream, int64_t streamTimestamp,
+                              bool skipPrimarySeek)
+{
+    if (!formatContext || !stream || videoStreamIndex < 0)
+        return false;
+
+    const int64_t globalTimestamp = static_cast<int64_t>(std::llround(
+        (seconds + startTimeOffset) * static_cast<double>(AV_TIME_BASE)));
+
+#ifdef VIDEO_EDITOR_TESTING
+    if (skipPrimarySeek)
+        m_testFallbackSeekCount.fetch_add(1, std::memory_order_relaxed);
+#endif
+    int seekResult = AVERROR(EIO);
+    if (!skipPrimarySeek)
+    {
+#ifdef VIDEO_EDITOR_TESTING
+        if (m_testNoOpNextPrimarySeek.exchange(false, std::memory_order_acq_rel))
+        {
+            m_testInjectedPrimarySeekNoOps.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        if (m_testFailNextPrimarySeek.exchange(false, std::memory_order_acq_rel))
+        {
+            m_testInjectedPrimarySeekFailures.fetch_add(1, std::memory_order_relaxed);
+            seekResult = AVERROR(EIO);
+        }
+        else
+#endif
+        {
+            seekResult = av_seek_frame(formatContext, videoStreamIndex,
+                                       streamTimestamp, AVSEEK_FLAG_BACKWARD);
+        }
+        if (seekResult >= 0)
+            return true;
+    }
+    // Some demuxers cannot service av_seek_frame with a stream timestamp even
+    // though their more precise seek_file implementation works. This is common
+    // with sparse/missing indexes and was previously ignored, leaving playback
+    // to decode from an unrelated position while the timeline stayed pinned.
+    seekResult = avformat_seek_file(formatContext, videoStreamIndex,
+                                    INT64_MIN, streamTimestamp, streamTimestamp,
+                                    AVSEEK_FLAG_BACKWARD);
+    if (seekResult >= 0)
+        return true;
+
+    // Finally retry in AV_TIME_BASE units. Demuxers that do not support a
+    // per-stream seek can still support a global container-timeline seek.
+    seekResult = avformat_seek_file(formatContext, -1,
+                                    INT64_MIN, globalTimestamp, globalTimestamp,
+                                    AVSEEK_FLAG_BACKWARD);
+    if (seekResult >= 0)
+        return true;
+
+    seekResult = av_seek_frame(formatContext, -1, globalTimestamp,
+                               AVSEEK_FLAG_BACKWARD);
+    return seekResult >= 0;
+}
+
 bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allowAsyncRefine,
                                      bool forceExact, bool hardSeek,
-                                     bool renderFastFrame, bool abortOnPendingSeek)
+                                     bool renderFastFrame, bool abortOnPendingSeek,
+                                     bool skipPrimarySeek,
+                                     bool* seekPositionValid)
 {
+    if (seekPositionValid)
+        *seekPositionValid = false;
     if (!isLoaded)
         return false;
 
+    // A paused seek replaces the timeline position, so decoded-ahead frames
+    // retained by Pause() no longer belong to the requested playback stream.
+    if (!isPlaying)
+    {
+        m_pausedPlaybackBufferResumable.store(false, std::memory_order_release);
+        ClearPlaybackBuffer();
+    }
+
     if (m_decoderOutOfSync) {
         hardSeek = true;
-        m_decoderOutOfSync = false;
     }
 
     std::uint64_t generation = BeginSeekOperation();
@@ -1155,9 +1429,20 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
 
         AVStream *vs = formatContext->streams[videoStreamIndex];
         int64_t ts = static_cast<int64_t>((seconds + startTimeOffset) / av_q2d(vs->time_base));
+        const AVIndexEntry *entry = avformat_index_get_entry_from_timestamp(
+            vs, ts, AVSEEK_FLAG_BACKWARD);
 
-        av_seek_frame(formatContext, videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
+        if (!SeekDemuxer(seconds, vs, ts, skipPrimarySeek))
+        {
+            m_decoderOutOfSync = true;
+            return false;
+        }
+
+        m_decoder->ResetBufferedDecodeState();
         avcodec_flush_buffers(codecContext);
+        m_lastDecodedFrameHadTimestamp.store(false, std::memory_order_relaxed);
+        m_lastReadVideoPacketHadTimestamp.store(false, std::memory_order_relaxed);
+        m_decoderOutOfSync = false;
 
         for (auto &track : audioTracks)
         {
@@ -1170,7 +1455,6 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
                 tr->buffer.clear();
         }
 
-        const AVIndexEntry *entry = avformat_index_get_entry_from_timestamp(vs, ts, AVSEEK_FLAG_BACKWARD);
         if (entry)
         {
             int64_t keyTs = entry->timestamp;
@@ -1190,6 +1474,9 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     const int maxDecodeFrames = std::max(1000, std::min(maxSyncFrames, 10000));
     int decoded = 0;
     bool needAtLeastOneFrame = !smartSeek;
+    bool decodedTimestampedFrame = smartSeek;
+    bool decodedPacketNearTarget = smartSeek;
+    const double validSeekLag = std::max(2.0, frameDuration * 60.0);
 
     // During seek catch-up, asking the demuxer to discard non-video streams
     // avoids walking and unref'ing every audio/subtitle packet in a long GOP.
@@ -1209,7 +1496,12 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
             m_playbackSeekPending.load(std::memory_order_acquire))
             break;
 
-        if (!needAtLeastOneFrame && currentPts >= seconds - (frameDuration * 0.5))
+        // A synthesized timestamp cannot establish that the demuxer reached
+        // the target. Keep draining delayed/reordered codec output until a
+        // frame supplies an authoritative PTS (or the decode budget expires).
+        if (!needAtLeastOneFrame &&
+            (decodedTimestampedFrame || decodedPacketNearTarget) &&
+            currentPts >= seconds - (frameDuration * 0.5))
             break;
         if (!exactMode && decoded >= maxSyncFrames)
             break;
@@ -1233,13 +1525,36 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
             break;
 
         decoded++;
+        decodedTimestampedFrame = decodedTimestampedFrame ||
+            m_lastDecodedFrameHadTimestamp.load(std::memory_order_relaxed);
+        if (m_lastReadVideoPacketHadTimestamp.load(std::memory_order_relaxed))
+        {
+            const double packetPts =
+                m_lastReadVideoPacketPts.load(std::memory_order_relaxed);
+            decodedPacketNearTarget = decodedPacketNearTarget ||
+                (packetPts >= seconds - validSeekLag &&
+                 packetPts <= seconds + std::max(0.25, frameDuration * 3.0));
+        }
         needAtLeastOneFrame = false;
     }
     codecContext->skip_frame = AVDISCARD_DEFAULT;
     for (unsigned i = 0; i < formatContext->nb_streams; ++i)
         formatContext->streams[i]->discard = previousDiscard[i];
 
-    const bool reachedTarget = currentPts >= seconds - (frameDuration * 0.5);
+    // A demuxer can report seek success without moving. Do not trust the index
+    // timestamp alone: a hard seek is successful only after decoding a frame
+    // at (and not materially beyond) the requested position.
+    const bool decodedAfterDemuxSeek =
+        (smartSeek || !needAtLeastOneFrame) &&
+        (decodedTimestampedFrame || decodedPacketNearTarget);
+    const bool decodedInTargetRegion = decodedAfterDemuxSeek &&
+                                       currentPts >= seconds - validSeekLag &&
+                                       currentPts <= seconds + std::max(0.25, frameDuration * 3.0);
+    if (seekPositionValid)
+        *seekPositionValid = decodedInTargetRegion;
+    const bool reachedTarget = decodedAfterDemuxSeek &&
+                               currentPts >= seconds - (frameDuration * 0.5) &&
+                               currentPts <= seconds + (frameDuration * 2.0);
     const bool superseded = abortOnPendingSeek && isPlaying &&
                             m_playbackSeekPending.load(std::memory_order_acquire);
     bool willRefineAsync = !reachedTarget && allowAsyncRefine && !forceExact && !isPlaying;
@@ -1275,6 +1590,86 @@ size_t VideoPlayer::GetBufferedPlaybackFrameCount() const
     std::lock_guard<std::mutex> lock(playbackBufferMutex);
     return playbackFrameBuffer.size();
 }
+
+bool VideoPlayer::HasPlaybackDecoderEnded() const
+{
+    std::lock_guard<std::mutex> lock(playbackBufferMutex);
+    return playbackDecodeEof;
+}
+
+#ifdef VIDEO_EDITOR_TESTING
+void VideoPlayer::ForceBufferedDecoderEagainAfterPacketsForTesting(int acceptedPackets)
+{
+    m_decoder->ForceBufferedSendEagainAfterPacketsForTesting(acceptedPackets);
+}
+
+uint64_t VideoPlayer::GetInjectedBufferedDecoderEagainCountForTesting() const
+{
+    return m_decoder->GetInjectedBufferedSendEagainCountForTesting();
+}
+
+void VideoPlayer::ForcePlaybackBufferCapacityForTesting(size_t capacity)
+{
+    m_testPlaybackBufferCapacity = std::max<size_t>(1, capacity);
+}
+
+void VideoPlayer::ForceNextPrimarySeekFailureForTesting()
+{
+    m_testFailNextPrimarySeek.store(true, std::memory_order_release);
+}
+
+uint64_t VideoPlayer::GetInjectedPrimarySeekFailureCountForTesting() const
+{
+    return m_testInjectedPrimarySeekFailures.load(std::memory_order_acquire);
+}
+
+void VideoPlayer::ForceNextPrimarySeekNoOpForTesting()
+{
+    m_testNoOpNextPrimarySeek.store(true, std::memory_order_release);
+}
+
+uint64_t VideoPlayer::GetInjectedPrimarySeekNoOpCountForTesting() const
+{
+    return m_testInjectedPrimarySeekNoOps.load(std::memory_order_acquire);
+}
+
+uint64_t VideoPlayer::GetFallbackSeekCountForTesting() const
+{
+    return m_testFallbackSeekCount.load(std::memory_order_acquire);
+}
+
+bool VideoPlayer::IsAudioOutputAvailableForTesting() const
+{
+    return audioInitialized && audioClient && renderClient &&
+           !audioTracks.empty();
+}
+
+uint64_t VideoPlayer::GetSubmittedAudioFrameCountForTesting() const
+{
+    return m_audioPlayer->GetSubmittedFrameCountForTesting();
+}
+
+uint64_t VideoPlayer::GetAudioClientStartCountForTesting() const
+{
+    return m_audioPlayer->GetClientStartCountForTesting();
+}
+
+uint64_t VideoPlayer::GetAudioClientStartFailureCountForTesting() const
+{
+    return m_audioPlayer->GetClientStartFailureCountForTesting();
+}
+
+uint64_t VideoPlayer::GetAudioClientResetCountForTesting() const
+{
+    return m_audioPlayer->GetClientResetCountForTesting();
+}
+
+bool VideoPlayer::IsBackwardPrefetchSuspendedForTesting()
+{
+    std::lock_guard<std::mutex> lock(m_bwdPrefetch->mtx);
+    return m_bwdPrefetch->suspended;
+}
+#endif
 
 bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vector<uint8_t>& pixels) const
 {
@@ -1331,7 +1726,9 @@ bool VideoPlayer::GetThumbnailPixels(double time, int dstW, int dstH, std::vecto
             }
         }
         for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-            if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+            const AVPixFmtDescriptor* descriptor = av_pix_fmt_desc_get(*p);
+            if (descriptor &&
+                (descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL) == 0) {
                 *hwFmt = AV_PIX_FMT_NONE;
                 return *p;
             }
@@ -1496,7 +1893,9 @@ void VideoPlayer::InitThumbnailCtx()
             }
         }
         for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-            if (*p != AV_PIX_FMT_D3D11 && *p != AV_PIX_FMT_DXVA2_VLD) {
+            const AVPixFmtDescriptor* descriptor = av_pix_fmt_desc_get(*p);
+            if (descriptor &&
+                (descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL) == 0) {
                 thumb->hwPixelFormat = AV_PIX_FMT_NONE;
                 return *p;
             }
@@ -2208,8 +2607,6 @@ void VideoPlayer::SetVoiceIsolationEnabled(int trackIndex, bool enabled)
         }
         track->voiceIsolationInputBuffer.clear();
         track->voiceIsolationMonoBuffer.clear();
-        track->voiceIsolationProcessedBuffer.clear();
-        track->voiceIsolationSampleQueue.clear();
     }
 }
 
@@ -2240,6 +2637,11 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
             }
             m_audioPlayer->StopThread(true);
             ClearPlaybackBuffer();
+            // Decode cadence is timestamp-based at high speed. A backward
+            // seek must forget the last pre-seek delivery timestamp or every
+            // frame before that old position is rejected and the producer can
+            // run all the way back to EOF without refilling the queue.
+            m_lastHighSpeedFrameDeliveryNs = 0;
 
             do
             {
@@ -2250,8 +2652,33 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
                     target = m_playbackSeekTarget.load(std::memory_order_acquire);
                     exact = m_playbackSeekExact.load(std::memory_order_acquire);
                 }
-                SeekToTimeInternal(target, exact ? INT_MAX : 12, false, exact,
-                                   true, true, exact);
+                const double positionBeforeSeek = currentPts;
+                bool seekPositionValid = false;
+                SeekToTimeInternal(
+                    target, exact ? INT_MAX : 12, false, exact,
+                    true, true, exact, false, &seekPositionValid);
+
+                // av_seek_frame can return success without moving the demuxer.
+                // The decoded-position validation above catches that lie; retry
+                // via avformat_seek_file instead of playing from the old/start
+                // position while the UI remains pinned to the requested time.
+                if (!seekPositionValid &&
+                    !m_playbackSeekPending.load(std::memory_order_acquire))
+                {
+                    SeekToTimeInternal(
+                        target, exact ? INT_MAX : 12, false, exact,
+                        true, true, exact, true, &seekPositionValid);
+                }
+
+                // If neither seek API can reach the target, retain the last
+                // playable position rather than leaving the decoder at EOF or
+                // an unrelated beginning position.
+                if (!seekPositionValid &&
+                    !m_playbackSeekPending.load(std::memory_order_acquire))
+                {
+                    SeekToTimeInternal(positionBeforeSeek, INT_MAX, false, true,
+                                       true, false, true, true);
+                }
             }
             while (m_playbackSeekPending.exchange(false, std::memory_order_acq_rel));
 
@@ -2261,6 +2688,8 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
             m_audioPlayer->StopThread(true);
             masterStartPts = currentPts;
             masterStartTime = std::chrono::high_resolution_clock::now();
+            m_playbackClockStartPts.store(currentPts, std::memory_order_relaxed);
+            m_playbackClockStartNs.store(0, std::memory_order_release);
             m_playbackSeekInProgress.store(false, std::memory_order_release);
             playbackBufferCondition.notify_all();
             continue;
@@ -2281,15 +2710,38 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
 
         BufferedPlaybackFrame bufferedFrame;
         bufferedFrame.frame = av_frame_alloc();
-        if (!bufferedFrame.frame ||
-            !m_decoder->DecodeNextBufferedFrame(bufferedFrame.frame,
-                                                bufferedFrame.pts,
-                                                bufferedFrame.frameNumber))
+        if (!bufferedFrame.frame)
+            return;
+
+        const VideoDecoder::BufferedDecodeResult decodeResult =
+            m_decoder->DecodeNextBufferedFrame(bufferedFrame.frame,
+                                               bufferedFrame.pts,
+                                               bufferedFrame.frameNumber);
+        if (decodeResult == VideoDecoder::BufferedDecodeResult::RecoverableError)
         {
-            std::lock_guard<std::mutex> lock(playbackBufferMutex);
+            // A bad packet or a transient hardware-frame transfer must not
+            // permanently kill playback. The demuxer/decoder consumed the bad
+            // input, so retrying advances to the next usable frame.
+            std::this_thread::yield();
+            continue;
+        }
+        if (decodeResult == VideoDecoder::BufferedDecodeResult::EndOfStream)
+        {
+            std::unique_lock<std::mutex> lock(playbackBufferMutex);
             playbackDecodeEof = true;
             playbackBufferCondition.notify_all();
-            return;
+
+            // Keep the producer alive until presentation has stopped playback
+            // or an in-playback seek supplies a new decode position. Returning
+            // here left seekPending with no thread to service it, so the player
+            // could drain its three queued frames and become unrecoverable.
+            playbackBufferCondition.wait(lock, [this]() {
+                return !playbackThreadRunning ||
+                       m_playbackSeekPending.load(std::memory_order_acquire);
+            });
+            if (!playbackThreadRunning)
+                return;
+            continue;
         }
 
         if (m_playbackSeekPending.load(std::memory_order_acquire))
@@ -2315,24 +2767,69 @@ bool VideoPlayer::PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame)
     {
         std::lock_guard<std::mutex> renderLock(renderMutex);
         const AVPixelFormat actualFormat = static_cast<AVPixelFormat>(bufferedFrame.frame->format);
-        if (actualFormat != swsSourceFormat && actualFormat != AV_PIX_FMT_NONE)
+        const bool usePreviewBuffer = GetPlaybackSpeed() >= 4.0;
+        if (usePreviewBuffer)
         {
-            sws_freeContext(swsContext);
-            swsSourceFormat = actualFormat;
-            swsContext = sws_getContext(
-                frameWidth, frameHeight, actualFormat,
-                frameWidth, frameHeight, AV_PIX_FMT_BGRA,
-                SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-        }
-        if (!swsContext)
-            return false;
+            RECT clientRect{};
+            GetClientRect(videoWindow, &clientRect);
+            const int clientWidth = std::max(1L, clientRect.right - clientRect.left);
+            const int clientHeight = std::max(1L, clientRect.bottom - clientRect.top);
+            const double scale = std::min({
+                1.0,
+                clientWidth / static_cast<double>(std::max(1, frameWidth)),
+                clientHeight / static_cast<double>(std::max(1, frameHeight))});
+            const int previewWidth = std::max(2, static_cast<int>(std::lround(frameWidth * scale)));
+            const int previewHeight = std::max(2, static_cast<int>(std::lround(frameHeight * scale)));
 
-        sws_scale(swsContext,
-                  const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
-                  bufferedFrame.frame->linesize, 0, frameHeight,
-                  frameRGB->data, frameRGB->linesize);
+            if (actualFormat != playbackSwsSourceFormat ||
+                previewWidth != playbackRgbWidth || previewHeight != playbackRgbHeight)
+            {
+                sws_freeContext(playbackSwsContext);
+                playbackSwsSourceFormat = actualFormat;
+                playbackRgbWidth = previewWidth;
+                playbackRgbHeight = previewHeight;
+                playbackRgbStride = previewWidth * 4;
+                playbackRgbBuffer.resize(
+                    static_cast<size_t>(playbackRgbStride) * playbackRgbHeight);
+                playbackSwsContext = sws_getContext(
+                    frameWidth, frameHeight, actualFormat,
+                    playbackRgbWidth, playbackRgbHeight, AV_PIX_FMT_BGRA,
+                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+            }
+            if (!playbackSwsContext || playbackRgbBuffer.empty())
+                return false;
+
+            uint8_t* destinationData[4] = { playbackRgbBuffer.data(), nullptr, nullptr, nullptr };
+            int destinationStride[4] = { playbackRgbStride, 0, 0, 0 };
+            sws_scale(playbackSwsContext,
+                      const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
+                      bufferedFrame.frame->linesize, 0, frameHeight,
+                      destinationData, destinationStride);
+            displayUsesPlaybackBuffer = true;
+        }
+        else
+        {
+            if (actualFormat != swsSourceFormat && actualFormat != AV_PIX_FMT_NONE)
+            {
+                sws_freeContext(swsContext);
+                swsSourceFormat = actualFormat;
+                swsContext = sws_getContext(
+                    frameWidth, frameHeight, actualFormat,
+                    frameWidth, frameHeight, AV_PIX_FMT_BGRA,
+                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+            }
+            if (!swsContext)
+                return false;
+
+            sws_scale(swsContext,
+                      const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
+                      bufferedFrame.frame->linesize, 0, frameHeight,
+                      frameRGB->data, frameRGB->linesize);
+            displayUsesPlaybackBuffer = false;
+        }
     }
 
+    m_presentedPlaybackFrameCount.fetch_add(1, std::memory_order_release);
     InvalidateRect(videoWindow, nullptr, FALSE);
     UpdateTimeline();
     if (cropChanged)
@@ -2345,9 +2842,19 @@ void VideoPlayer::PlaybackThreadFunction()
     bool clockStarted = false;
     auto startTime = masterStartTime;
     double startPts = masterStartPts;
+    uint64_t observedSeekGeneration =
+        m_playbackSeekGeneration.load(std::memory_order_acquire);
 
     while (playbackThreadRunning)
     {
+        const uint64_t loopSeekGeneration =
+            m_playbackSeekGeneration.load(std::memory_order_acquire);
+        if (loopSeekGeneration != observedSeekGeneration)
+        {
+            observedSeekGeneration = loopSeekGeneration;
+            clockStarted = false;
+        }
+
         BufferedPlaybackFrame bufferedFrame;
         {
             std::unique_lock<std::mutex> lock(playbackBufferMutex);
@@ -2377,8 +2884,37 @@ void VideoPlayer::PlaybackThreadFunction()
             {
                 if (playbackDecodeEof)
                 {
+                    // EOF and a user seek can arrive together. Give the seek
+                    // publisher a short hand-off window and re-check while
+                    // holding the queue lock; otherwise this thread can decide
+                    // playback has ended just as the producer clears EOF and
+                    // restarts at the new position, killing the recovered seek.
+                    playbackBufferCondition.wait_for(
+                        lock, std::chrono::milliseconds(50), [this]() {
+                            return !playbackThreadRunning ||
+                                   m_playbackSeekPending.load(std::memory_order_acquire) ||
+                                   m_playbackSeekInProgress.load(std::memory_order_acquire) ||
+                                   !playbackDecodeEof || !playbackFrameBuffer.empty();
+                        });
+                    if (!playbackThreadRunning)
+                        return;
+                    if (m_playbackSeekPending.load(std::memory_order_acquire) ||
+                        m_playbackSeekInProgress.load(std::memory_order_acquire) ||
+                        !playbackDecodeEof || !playbackFrameBuffer.empty())
+                    {
+                        clockStarted = false;
+                        continue;
+                    }
                     lock.unlock();
-                    Stop();
+                    // Reaching EOF is not the same operation as the user
+                    // pressing Stop. Stop() seeks the demuxer and resets the
+                    // visible cursor to zero, so a premature EOF reported
+                    // immediately after unpausing made the entire timeline
+                    // jump back to the beginning. Leave the last presented
+                    // position visible and only transition playback to paused.
+                    Pause();
+                    m_pausedPlaybackBufferResumable.store(
+                        false, std::memory_order_release);
                     PostMessage(parentWindow, WM_TIMER, 1006, 0);
                     return;
                 }
@@ -2389,6 +2925,18 @@ void VideoPlayer::PlaybackThreadFunction()
             playbackFrameBuffer.pop_front();
         }
         playbackBufferCondition.notify_all();
+
+        // The producer can process an entire seek while this thread is between
+        // checks, making both transient flags false again. The generation still
+        // changes, so discard the frame from the old clock epoch and restart.
+        uint64_t latestSeekGeneration =
+            m_playbackSeekGeneration.load(std::memory_order_acquire);
+        if (latestSeekGeneration != observedSeekGeneration)
+        {
+            observedSeekGeneration = latestSeekGeneration;
+            clockStarted = false;
+            continue;
+        }
 
         if (!clockStarted)
         {
@@ -2402,13 +2950,33 @@ void VideoPlayer::PlaybackThreadFunction()
             startPts = currentPts;
             masterStartTime = startTime;
             masterStartPts = startPts;
-            m_audioPlayer->StartThread();
+            ResetPlaybackClock(startPts);
+            if (GetPlaybackSpeed() < 4.0)
+                m_audioPlayer->StartThread();
             clockStarted = true;
         }
 
-        const double target = bufferedFrame.pts - startPts;
-        const double elapsed = std::chrono::duration<double>(
-            std::chrono::high_resolution_clock::now() - startTime).count();
+        // A speed change alters the relationship between media timestamps and
+        // wall-clock time. Re-anchor both clocks at the last presented frame so
+        // the new rate applies only from this point forward (and so audio does
+        // not reinterpret samples already submitted at the previous rate).
+        if (m_playbackSpeedChangePending.exchange(false, std::memory_order_acq_rel))
+        {
+            m_audioPlayer->StopThread(true);
+            startTime = std::chrono::high_resolution_clock::now();
+            startPts = currentPts;
+            masterStartTime = startTime;
+            masterStartPts = startPts;
+            ResetPlaybackClock(startPts);
+            if (playbackThreadRunning && isPlaying && GetPlaybackSpeed() < 4.0)
+                m_audioPlayer->StartThread();
+        }
+
+        const double speed = GetPlaybackSpeed();
+        const auto now = std::chrono::high_resolution_clock::now();
+        const double elapsed = std::chrono::duration<double>(now - startTime).count();
+
+        const double target = (bufferedFrame.pts - startPts) / speed;
         const double delay = target - elapsed;
         if (delay > 0.0)
         {
@@ -2416,7 +2984,8 @@ void VideoPlayer::PlaybackThreadFunction()
             playbackWakeCondition.wait_for(
                 wakeLock, std::chrono::duration<double>(delay), [this]() {
                     return !playbackThreadRunning ||
-                           m_playbackSeekPending.load(std::memory_order_acquire);
+                           m_playbackSeekPending.load(std::memory_order_acquire) ||
+                           m_playbackSpeedChangePending.load(std::memory_order_acquire);
                 });
         }
 
@@ -2424,6 +2993,15 @@ void VideoPlayer::PlaybackThreadFunction()
             return;
         if (m_playbackSeekPending.load(std::memory_order_acquire))
         {
+            clockStarted = false;
+            continue;
+        }
+
+        latestSeekGeneration =
+            m_playbackSeekGeneration.load(std::memory_order_acquire);
+        if (latestSeekGeneration != observedSeekGeneration)
+        {
+            observedSeekGeneration = latestSeekGeneration;
             clockStarted = false;
             continue;
         }

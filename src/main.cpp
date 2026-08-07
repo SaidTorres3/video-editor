@@ -38,6 +38,8 @@
 
 VideoPlayer *g_videoPlayer = nullptr;
 HWND g_hButtonOpen, g_hButtonPlay, g_hButtonPause, g_hButtonStop;
+HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
+HWND g_hEditPlaybackSpeed;
 HWND g_hTimeline;
 HWND g_hTimelineResizeBar;
 HWND g_hStatusText;
@@ -196,7 +198,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
             {
                 bool wasPlaying = g_videoPlayer->IsPlaying();
                 if (wasPlaying)
-                    g_videoPlayer->SeekWhilePlaying(g_previewSeekTime);
+                    FinalizePlayingUiSeek(g_videoPlayer, g_previewSeekTime);
                 else
                 {
                     g_videoPlayer->SeekToTimeExact(g_previewSeekTime);
@@ -245,6 +247,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                 }
                 else if (msg.message == WM_KEYDOWN)
                 {
+                    const bool controlPressed = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                    const bool isNumberRowSpeedShortcut = msg.wParam >= '1' && msg.wParam <= '9';
+                    const bool isNumpadSpeedShortcut = msg.wParam >= VK_NUMPAD1 && msg.wParam <= VK_NUMPAD9;
+                    if (controlPressed && (isNumberRowSpeedShortcut || isNumpadSpeedShortcut))
+                    {
+                        const double speed = isNumberRowSpeedShortcut
+                            ? static_cast<double>(msg.wParam - '0')
+                            : static_cast<double>(msg.wParam - VK_NUMPAD0);
+                        g_videoPlayer->SetPlaybackSpeed(speed);
+                        UpdateControls();
+                        continue;
+                    }
+
                     double speedMultiplier = (GetKeyState(VK_SHIFT) & 0x8000) ? 10.0 : 1.0;
 
                     bool handled = true;
@@ -255,6 +270,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             g_videoPlayer->Pause();
                         else
                             g_videoPlayer->Play();
+                        break;
+                    case VK_OEM_MINUS:
+                    case VK_SUBTRACT:
+                        g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() - 0.1);
+                        UpdateControls();
+                        break;
+                    case VK_OEM_PLUS:
+                    case VK_ADD:
+                        g_videoPlayer->SetPlaybackSpeed(g_videoPlayer->GetPlaybackSpeed() + 0.1);
+                        UpdateControls();
                         break;
                     case VK_LEFT:
                     case 'J':
@@ -337,7 +362,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         break;
                     }
                     case 'K':
-                    case 'k':
                         if (g_videoPlayer->IsPlaying())
                             g_videoPlayer->Pause();
                         else
@@ -396,6 +420,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                         continue;
                     }
                 }
+            }
+            else if (focused == g_hEditPlaybackSpeed &&
+                     msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN)
+            {
+                // Moving focus commits the value through EN_KILLFOCUS.
+                SetFocus(hwnd);
+                continue;
             }
         }
         TranslateMessage(&msg);

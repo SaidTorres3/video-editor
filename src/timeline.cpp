@@ -1264,7 +1264,10 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             UpdateWindow(hwnd); // Force restart of paint cycle to draw line immediately
             
             if (!g_wasPlayingBeforeDrag)
-                g_videoPlayer->SeekToTime(seekTime, INT_MAX, false, false);
+            {
+                if (!g_videoPlayer->SeekToTime(seekTime, INT_MAX, false, false))
+                    g_previewSeekTime = -1.0;
+            }
             else
                 g_videoPlayer->SeekWhilePlaying(seekTime, false);
             // Keep g_previewSeekTime pinned to the target; UpdateTimeline() will
@@ -1509,9 +1512,12 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 // Pin cursor to the drop position during the final refinement pass.
                 g_previewSeekTime = seekTime;
                 if (!g_wasPlayingBeforeDrag)
-                    g_videoPlayer->SeekToTime(seekTime, INT_MAX, false, false);
+                {
+                    if (!g_videoPlayer->SeekToTime(seekTime, INT_MAX, false, false))
+                        g_previewSeekTime = -1.0;
+                }
                 else
-                    g_videoPlayer->SeekWhilePlaying(seekTime);
+                    FinalizePlayingUiSeek(g_videoPlayer, seekTime);
             }
             else if (g_timelineDragMode == DragMode::Keyframe)
             {

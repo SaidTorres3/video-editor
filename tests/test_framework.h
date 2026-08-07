@@ -7,6 +7,7 @@
 #include <cmath>
 #include <sstream>
 #include <iomanip>
+#include <cstdlib>
 #include <windows.h>
 
 // ============================================================================
@@ -113,7 +114,15 @@ public:
         std::cout << "========================================" << std::endl;
         TestColors::Reset();
 
+        char* filterValue = nullptr;
+        size_t filterLength = 0;
+        _dupenv_s(&filterValue, &filterLength, "VIDEO_EDITOR_TEST_FILTER");
+        const std::string filter = filterValue ? filterValue : "";
+        std::free(filterValue);
+
         for (auto& tc : tests) {
+            if (!filter.empty() && tc.name.find(filter) == std::string::npos)
+                continue;
             std::cout << "  ";
             try {
                 tc.func();

@@ -1,10 +1,18 @@
 #include "test_framework.h"
+#include "../src/pitch_preserving_stretcher.h"
 #include "../src/ten_vad_embedded.h"
 #include "../src/video_player.h"
 #include "../src/options_window.h"
 #include "../src/timeline.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <cmath>
+#include <filesystem>
+#include <functional>
+#include <thread>
+#include <vector>
 
 // ============================================================================
 // Integration tests for audio track management
@@ -37,9 +45,249 @@ std::size_t CountLegacyTenVadTempDirectories()
     FindClose(find);
     return count;
 }
+
+bool WaitForCondition(const std::function<bool()>& condition,
+                      std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (condition())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return condition();
+}
+
+void VerifyAudioContinuesAfterPlayingSeek(const std::wstring& mediaPath,
+                                          double seekTarget,
+                                          std::chrono::milliseconds timeout,
+                                          double playbackSpeed = 1.0)
+{
+    VideoPlayer player(g_testHwnd);
+    TEST_ASSERT(player.LoadVideo(mediaPath),
+                "audio seek regression source must load");
+    player.SetPlaybackSpeed(playbackSpeed);
+
+    // A Windows test runner without an audio endpoint cannot exercise WASAPI.
+    // The generated-media and real-media variants run the full check whenever
+    // an endpoint is available.
+    if (!player.IsAudioOutputAvailableForTesting())
+        return;
+
+    TEST_ASSERT(player.Play(), "playback must start for the audio seek test");
+    TEST_ASSERT(WaitForCondition([&player]() {
+                    return player.GetAudioClientStartCountForTesting() >= 1 &&
+                           player.GetSubmittedAudioFrameCountForTesting() > 0;
+                }, timeout),
+                "audio output must start and submit samples before seeking");
+
+    const uint64_t submittedBeforeSeek =
+        player.GetSubmittedAudioFrameCountForTesting();
+    const uint64_t startsBeforeSeek =
+        player.GetAudioClientStartCountForTesting();
+    const uint64_t presentedBeforeSeek =
+        player.GetPresentedPlaybackFrameCount();
+    const int sampleRate = player.GetAudioSampleRateForTesting();
+    const uint64_t continuedAudioFrames = static_cast<uint64_t>(
+        sampleRate > 0 ? sampleRate / 4 : 1);
+
+    player.SeekWhilePlaying(seekTarget, true);
+
+    TEST_ASSERT(WaitForCondition([&player, presentedBeforeSeek, startsBeforeSeek,
+                                  submittedBeforeSeek, continuedAudioFrames,
+                                  seekTarget]() {
+                    return player.GetPresentedPlaybackFrameCount() > presentedBeforeSeek &&
+                           player.GetAudioClientStartCountForTesting() > startsBeforeSeek &&
+                           player.GetSubmittedAudioFrameCountForTesting() >
+                               submittedBeforeSeek + continuedAudioFrames &&
+                           player.GetCurrentTime() >= seekTarget - 0.25 &&
+                           player.GetCurrentTime() <= seekTarget + 2.0;
+                }, timeout),
+                "audio must restart and submit at least 250 ms after a playing seek");
+    TEST_ASSERT_EQ(player.GetAudioClientStartFailureCountForTesting(),
+                   static_cast<uint64_t>(0),
+                   "WASAPI must never be started twice for the same playback epoch");
+    TEST_ASSERT(player.IsPlaying(),
+                "an audio restart must not stop video playback after seeking");
+    player.Pause();
+}
+
+void VerifyAudioContinuesAfterPauseResume(const std::wstring& mediaPath,
+                                          std::chrono::milliseconds timeout)
+{
+    VideoPlayer player(g_testHwnd);
+    TEST_ASSERT(player.LoadVideo(mediaPath),
+                "audio pause/resume regression source must load");
+
+    if (!player.IsAudioOutputAvailableForTesting())
+        return;
+
+    TEST_ASSERT(player.Play(), "playback must start for the pause/resume test");
+    TEST_ASSERT(WaitForCondition([&player]() {
+                    return player.GetAudioClientStartCountForTesting() >= 1 &&
+                           player.GetSubmittedAudioFrameCountForTesting() > 0;
+                }, timeout),
+                "audio output must start before pausing");
+
+    const int sampleRate = player.GetAudioSampleRateForTesting();
+    const uint64_t continuedAudioFrames = static_cast<uint64_t>(
+        sampleRate > 0 ? sampleRate / 4 : 1);
+
+    for (int cycle = 0; cycle < 3; ++cycle)
+    {
+        const uint64_t resetsBeforePause =
+            player.GetAudioClientResetCountForTesting();
+        player.Pause();
+        TEST_ASSERT_GT(player.GetAudioClientResetCountForTesting(),
+                       resetsBeforePause,
+                       "pause must clear stopped WASAPI padding before resume");
+
+        const uint64_t submittedBeforeResume =
+            player.GetSubmittedAudioFrameCountForTesting();
+        const uint64_t startsBeforeResume =
+            player.GetAudioClientStartCountForTesting();
+        const uint64_t presentedBeforeResume =
+            player.GetPresentedPlaybackFrameCount();
+
+        TEST_ASSERT(player.Play(), "playback must resume after pause");
+        TEST_ASSERT(WaitForCondition(
+                        [&player, submittedBeforeResume, startsBeforeResume,
+                         presentedBeforeResume, continuedAudioFrames]() {
+                            return player.GetAudioClientStartCountForTesting() >
+                                       startsBeforeResume &&
+                                   player.GetSubmittedAudioFrameCountForTesting() >
+                                       submittedBeforeResume + continuedAudioFrames &&
+                                   player.GetPresentedPlaybackFrameCount() >
+                                       presentedBeforeResume;
+                        }, timeout),
+                    "audio must restart and keep submitting after pause/resume");
+    }
+
+    TEST_ASSERT_EQ(player.GetAudioClientStartFailureCountForTesting(),
+                   static_cast<uint64_t>(0),
+                   "pause/resume must not double-start the WASAPI client");
+    player.Pause();
+}
+
+std::vector<float> StretchTestTone(double speed)
+{
+    constexpr int sampleRate = 48000;
+    constexpr int inputFrames = sampleRate * 2;
+    constexpr double toneHz = 440.0;
+    constexpr double pi = 3.14159265358979323846;
+    constexpr size_t blockFrames = 512;
+
+    std::vector<float> input(inputFrames);
+    for (int frame = 0; frame < inputFrames; ++frame)
+    {
+        input[frame] = static_cast<float>(
+            0.6 * std::sin(2.0 * pi * toneHz * frame / sampleRate));
+    }
+
+    PitchPreservingStretcher stretcher(sampleRate, 1, speed);
+    std::vector<float> output;
+    std::vector<float> retrieved(4096);
+    size_t offset = 0;
+    while (offset < input.size())
+    {
+        const size_t remaining = input.size() - offset;
+        const size_t block = remaining < blockFrames ? remaining : blockFrames;
+        const bool final = offset + block == input.size();
+        stretcher.ProcessInterleaved(input.data() + offset, block, final);
+        offset += block;
+
+        while (true)
+        {
+            const size_t count = stretcher.RetrieveInterleaved(
+                retrieved.data(), retrieved.size());
+            if (count == 0)
+                break;
+            output.insert(output.end(), retrieved.begin(),
+                          retrieved.begin() + count);
+        }
+    }
+    return output;
+}
+
+double EstimateToneFrequency(const std::vector<float>& samples)
+{
+    constexpr double sampleRate = 48000.0;
+    const size_t begin = samples.size() / 4;
+    const size_t end = samples.size() * 3 / 4;
+    size_t risingCrossings = 0;
+    for (size_t index = begin + 1; index < end; ++index)
+    {
+        if (samples[index - 1] <= 0.0f && samples[index] > 0.0f)
+            ++risingCrossings;
+    }
+    const double measuredSeconds = (end - begin) / sampleRate;
+    return measuredSeconds > 0.0
+        ? risingCrossings / measuredSeconds
+        : 0.0;
+}
 } // namespace
 
 void RegisterAudioTests(TestSuite& suite) {
+
+    suite.addTest("PlayingSeek_AudioContinues", []() {
+        VerifyAudioContinuesAfterPlayingSeek(
+            g_testVideoPath, 3.0, std::chrono::seconds(5));
+    });
+
+    suite.addTest("PauseResume_AudioContinues", []() {
+        VerifyAudioContinuesAfterPauseResume(
+            g_testVideoPath, std::chrono::seconds(5));
+    });
+
+    suite.addTest("VariableSpeed_PreservesPitchAndAudioContinues", []() {
+        for (const double speed : {0.5, 2.0})
+        {
+            const std::vector<float> stretched = StretchTestTone(speed);
+            const double expectedFrames = 48000.0 * 2.0 / speed;
+            TEST_ASSERT_GT(stretched.size(),
+                           static_cast<size_t>(expectedFrames * 0.85),
+                           "time-stretched tone must have the expected duration");
+            TEST_ASSERT_LT(stretched.size(),
+                           static_cast<size_t>(expectedFrames * 1.15),
+                           "time-stretched tone duration must remain bounded");
+            TEST_ASSERT_NEAR(EstimateToneFrequency(stretched), 440.0, 15.0,
+                             "playback speed must not change a tone's pitch");
+
+            VerifyAudioContinuesAfterPlayingSeek(
+                g_testVideoPath, 3.0, std::chrono::seconds(7), speed);
+        }
+    });
+
+    wchar_t* externalMediaValue = nullptr;
+    size_t externalMediaLength = 0;
+    _wdupenv_s(&externalMediaValue, &externalMediaLength,
+               L"VIDEO_EDITOR_REAL_MEDIA");
+    const std::wstring externalMediaPath = externalMediaValue
+        ? externalMediaValue
+        : L"";
+    std::free(externalMediaValue);
+    if (!externalMediaPath.empty() &&
+        std::filesystem::exists(externalMediaPath))
+    {
+        suite.addTest("ExternalMedia_PlayingSeek_AudioContinues",
+                      [externalMediaPath]() {
+            double seekTarget = 0.0;
+            {
+                VideoPlayer probe(g_testHwnd);
+                TEST_ASSERT(probe.LoadVideo(externalMediaPath),
+                            "external audio seek regression source must load");
+                seekTarget = probe.GetDuration() * 0.5;
+            }
+            VerifyAudioContinuesAfterPlayingSeek(
+                externalMediaPath, seekTarget, std::chrono::seconds(10), 2.0);
+        });
+        suite.addTest("ExternalMedia_PauseResume_AudioContinues",
+                      [externalMediaPath]() {
+            VerifyAudioContinuesAfterPauseResume(
+                externalMediaPath, std::chrono::seconds(15));
+        });
+    }
 
     suite.addTest("ExportMasterGain_DbConversion", []() {
         const int savedGainDb = g_exportMasterGainDb;

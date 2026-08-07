@@ -19,6 +19,7 @@ All source files now reside under the `src/` directory to keep the project organ
 - Custom timeline bar for navigation with a red time cursor
 - Click anywhere on the timeline to jump directly to that point or hold and drag to scrub through the video in real time. Seeking now lands on the exact frame for smoother editing.
 - Keyboard shortcuts for quick navigation (Left/Right arrows skip 5s, J/L skip 10s, K pauses, ',' and '.' step frames)
+- **Ctrl+1 through Ctrl+9 sets playback speed** directly from 1x through 9x (number row or numeric keypad)
 - Frame-by-frame playback control
 - Hardware-accelerated rendering using Direct2D
 - Hardware decoding for H.264, HEVC, VP9, and AV1 with automatic software fallback for stability

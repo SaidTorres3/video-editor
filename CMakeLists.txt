@@ -12,6 +12,19 @@ endif()
 
 project(VideoEditor C CXX)
 
+# Rubber Band provides real-time time stretching without changing pitch. Its
+# pinned source is vendored so configuration and CI builds remain offline.
+set(RUBBERBAND_ROOT "${CMAKE_SOURCE_DIR}/vendor/rubberband")
+if(NOT EXISTS "${RUBBERBAND_ROOT}/single/RubberBandSingle.cpp" OR
+   NOT EXISTS "${RUBBERBAND_ROOT}/rubberband/RubberBandStretcher.h")
+    message(FATAL_ERROR "Vendored Rubber Band source is missing from ${RUBBERBAND_ROOT}")
+endif()
+# Compile Rubber Band directly into each executable so a static build does not
+# produce or publish a separate library artifact.
+set(RUBBERBAND_SOURCES
+    "${RUBBERBAND_ROOT}/single/RubberBandSingle.cpp"
+)
+
 # Ultra-light neural VAD. TEN publishes an import library and DLL for Windows,
 # not a static archive. Dynamic builds keep the DLL beside the executable.
 # Static builds embed the DLL as a resource and map it directly from memory so
@@ -144,6 +157,7 @@ add_executable(VideoEditor WIN32
     src/utils.cpp
     src/video_decoder.cpp
     src/audio_player.cpp
+    src/pitch_preserving_stretcher.cpp
     src/video_renderer.cpp
     src/video_cutter.cpp
     src/video_player.cpp
@@ -154,14 +168,21 @@ add_executable(VideoEditor WIN32
     src/debug_log.cpp
     src/upload_dialog.cpp
     ${TEN_VAD_SOURCES}
+    ${RUBBERBAND_SOURCES}
 )
 
 # ==== INCLUDE DIRECTORIES ====
 target_include_directories(VideoEditor PRIVATE
     src
     vendor/MemoryModule
+    ${RUBBERBAND_ROOT}
     ${FFMPEG_INCLUDE_DIR}
     ${RNNOISE_INCLUDE_DIR}
+)
+target_compile_definitions(VideoEditor PRIVATE
+    RUBBERBAND_STATIC
+    NOMINMAX
+    _USE_MATH_DEFINES
 )
 if(USE_STATIC_FFMPEG)
     target_compile_definitions(VideoEditor PRIVATE TEN_VAD_IN_MEMORY)
@@ -199,7 +220,7 @@ endif()
 
 # ==== WINDOWS PLATFORM LIBS ====
 set(PLATFORM_LIBS
-    user32 gdi32 d2d1 comctl32 comdlg32 ole32 winmm
+    user32 gdi32 d2d1 dwrite comctl32 comdlg32 ole32 winmm
     dwmapi uxtheme shell32 ws2_32 bcrypt secur32 mfplat
     mf mfuuid strmiids crypt32 advapi32 iphlpapi wldap32
     normaliz
@@ -267,6 +288,7 @@ if(BUILD_TESTS)
         src/utils.cpp
         src/video_decoder.cpp
         src/audio_player.cpp
+        src/pitch_preserving_stretcher.cpp
         src/video_renderer.cpp
         src/video_cutter.cpp
         src/video_player.cpp
@@ -292,13 +314,24 @@ if(BUILD_TESTS)
     )
 
     # Console application (NOT WIN32) so it prints to stdout
-    add_executable(VideoEditorTests ${TEST_SOURCES} ${SHARED_SOURCES})
+    add_executable(VideoEditorTests
+        ${TEST_SOURCES}
+        ${SHARED_SOURCES}
+        ${RUBBERBAND_SOURCES}
+    )
 
     target_include_directories(VideoEditorTests PRIVATE
         src
         vendor/MemoryModule
+        ${RUBBERBAND_ROOT}
         ${FFMPEG_INCLUDE_DIR}
         ${RNNOISE_INCLUDE_DIR}
+    )
+    target_compile_definitions(VideoEditorTests PRIVATE
+        VIDEO_EDITOR_TESTING
+        RUBBERBAND_STATIC
+        NOMINMAX
+        _USE_MATH_DEFINES
     )
     if(USE_STATIC_FFMPEG)
         target_compile_definitions(VideoEditorTests PRIVATE TEN_VAD_IN_MEMORY)
