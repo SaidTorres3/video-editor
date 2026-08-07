@@ -487,7 +487,11 @@ void VideoPlayer::Pause()
         // it cannot race this pause and launch a new audio thread behind us.
         // Leaving the old std::thread joinable makes the next Play() terminate
         // the process when AudioPlayer::StartThread assigns its replacement.
-        m_audioPlayer->StopThread();
+        // Reset the stopped WASAPI client as well. A stopped client retains its
+        // queued padding; if pause catches a full device buffer, that padding
+        // cannot drain and the resumed worker has no writable frames with which
+        // to trigger Start(), leaving audio silent until a seek resets it.
+        m_audioPlayer->StopThread(true);
 
         // When paused, pre-decode the previous frame so the first ',' is instant
         RequestBwdPrefetch(currentFrame - 1);
@@ -1653,6 +1657,11 @@ uint64_t VideoPlayer::GetAudioClientStartCountForTesting() const
 uint64_t VideoPlayer::GetAudioClientStartFailureCountForTesting() const
 {
     return m_audioPlayer->GetClientStartFailureCountForTesting();
+}
+
+uint64_t VideoPlayer::GetAudioClientResetCountForTesting() const
+{
+    return m_audioPlayer->GetClientResetCountForTesting();
 }
 
 bool VideoPlayer::IsBackwardPrefetchSuspendedForTesting()

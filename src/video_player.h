@@ -393,6 +393,7 @@ public:
     uint64_t GetSubmittedAudioFrameCountForTesting() const;
     uint64_t GetAudioClientStartCountForTesting() const;
     uint64_t GetAudioClientStartFailureCountForTesting() const;
+    uint64_t GetAudioClientResetCountForTesting() const;
     bool IsBackwardPrefetchSuspendedForTesting();
     int GetAudioSampleRateForTesting() const { return audioSampleRate; }
 #endif

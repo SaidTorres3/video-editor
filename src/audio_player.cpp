@@ -298,7 +298,13 @@ void AudioPlayer::StopThread(bool resetDevice) {
             m_player->audioThread.join();
     }
     if (resetDevice && m_player->audioClient)
-        m_player->audioClient->Reset();
+    {
+        const HRESULT hr = m_player->audioClient->Reset();
+#ifdef VIDEO_EDITOR_TESTING
+        if (SUCCEEDED(hr))
+            m_clientResetCount.fetch_add(1, std::memory_order_release);
+#endif
+    }
 }
 
 void AudioPlayer::ProcessFrame(AVPacket* audioPacket) {

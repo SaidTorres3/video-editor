@@ -34,6 +34,9 @@ public:
     uint64_t GetClientStartFailureCountForTesting() const {
         return m_clientStartFailureCount.load(std::memory_order_acquire);
     }
+    uint64_t GetClientResetCountForTesting() const {
+        return m_clientResetCount.load(std::memory_order_acquire);
+    }
 #endif
 
 private:
@@ -60,5 +63,6 @@ private:
     std::atomic<uint64_t> m_submittedFrameCount{0};
     std::atomic<uint64_t> m_clientStartCount{0};
     std::atomic<uint64_t> m_clientStartFailureCount{0};
+    std::atomic<uint64_t> m_clientResetCount{0};
 #endif
 };
