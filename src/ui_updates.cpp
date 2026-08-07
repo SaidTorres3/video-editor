@@ -270,17 +270,17 @@ void OnAudioTrackSelectionChanged()
         
         // Slider layout:
         // 0 => hard mute (absolute 0 amplitude)
-        // 1..601 => -30.0dB..+30.0dB in 0.1dB steps, with 301 = 0.0dB
-        int sliderPos = 301;
+        // 1..1001 => -50.0dB..+50.0dB in 0.1dB steps, with 501 = 0.0dB
+        int sliderPos = 501;
         if (volume <= 0.0f) {
             sliderPos = 0;
         } else {
             float db = 20.0f * log10f(volume);
-            if (db < -30.0f) db = -30.0f;
-            if (db > 30.0f) db = 30.0f;
-            sliderPos = static_cast<int>(301.0f + (db * 10.0f));
+            if (db < -50.0f) db = -50.0f;
+            if (db > 50.0f) db = 50.0f;
+            sliderPos = static_cast<int>(501.0f + (db * 10.0f));
             if (sliderPos < 1) sliderPos = 1;
-            if (sliderPos > 601) sliderPos = 601;
+            if (sliderPos > 1001) sliderPos = 1001;
         }
 
         SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, sliderPos);
@@ -290,7 +290,7 @@ void OnAudioTrackSelectionChanged()
         if (sliderPos == 0) {
             swprintf_s(buf, L"Track Volume: Mute");
         } else {
-            float dbDisplay = (sliderPos - 301.0f) / 10.0f;
+            float dbDisplay = (sliderPos - 501.0f) / 10.0f;
             if (dbDisplay > 0.05f)
                 swprintf_s(buf, L"Track Volume: +%.1f dB", dbDisplay);
             else if (dbDisplay < -0.05f)
@@ -325,7 +325,7 @@ void OnMuteTrackClicked()
     }
 }
 
-void OnTrackVolumeChanged()
+void OnTrackVolumeChanged(bool snapToZero)
 {
     if (!g_videoPlayer)
         return;
@@ -335,20 +335,21 @@ void OnTrackVolumeChanged()
     {
         int sliderPos = (int)SendMessage(g_hSliderTrackVolume, TBM_GETPOS, 0, 0);
         
-        // Magnetic snap to center (0dB, slider 301)
-        if (sliderPos > 299 && sliderPos < 303) {
-            sliderPos = 301;
+        // Magnetic snap to center for clicking and dragging. Wheel input bypasses
+        // this so one 0.1 dB step can move away from 0.0 dB immediately.
+        if (snapToZero && sliderPos >= 498 && sliderPos <= 504) {
+            sliderPos = 501;
             SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, sliderPos);
         }
 
         // Convert slider position to dB then to volume (amplitude)
         // 0 => hard mute
-        // 1..601 => -30dB..+30dB
+        // 1..1001 => -50dB..+50dB
         float db = 0.0f;
         float volume = 0.0f;
         if (sliderPos > 0)
         {
-            db = (sliderPos - 301.0f) / 10.0f;
+            db = (sliderPos - 501.0f) / 10.0f;
             volume = powf(10.0f, db / 20.0f);
         }
 
@@ -369,27 +370,28 @@ void OnTrackVolumeChanged()
     }
 }
 
-void OnMasterVolumeChanged()
+void OnMasterVolumeChanged(bool snapToZero)
 {
     if (!g_videoPlayer)
         return;
     
     int sliderPos = (int)SendMessage(g_hSliderMasterVolume, TBM_GETPOS, 0, 0);
     
-    // Magnetic snap to center (0dB, slider 301)
-    if (sliderPos > 299 && sliderPos < 303) {
-        sliderPos = 301;
+    // Magnetic snap to center for clicking and dragging. Wheel input bypasses
+    // this so one 0.1 dB step can move away from 0.0 dB immediately.
+    if (snapToZero && sliderPos >= 498 && sliderPos <= 504) {
+        sliderPos = 501;
         SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, sliderPos);
     }
 
     // Convert slider position to dB then to volume (amplitude)
     // 0 => hard mute
-    // 1..601 => -30dB..+30dB
+    // 1..1001 => -50dB..+50dB
     float db = 0.0f;
     float volume = 0.0f;
     if (sliderPos > 0)
     {
-        db = (sliderPos - 301.0f) / 10.0f;
+        db = (sliderPos - 501.0f) / 10.0f;
         volume = powf(10.0f, db / 20.0f);
     }
 

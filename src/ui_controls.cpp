@@ -3,7 +3,9 @@
 #include "utils.h"
 #include "options_window.h"
 #include "timeline.h"
+#include "ui_updates.h"
 #include <commctrl.h>
+#include <windowsx.h>
 #include <uxtheme.h>
 #include <algorithm>
 
@@ -72,6 +74,69 @@ extern HWND g_hListBoxCutSegments, g_hButtonUpdateClip, g_hButtonRemoveClip, g_h
 extern HWND g_hButtonSpeedDown, g_hButtonSpeedUp;
 extern HWND g_hEditPlaybackSpeed;
 extern bool g_isPanelVisible;
+
+static LRESULT CALLBACK VolumeSliderSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
+                                                  LPARAM lParam, UINT_PTR, DWORD_PTR)
+{
+    const auto notifyVolumeChanged = [hwnd](bool snapToZero)
+    {
+        if (hwnd == g_hSliderTrackVolume)
+            OnTrackVolumeChanged(snapToZero);
+        else if (hwnd == g_hSliderMasterVolume)
+            OnMasterVolumeChanged(snapToZero);
+    };
+
+    if (message == WM_MOUSEWHEEL)
+    {
+        const int wheelSteps = GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA;
+        if (wheelSteps != 0)
+        {
+            const int minimum = static_cast<int>(SendMessage(hwnd, TBM_GETRANGEMIN, 0, 0));
+            const int maximum = static_cast<int>(SendMessage(hwnd, TBM_GETRANGEMAX, 0, 0));
+            const int current = static_cast<int>(SendMessage(hwnd, TBM_GETPOS, 0, 0));
+            const int newPosition = std::clamp(current + wheelSteps, minimum, maximum);
+
+            if (newPosition != current)
+            {
+                SendMessage(hwnd, TBM_SETPOS, TRUE, newPosition);
+                // Wheel input uses exact 0.1 dB steps, including when leaving 0.0 dB.
+                notifyVolumeChanged(false);
+            }
+        }
+        return 0;
+    }
+
+    if (message == WM_LBUTTONDOWN)
+    {
+        POINT point = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        RECT thumbRect{};
+        SendMessage(hwnd, TBM_GETTHUMBRECT, 0, reinterpret_cast<LPARAM>(&thumbRect));
+
+        // Let the native control handle dragging when the thumb itself is clicked.
+        if (!PtInRect(&thumbRect, point))
+        {
+            RECT channelRect{};
+            SendMessage(hwnd, TBM_GETCHANNELRECT, 0, reinterpret_cast<LPARAM>(&channelRect));
+
+            const int minimum = static_cast<int>(SendMessage(hwnd, TBM_GETRANGEMIN, 0, 0));
+            const int maximum = static_cast<int>(SendMessage(hwnd, TBM_GETRANGEMAX, 0, 0));
+            const int channelWidth = channelRect.right - channelRect.left;
+            if (channelWidth > 0)
+            {
+                const int clickedPosition = minimum +
+                    MulDiv(point.x - channelRect.left, maximum - minimum, channelWidth);
+                const int newPosition = std::clamp(clickedPosition, minimum, maximum);
+
+                SetFocus(hwnd);
+                SendMessage(hwnd, TBM_SETPOS, TRUE, newPosition);
+                notifyVolumeChanged(true);
+                return 0;
+            }
+        }
+    }
+
+    return DefSubclassProc(hwnd, message, wParam, lParam);
+}
 
 void CreateControls(HWND hwnd)
 {
@@ -221,11 +286,12 @@ void CreateControls(HWND hwnd)
     g_hSliderTrackVolume = CreateWindow(
         TRACKBAR_CLASS, L"Track Volume",
         WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        340, 245, 200, 30, // Placeholder position
+        340, 245, 245, 30, // Placeholder position
         hwnd, (HMENU)ID_SLIDER_TRACK_VOLUME,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderTrackVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 601)); // 0=mute, 1..601 => -30dB..+30dB
-    SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, 301); // Default 0dB
+    SendMessage(g_hSliderTrackVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 1001)); // 0=mute, 1..1001 => -50dB..+50dB
+    SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, 501); // Default 0dB
+    SetWindowSubclass(g_hSliderTrackVolume, VolumeSliderSubclassProc, 1, 0);
     ApplyDarkTheme(g_hSliderTrackVolume);
 
     // Master volume label
@@ -241,11 +307,12 @@ void CreateControls(HWND hwnd)
     g_hSliderMasterVolume = CreateWindow(
         TRACKBAR_CLASS, L"Master Volume",
         WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        340, 310, 200, 30, // Placeholder position
+        340, 310, 245, 30, // Placeholder position
         hwnd, (HMENU)ID_SLIDER_MASTER_VOLUME,
         (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 601)); // 0=mute, 1..601 => -30dB..+30dB
-    SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, 301); // Default 0dB
+    SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 1001)); // 0=mute, 1..1001 => -50dB..+50dB
+    SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, 501); // Default 0dB
+    SetWindowSubclass(g_hSliderMasterVolume, VolumeSliderSubclassProc, 1, 0);
     ApplyDarkTheme(g_hSliderMasterVolume);
 
     // Editing controls section
@@ -562,10 +629,10 @@ void RepositionControls(HWND hwnd)
         MoveWindow(g_hButtonMuteTrack, audioControlsX, audioControlsY + 100, 100, 25, TRUE);
 
         MoveWindow(g_hLabelTrackVolume, audioControlsX, audioControlsY + 135, 200, 20, TRUE);
-        MoveWindow(g_hSliderTrackVolume, audioControlsX, audioControlsY + 155, 200, 30, TRUE);
+        MoveWindow(g_hSliderTrackVolume, audioControlsX, audioControlsY + 155, 245, 30, TRUE);
 
         MoveWindow(g_hLabelMasterVolume, audioControlsX, audioControlsY + 190, 200, 20, TRUE);
-        MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 210, 200, 30, TRUE);
+        MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 210, 245, 30, TRUE);
 
         // Editing controls (below audio)
         int editingControlsY = audioControlsY + 245;

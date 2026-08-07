@@ -21,8 +21,6 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename);
 void UpdateControls();
 void UpdateTimeline();
 void OnMuteTrackClicked();
-void OnTrackVolumeChanged();
-void OnMasterVolumeChanged();
 void OnSetStartClicked(HWND hwnd);
 void OnSetEndClicked(HWND hwnd);
 void OnCutClicked(HWND hwnd);
