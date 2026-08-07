@@ -19,19 +19,11 @@ if(NOT EXISTS "${RUBBERBAND_ROOT}/single/RubberBandSingle.cpp" OR
    NOT EXISTS "${RUBBERBAND_ROOT}/rubberband/RubberBandStretcher.h")
     message(FATAL_ERROR "Vendored Rubber Band source is missing from ${RUBBERBAND_ROOT}")
 endif()
-add_library(rubberband_vendor STATIC
+# Compile Rubber Band directly into each executable so a static build does not
+# produce or publish a separate library artifact.
+set(RUBBERBAND_SOURCES
     "${RUBBERBAND_ROOT}/single/RubberBandSingle.cpp"
 )
-target_include_directories(rubberband_vendor PUBLIC
-    "${RUBBERBAND_ROOT}"
-)
-target_compile_definitions(rubberband_vendor PRIVATE
-    RUBBERBAND_STATIC NOMINMAX _USE_MATH_DEFINES
-)
-if(MSVC AND USE_STATIC_FFMPEG)
-    set_property(TARGET rubberband_vendor PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
 
 # Ultra-light neural VAD. TEN publishes an import library and DLL for Windows,
 # not a static archive. Dynamic builds keep the DLL beside the executable.
@@ -176,14 +168,21 @@ add_executable(VideoEditor WIN32
     src/debug_log.cpp
     src/upload_dialog.cpp
     ${TEN_VAD_SOURCES}
+    ${RUBBERBAND_SOURCES}
 )
 
 # ==== INCLUDE DIRECTORIES ====
 target_include_directories(VideoEditor PRIVATE
     src
     vendor/MemoryModule
+    ${RUBBERBAND_ROOT}
     ${FFMPEG_INCLUDE_DIR}
     ${RNNOISE_INCLUDE_DIR}
+)
+target_compile_definitions(VideoEditor PRIVATE
+    RUBBERBAND_STATIC
+    NOMINMAX
+    _USE_MATH_DEFINES
 )
 if(USE_STATIC_FFMPEG)
     target_compile_definitions(VideoEditor PRIVATE TEN_VAD_IN_MEMORY)
@@ -247,7 +246,6 @@ target_link_libraries(VideoEditor PRIVATE
     ${PLATFORM_LIBS}
     ${FFMPEG_LIBS}
     ${RNNOISE_LIBRARY}
-    rubberband_vendor
     VENDOR_LIBCURL
     VENDOR_ZLIB
 )
@@ -316,15 +314,25 @@ if(BUILD_TESTS)
     )
 
     # Console application (NOT WIN32) so it prints to stdout
-    add_executable(VideoEditorTests ${TEST_SOURCES} ${SHARED_SOURCES})
+    add_executable(VideoEditorTests
+        ${TEST_SOURCES}
+        ${SHARED_SOURCES}
+        ${RUBBERBAND_SOURCES}
+    )
 
     target_include_directories(VideoEditorTests PRIVATE
         src
         vendor/MemoryModule
+        ${RUBBERBAND_ROOT}
         ${FFMPEG_INCLUDE_DIR}
         ${RNNOISE_INCLUDE_DIR}
     )
-    target_compile_definitions(VideoEditorTests PRIVATE VIDEO_EDITOR_TESTING)
+    target_compile_definitions(VideoEditorTests PRIVATE
+        VIDEO_EDITOR_TESTING
+        RUBBERBAND_STATIC
+        NOMINMAX
+        _USE_MATH_DEFINES
+    )
     if(USE_STATIC_FFMPEG)
         target_compile_definitions(VideoEditorTests PRIVATE TEN_VAD_IN_MEMORY)
     endif()
@@ -354,7 +362,6 @@ if(BUILD_TESTS)
         ${PLATFORM_LIBS}
         ${FFMPEG_LIBS}
         ${RNNOISE_LIBRARY}
-        rubberband_vendor
         VENDOR_LIBCURL
         VENDOR_ZLIB
     )
