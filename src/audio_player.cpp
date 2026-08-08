@@ -526,7 +526,7 @@ void AudioPlayer::AudioThreadFunction() {
         if (framesNeeded > available)
             framesNeeded = available;
 
-        const double speed = m_player->GetPlaybackSpeed();
+        const double speed = m_player->GetPlaybackTimingSpeed();
         const double outputPts = startPts +
                                  static_cast<double>(m_framesWritten) * speed /
                                  m_player->audioSampleRate;
@@ -555,6 +555,10 @@ void AudioPlayer::AudioThreadFunction() {
         m_framesWritten += framesNeeded;
 #ifdef VIDEO_EDITOR_TESTING
         m_submittedFrameCount.fetch_add(framesNeeded, std::memory_order_release);
+        m_lastSubmittedEndPts.store(
+            outputPts + static_cast<double>(framesNeeded) * speed /
+                            m_player->audioSampleRate,
+            std::memory_order_release);
 #endif
         if (!deviceStarted)
         {
@@ -647,7 +651,7 @@ void AudioPlayer::ResetPitchPreservingTimeStretch(double startPts)
     m_stretchRetrieveBuffer.clear();
     m_nextStretchSourcePts = startPts;
 
-    const double speed = m_player->GetPlaybackSpeed();
+    const double speed = m_player->GetPlaybackTimingSpeed();
     if (std::fabs(speed - 1.0) >= 0.0001 && speed < 4.0)
     {
         m_timeStretcher = std::make_unique<PitchPreservingStretcher>(
@@ -800,7 +804,7 @@ int AudioPlayer::GetAvailableSourceFrameCount(double startPts) const {
 
 int AudioPlayer::GetAvailableFrameCount(double startPts) const {
     const int channels = std::max(1, m_player->audioChannels);
-    const double speed = std::max(0.1, m_player->GetPlaybackSpeed());
+    const double speed = std::max(0.1, m_player->GetPlaybackTimingSpeed());
     const double sourcePts = m_timeStretcher
         ? m_nextStretchSourcePts
         : startPts;

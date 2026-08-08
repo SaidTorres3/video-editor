@@ -115,9 +115,9 @@ public:
     bool isLoaded;
     bool isPlaying;
     double frameRate;
-    int64_t currentFrame;
+    std::atomic<int64_t> currentFrame;
     int64_t totalFrames;
-    double currentPts;
+    std::atomic<double> currentPts;
     double duration;
     double startTimeOffset;
     bool clipPreviewActive;
@@ -259,6 +259,7 @@ private:
     std::atomic<bool> m_resumeSeekPending;
     std::atomic<double> m_resumeSeekTarget;
     std::atomic<double> m_playbackSpeed;
+    std::atomic<bool> m_continuousFrameStepping;
     std::atomic<bool> m_playbackSpeedChangePending;
     std::atomic<double> m_playbackClockStartPts;
     std::atomic<int64_t> m_playbackClockStartNs;
@@ -362,6 +363,16 @@ public:
     bool IsLoaded() const { return isLoaded; }
     void SetPlaybackSpeed(double speed);
     double GetPlaybackSpeed() const { return m_playbackSpeed.load(std::memory_order_acquire); }
+    double GetPlaybackTimingSpeed() const {
+        return m_continuousFrameStepping.load(std::memory_order_acquire)
+            ? 1.0
+            : GetPlaybackSpeed();
+    }
+    bool BeginContinuousFrameStepping();
+    void EndContinuousFrameStepping();
+    bool IsContinuousFrameStepping() const {
+        return m_continuousFrameStepping.load(std::memory_order_acquire);
+    }
     bool IsPlaybackSpeedOverlayVisible() const;
     void UpdatePlaybackSpeedOverlay();
 
@@ -373,7 +384,7 @@ public:
 
     double GetDuration() const;
     double GetCurrentTime() const;
-    int64_t GetCurrentFrame() const { return currentFrame; }
+    int64_t GetCurrentFrame() const { return currentFrame.load(std::memory_order_acquire); }
     int64_t GetTotalFrames() const { return totalFrames; }
     uint64_t GetPresentedPlaybackFrameCount() const {
         return m_presentedPlaybackFrameCount.load(std::memory_order_acquire);
@@ -394,6 +405,10 @@ public:
     uint64_t GetAudioClientStartCountForTesting() const;
     uint64_t GetAudioClientStartFailureCountForTesting() const;
     uint64_t GetAudioClientResetCountForTesting() const;
+    double GetLastSubmittedAudioPtsForTesting() const;
+    uint64_t GetPlaybackSeekGenerationForTesting() const {
+        return m_playbackSeekGeneration.load(std::memory_order_acquire);
+    }
     bool IsBackwardPrefetchSuspendedForTesting();
     int GetAudioSampleRateForTesting() const { return audioSampleRate; }
 #endif

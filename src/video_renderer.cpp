@@ -61,11 +61,23 @@ void VideoRenderer::Cleanup() {
     }
 }
 
-void VideoRenderer::UpdateDisplay() {
+void VideoRenderer::UpdateDisplay(bool waitForFrame) {
     if (!m_player->d2dRenderTarget || !m_player->frameRGB->data[0])
         return;
 
-    std::lock_guard<std::mutex> lock(m_player->renderMutex);
+    std::unique_lock<std::mutex> lock(m_player->renderMutex, std::defer_lock);
+    if (waitForFrame)
+    {
+        lock.lock();
+    }
+    else if (!lock.try_lock())
+    {
+        // Full-resolution conversion can hold this lock long enough to starve
+        // the UI timer. Keep WM_PAINT non-blocking; the converter invalidates
+        // the video window when it publishes the next frame, so repaint will
+        // retry without creating a busy WM_PAINT loop that starves WM_TIMER.
+        return;
+    }
 
     const bool usePreview = m_player->displayUsesPlaybackBuffer &&
                             !m_player->playbackRgbBuffer.empty();
@@ -215,7 +227,7 @@ void VideoRenderer::OnVideoWindowPaint() {
     PAINTSTRUCT ps;
     BeginPaint(m_player->videoWindow, &ps);
     if (m_player->isLoaded)
-        UpdateDisplay();
+        UpdateDisplay(false);
     else
         FillRect(ps.hdc, &ps.rcPaint, (HBRUSH)GetStockObject(BLACK_BRUSH));
     EndPaint(m_player->videoWindow, &ps);

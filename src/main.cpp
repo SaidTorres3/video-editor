@@ -239,6 +239,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                             g_exactSeekTimer = SetTimer(nullptr, 0, 1, nullptr);
                         }
                         break;
+                    case VK_OEM_PERIOD:
+                        if (g_videoPlayer->IsContinuousFrameStepping())
+                        {
+                            g_videoPlayer->EndContinuousFrameStepping();
+                            if (g_hTimeline)
+                                InvalidateRect(g_hTimeline, NULL, FALSE);
+                            UpdateControls();
+                        }
+                        break;
                     default:
                         handled = false;
                         break;
@@ -391,17 +400,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
                     }
                     case VK_OEM_PERIOD:
                     {
+                        const bool isRepeated =
+                            (msg.lParam & (static_cast<LPARAM>(1) << 30)) != 0;
+
+                        // A single press remains an exact, immediate one-frame
+                        // step. Once Windows begins key repeat, switch to the
+                        // buffered playback pipeline at an internal 1x rate;
+                        // this decodes ahead off the UI thread and stops again
+                        // on key-up, without changing the user's chosen speed.
+                        if (isRepeated)
+                        {
+                            if (!g_videoPlayer->IsContinuousFrameStepping() &&
+                                g_videoPlayer->BeginContinuousFrameStepping())
+                            {
+                                UpdateControls();
+                            }
+                            break;
+                        }
+
                         // Frame step should pause playback
                         if (g_videoPlayer->IsPlaying())
                             g_videoPlayer->Pause();
-
-                        // Throttle: if subsequent keys are waiting, skip this update to remain responsive
-                        MSG nextMsg;
-                        if (PeekMessage(&nextMsg, nullptr, WM_KEYDOWN, WM_KEYDOWN, PM_NOREMOVE)) {
-                            if (nextMsg.wParam == msg.wParam) {
-                                continue;
-                            }
-                        }
 
                         g_videoPlayer->StepFrame(1);
                         

@@ -484,7 +484,7 @@ VideoDecoder::BufferedReceiveResult VideoDecoder::ReceiveBufferedFrame(
         ? std::max(0.0, decodedTimestamp * av_q2d(stream->time_base) -
                           m_player->startTimeOffset)
         : -1.0;
-    const double speed = m_player->GetPlaybackSpeed();
+    const double speed = m_player->GetPlaybackTimingSpeed();
     if (speed >= 4.0 && decodedPts >= 0.0)
     {
         const double clockTarget = m_player->GetPlaybackClockTarget();
@@ -567,7 +567,9 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
     bool scanningToForwardKeyframe = false;
     bool jumpedToClockTarget = false;
 
-    const double initialSpeed = m_player->GetPlaybackSpeed();
+    const double initialSpeed = m_player->GetPlaybackTimingSpeed();
+    const bool canDiscardInterFrames =
+        m_player->codecContext->codec_id != AV_CODEC_ID_AV1;
     if (m_player->m_lastHighSpeedFrameDeliveryNs == 0)
     {
         m_lastHighSpeedFrameDeliveryPts = -1.0;
@@ -579,8 +581,14 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
         // reference frames from the outset so demanding sources do not become
         // throughput-limited before the clock has even started. NONREF keeps
         // reference B-frames (unlike BIDIR), preserving a denser cadence.
-        m_player->codecContext->skip_frame = AVDISCARD_NONREF;
-        m_player->codecContext->skip_idct = AVDISCARD_NONREF;
+        // FFmpeg's AV1 decoder can classify almost an entire inter-frame GOP
+        // as discardable here, yielding only keyframe-scale output (roughly
+        // five seconds apart in common screen recordings). AV1 still benefits
+        // from loop-filter skipping and the clock-based frame dropping below.
+        m_player->codecContext->skip_frame = canDiscardInterFrames
+            ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
+        m_player->codecContext->skip_idct = canDiscardInterFrames
+            ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
         m_player->codecContext->skip_loop_filter = AVDISCARD_ALL;
     }
     else
@@ -677,7 +685,7 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                 ? std::max(0.0, packetTimestamp * av_q2d(stream->time_base) -
                                   m_player->startTimeOffset)
                 : -1.0;
-            const double packetSpeed = m_player->GetPlaybackSpeed();
+            const double packetSpeed = m_player->GetPlaybackTimingSpeed();
             const double clockTarget = m_player->GetPlaybackClockTarget();
             // Frame-threaded decoders can accept packets far ahead of the
             // frames they have actually produced. Use delivered media
@@ -714,8 +722,10 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                 if (lag <= recoverableLag)
                 {
                     m_moderateLagStartNs = 0;
-                    m_player->codecContext->skip_frame = AVDISCARD_NONREF;
-                    m_player->codecContext->skip_idct = AVDISCARD_NONREF;
+                    m_player->codecContext->skip_frame = canDiscardInterFrames
+                        ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
+                    m_player->codecContext->skip_idct = canDiscardInterFrames
+                        ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
                 }
                 else if (m_moderateLagStartNs == 0)
                 {
@@ -727,8 +737,10 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                     // B-frames are not references for future P-frames, so they
                     // are safe to omit temporarily while the decoder closes a
                     // real clock gap. Full cadence resumes once lag recovers.
-                    m_player->codecContext->skip_frame = AVDISCARD_BIDIR;
-                    m_player->codecContext->skip_idct = AVDISCARD_BIDIR;
+                    m_player->codecContext->skip_frame = canDiscardInterFrames
+                        ? AVDISCARD_BIDIR : AVDISCARD_DEFAULT;
+                    m_player->codecContext->skip_idct = canDiscardInterFrames
+                        ? AVDISCARD_BIDIR : AVDISCARD_DEFAULT;
                 }
 
                 // Preview-sized conversion removes the main transient cost,
@@ -916,7 +928,8 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
         {
             // Audio at these rates is not intelligible, and decoding/resampling
             // it can consume enough time to throttle the video clock.
-            if (scanningToForwardKeyframe || m_player->GetPlaybackSpeed() >= 4.0)
+            if (scanningToForwardKeyframe ||
+                m_player->GetPlaybackTimingSpeed() >= 4.0)
             {
                 av_packet_unref(m_player->packet);
                 continue;

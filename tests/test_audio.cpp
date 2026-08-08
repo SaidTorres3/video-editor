@@ -230,6 +230,54 @@ double EstimateToneFrequency(const std::vector<float>& samples)
 
 void RegisterAudioTests(TestSuite& suite) {
 
+    suite.addTest("PlaybackSpeed_HighToOneXRestoresSynchronizedAudio", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
+                    "high-to-1x audio regression source must load");
+        if (!player.IsAudioOutputAvailableForTesting())
+            return;
+
+        player.SetPlaybackSpeed(4.0);
+        TEST_ASSERT(player.Play(), "4x playback must start before restoring audio");
+        TEST_ASSERT(WaitForCondition([&player]() {
+                        return player.GetCurrentTime() >= 0.5 &&
+                               player.GetPresentedPlaybackFrameCount() >= 4;
+                    }, std::chrono::seconds(2)),
+                    "4x playback must advance before returning to 1x");
+
+        const uint64_t startsBefore =
+            player.GetAudioClientStartCountForTesting();
+        const uint64_t submittedBefore =
+            player.GetSubmittedAudioFrameCountForTesting();
+        const uint64_t presentationsBefore =
+            player.GetPresentedPlaybackFrameCount();
+        const int sampleRate = std::max(1, player.GetAudioSampleRateForTesting());
+
+        player.SetPlaybackSpeed(1.0);
+        TEST_ASSERT(WaitForCondition(
+                        [&player, startsBefore, submittedBefore,
+                         presentationsBefore, sampleRate]() {
+                            return player.GetAudioClientStartCountForTesting() >
+                                       startsBefore &&
+                                   player.GetSubmittedAudioFrameCountForTesting() >=
+                                       submittedBefore + sampleRate / 4 &&
+                                   player.GetPresentedPlaybackFrameCount() >
+                                       presentationsBefore;
+                        }, std::chrono::milliseconds(2500)),
+                    "audio must restart promptly and keep submitting after 4x to 1x");
+
+        const double audioPts = player.GetLastSubmittedAudioPtsForTesting();
+        const double videoPts = player.GetCurrentTime();
+        TEST_ASSERT_GT(audioPts, 0.0,
+                       "the restarted audio epoch must publish its media timestamp");
+        TEST_ASSERT_NEAR(audioPts, videoPts, 0.35,
+                         "restored audio must stay aligned with the video clock");
+        TEST_ASSERT_EQ(player.GetAudioClientStartFailureCountForTesting(),
+                       static_cast<uint64_t>(0),
+                       "the synchronized restart must not double-start WASAPI");
+        player.Pause();
+    });
+
     suite.addTest("PlayingSeek_AudioContinues", []() {
         VerifyAudioContinuesAfterPlayingSeek(
             g_testVideoPath, 3.0, std::chrono::seconds(5));

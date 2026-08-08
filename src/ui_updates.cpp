@@ -158,12 +158,14 @@ void UpdateControls()
                 currentFrame = g_videoPlayer->GetCurrentFrame();
         } else {
             currentTime = g_videoPlayer->GetCurrentTime();
-            currentFrame = g_videoPlayer->GetCurrentFrame();
+            currentFrame = isPlaying && g_videoPlayer->frameRate > 0.0
+                ? static_cast<int64_t>(currentTime * g_videoPlayer->frameRate + 0.5)
+                : g_videoPlayer->GetCurrentFrame();
         }
 
         double duration = g_videoPlayer->GetDuration();
-        std::wstring currentTimeStr = FormatTime(currentTime);
-        std::wstring durationStr = FormatTime(duration);
+        std::wstring currentTimeStr = FormatTime(currentTime, true);
+        std::wstring durationStr = FormatTime(duration, true);
         wchar_t statusText[256];
         int waveformProgress = GetAudioWaveformProgress();
         if (waveformProgress >= 0 && waveformProgress <= 100)
@@ -184,6 +186,12 @@ void UpdateControls()
                        isPlaying ? L"Playing" : L"Paused");
         }
         SetWindowTextW(g_hStatusText, statusText);
+        // Full-resolution accelerated playback can keep the video child
+        // continuously invalidated. WM_PAINT is lower priority than ordinary
+        // queued work, so the STATIC control's backing text may change while
+        // its visible pixels remain stale for several seconds. Paint the small
+        // status label synchronously on the 100 ms UI timer tick.
+        UpdateWindow(g_hStatusText);
     }
 }
 
@@ -206,7 +214,17 @@ void UpdateTimeline()
                 g_videoPlayer &&
             g_videoPlayer->GetPresentedPlaybackFrameCount() >=
                 g_previewReleaseAfterPresentation.load(std::memory_order_relaxed);
-        if (landedAtPreview || presentedAfterPlayingSeek)
+        // A paused approximate seek can resume just beyond the narrow landing
+        // tolerance, especially at accelerated rates. Once forward playback
+        // has passed that preview and no playing-seek generation owns the pin,
+        // keeping it set only freezes the visible timeline/status timestamp.
+        const bool playingSeekOwnsPin =
+            g_pendingPreviewReleasePlayer.load(std::memory_order_acquire) ==
+                g_videoPlayer;
+        const bool resumedPastPreview =
+            g_videoPlayer->IsPlaying() && !playingSeekOwnsPin &&
+            g_videoPlayer->GetCurrentTime() >= g_previewSeekTime - frameDur * 1.5;
+        if (landedAtPreview || presentedAfterPlayingSeek || resumedPastPreview)
         {
             g_previewSeekTime = -1.0;
             g_pendingPreviewReleasePlayer.store(nullptr, std::memory_order_release);

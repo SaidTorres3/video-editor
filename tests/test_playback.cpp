@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "../src/video_player.h"
+#include "../src/video_renderer.h"
 #include "../src/ui_updates.h"
 #include "../src/timeline.h"
 #include "../src/window_proc.h"
@@ -24,6 +25,7 @@ extern HWND g_testHwnd;
 extern double g_previewSeekTime;
 extern VideoPlayer* g_videoPlayer;
 extern HWND g_hTimeline;
+extern HWND g_hStatusText;
 extern bool g_isTimelineDragging;
 
 namespace {
@@ -123,6 +125,17 @@ bool WaitForPresentedFrames(VideoPlayer& player, uint64_t target,
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     return player.GetPresentedPlaybackFrameCount() >= target;
 }
+
+std::wstring GetOptionalAv1RegressionSource(const std::wstring& fallback) {
+    wchar_t* requestedSource = nullptr;
+    size_t requestedSourceLength = 0;
+    _wdupenv_s(&requestedSource, &requestedSourceLength,
+               L"VIDEO_EDITOR_AV1_REGRESSION_SOURCE");
+    std::wstring source = requestedSource && requestedSource[0] != L'\0'
+        ? requestedSource : fallback;
+    std::free(requestedSource);
+    return source;
+}
 }
 
 void RegisterPlaybackTests(TestSuite& suite) {
@@ -157,6 +170,228 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Pause();
         TEST_ASSERT_GT(player.GetCurrentTime(), 0.8,
                        "200% speed should advance substantially faster than real time");
+    });
+
+    suite.addTest("PlaybackSpeed_HighToAudibleRateStartsSynchronizedEpoch", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
+                    "high-to-audible speed regression source must load");
+        player.SetPlaybackSpeed(4.0);
+        TEST_ASSERT(player.Play(), "4x playback must start before the transition");
+
+        const auto highSpeedDeadline = std::chrono::steady_clock::now() +
+                                       std::chrono::seconds(2);
+        while (player.GetPresentedPlaybackFrameCount() < 4 &&
+               std::chrono::steady_clock::now() < highSpeedDeadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        TEST_ASSERT_GE(player.GetPresentedPlaybackFrameCount(), 4u,
+                       "4x playback must present before returning to 1x");
+
+        const double transitionPts = player.GetCurrentTime();
+        const uint64_t generationBefore =
+            player.GetPlaybackSeekGenerationForTesting();
+        const uint64_t presentationsBefore =
+            player.GetPresentedPlaybackFrameCount();
+        player.SetPlaybackSpeed(1.0);
+
+        TEST_ASSERT_GT(player.GetPlaybackSeekGenerationForTesting(),
+                       generationBefore,
+                       "dropping below 4x must start a flushed A/V clock epoch");
+
+        const auto recoveryDeadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(3);
+        while (player.GetPresentedPlaybackFrameCount() <= presentationsBefore &&
+               std::chrono::steady_clock::now() < recoveryDeadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        TEST_ASSERT_GT(player.GetPresentedPlaybackFrameCount(), presentationsBefore,
+                       "video must keep presenting after the synchronized restart");
+        TEST_ASSERT_GE(player.GetCurrentTime(), transitionPts - 0.2,
+                       "the synchronized restart must not jump visibly backward");
+        TEST_ASSERT(player.IsPlaying(),
+                    "the high-to-audible transition must keep playback active");
+        player.Pause();
+    });
+
+    suite.addTest("PlaybackClock_Av1AcceleratedRatesAvoidGopScaleStalls", []() {
+        const std::wstring sourcePath =
+            GetOptionalAv1RegressionSource(g_testAv1OpusVideoPath);
+
+        {
+            VideoPlayer moderatePlayer(g_testHwnd);
+            TEST_ASSERT(moderatePlayer.LoadVideo(sourcePath),
+                        "AV1 moderate-speed regression source must load");
+            moderatePlayer.SetPlaybackSpeed(3.9);
+            TEST_ASSERT(moderatePlayer.Play(), "AV1 playback must start at 3.9x");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+            const double presentedTime = moderatePlayer.frameRate > 0.0
+                ? moderatePlayer.GetCurrentFrame() / moderatePlayer.frameRate
+                : 0.0;
+            TEST_ASSERT_GT(presentedTime, 2.4,
+                           "3.9x AV1 presentation must advance faster than real time");
+        }
+
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(sourcePath),
+                    "AV1 high-speed regression source must load");
+        player.SetPlaybackSpeed(4.0);
+        TEST_ASSERT(player.Play(), "AV1 playback must start at 4x");
+
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(900);
+        while (player.GetCurrentTime() < 0.5 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        TEST_ASSERT_GT(player.GetCurrentTime(), 0.5,
+                       "4x AV1 time must advance before the next GOP boundary");
+        TEST_ASSERT_GT(player.GetPresentedPlaybackFrameCount(), 3u,
+                       "4x AV1 must deliver inter frames, not only sparse keyframes");
+    });
+
+    suite.addTest("PlaybackClock_AdvancesBetweenPresentedFrames", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
+                    "continuous-clock regression source must load");
+        player.SetPlaybackSpeed(2.0);
+        TEST_ASSERT(player.Play(), "continuous-clock playback must start");
+
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(2);
+        while (player.GetPresentedPlaybackFrameCount() < 2 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+        const uint64_t presentations = player.GetPresentedPlaybackFrameCount();
+        const double first = player.GetCurrentTime();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        const double second = player.GetCurrentTime();
+        if (player.GetPresentedPlaybackFrameCount() == presentations)
+        {
+            TEST_ASSERT_GT(second, first,
+                           "playing time must use the media clock between frame deliveries");
+        }
+    });
+
+    suite.addTest("PlaybackQuality_Below4xUsesFullResolutionConversion", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
+                    "full-quality playback regression source must load");
+        player.SetPlaybackSpeed(3.9);
+        TEST_ASSERT(player.Play(), "full-quality playback must start at 3.9x");
+
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(2);
+        while (player.GetPresentedPlaybackFrameCount() < 3 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        player.Pause();
+
+        TEST_ASSERT_EQ(player.playbackRgbWidth, 0,
+                       "speeds below 4x must not use the reduced-quality preview buffer");
+        TEST_ASSERT(!player.displayUsesPlaybackBuffer,
+                    "3.9x playback must retain the full-resolution color path");
+    });
+
+    suite.addTest("PlaybackUi_CurrentTimeUpdatesContinuouslyAfterSpeedChange", []() {
+        VideoPlayer player(g_testHwnd);
+        HWND previousStatus = g_hStatusText;
+        VideoPlayer* previousPlayer = g_videoPlayer;
+        const double previousPreview = g_previewSeekTime;
+        HWND status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE,
+                                    0, 0, 600, 30, g_testHwnd,
+                                    nullptr, GetModuleHandleW(nullptr), nullptr);
+
+        const bool loaded = player.LoadVideo(
+            GetOptionalAv1RegressionSource(g_testVideoPath));
+        g_videoPlayer = &player;
+        g_hStatusText = status;
+        g_previewSeekTime = -1.0;
+        const bool started = loaded && player.Play();
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(2);
+        while (started && player.GetCurrentTime() < 0.2 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        player.SetPlaybackSpeed(3.9);
+        UpdateControls();
+        RECT pendingPaintRect{};
+        const bool firstPaintPending =
+            GetUpdateRect(status, &pendingPaintRect, FALSE) != FALSE;
+        wchar_t firstText[256]{};
+        GetWindowTextW(status, firstText, static_cast<int>(std::size(firstText)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        UpdateControls();
+        wchar_t secondText[256]{};
+        GetWindowTextW(status, secondText, static_cast<int>(std::size(secondText)));
+
+        player.SeekWhilePlaying(2.0, true);
+        const double immediateSeekTime = player.GetCurrentTime();
+        const double seekClockStart = immediateSeekTime;
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        const double seekClockEnd = player.GetCurrentTime();
+
+        // Model a resumed approximate seek that has already passed its pinned
+        // preview time. The UI must release the pin instead of displaying that
+        // stale timestamp indefinitely.
+        g_previewSeekTime = std::max(0.0, player.GetCurrentTime() - 0.1);
+        UpdateTimeline();
+        const bool previewReleased = g_previewSeekTime < 0.0;
+
+        player.Pause();
+        g_previewSeekTime = previousPreview;
+        g_hStatusText = previousStatus;
+        g_videoPlayer = previousPlayer;
+        if (status)
+            DestroyWindow(status);
+
+        TEST_ASSERT(status != nullptr, "status-label regression control must be created");
+        TEST_ASSERT(loaded && started, "status-label regression playback must start");
+        TEST_ASSERT(!firstPaintPending,
+                    "the status-label update must paint immediately instead of waiting behind video paints");
+        TEST_ASSERT(std::wstring(firstText).find(L'.') != std::wstring::npos,
+                    "current time must display sub-second precision");
+        const std::wstring firstStatus(firstText);
+        const size_t separator = firstStatus.find(L'/');
+        TEST_ASSERT(separator != std::wstring::npos &&
+                        firstStatus.find(L'.', separator) != std::wstring::npos,
+                    "duration must display the same sub-second precision as current time");
+        TEST_ASSERT(std::wcscmp(firstText, secondText) != 0,
+                    "visible current time must update continuously after a speed change");
+        TEST_ASSERT_GE(immediateSeekTime, 2.0,
+                       "an asynchronous playing seek must publish its UI clock immediately");
+        TEST_ASSERT_GT(seekClockEnd, seekClockStart + 0.2,
+                       "the UI clock must keep advancing while the seek decoder catches up");
+        TEST_ASSERT(previewReleased,
+                    "resumed playback must release a stale passed preview timestamp");
+    });
+
+    suite.addTest("PlaybackUi_VideoPaintNeverBlocksTimerOnFrameConversion", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
+                    "paint-liveness regression source must load");
+
+        std::atomic<bool> renderLockHeld{false};
+        std::thread converter([&]() {
+            std::lock_guard<std::mutex> lock(player.renderMutex);
+            renderLockHeld.store(true, std::memory_order_release);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        });
+        while (!renderLockHeld.load(std::memory_order_acquire))
+            std::this_thread::yield();
+
+        const auto paintStarted = std::chrono::steady_clock::now();
+        SendMessageW(player.videoWindow, WM_PAINT, 0, 0);
+        const auto paintElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - paintStarted).count();
+        converter.join();
+
+        TEST_ASSERT_LT(paintElapsed, 200,
+                       "video WM_PAINT must not wait for full-resolution frame conversion");
     });
 
     suite.addTest("TestDecoder_UsesDeterministicSoftwarePath", []() {
@@ -635,6 +870,39 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "500x playback should keep presenting clock-targeted frames");
     });
 
+    suite.addTest("PlaybackSpeed_400xEofPinsCursorToTimelineEnd", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testLongVideoPath),
+                    "400x EOF regression source must load");
+        const double duration = player.GetDuration();
+        TEST_ASSERT_GT(duration, 30.0,
+                       "EOF regression source must expose a meaningful cursor rewind");
+
+        player.SetPlaybackSpeed(400.0);
+        TEST_ASSERT(player.Play(), "400x playback must start");
+
+        double furthestVisiblePosition = player.GetCurrentTime();
+        const auto eofDeadline = std::chrono::steady_clock::now() +
+                                 std::chrono::seconds(5);
+        while (player.IsPlaying() &&
+               std::chrono::steady_clock::now() < eofDeadline)
+        {
+            furthestVisiblePosition = std::max(
+                furthestVisiblePosition, player.GetCurrentTime());
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        const double finalPosition = player.GetCurrentTime();
+        TEST_ASSERT(!player.IsPlaying(),
+                    "400x playback must naturally stop after draining EOF");
+        TEST_ASSERT_GE(finalPosition, duration - 0.1,
+                       "natural EOF must leave the cursor at the timeline end");
+        TEST_ASSERT_LT(finalPosition, duration + 0.001,
+                       "EOF cursor must remain within the timeline duration");
+        TEST_ASSERT_GE(finalPosition, furthestVisiblePosition - 0.001,
+                       "stopping at EOF must never bounce the visible cursor backward");
+    });
+
     suite.addTest("PlaybackSpeed_4xBoundaryNeverStarves", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);
@@ -686,7 +954,8 @@ void RegisterPlaybackTests(TestSuite& suite) {
         TEST_ASSERT(player.Play(), "Initial play should succeed");
 
         auto firstDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (player.GetCurrentTime() < 1.0 &&
+        while (player.GetCurrentFrame() <
+                   static_cast<int64_t>(std::ceil(player.frameRate)) &&
                std::chrono::steady_clock::now() < firstDeadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
@@ -982,7 +1251,9 @@ void RegisterPlaybackTests(TestSuite& suite) {
 
         const auto pauseDeadline = std::chrono::steady_clock::now() +
                                    std::chrono::seconds(3);
-        while (player.GetCurrentTime() < 1.0 && player.IsPlaying() &&
+        while (player.GetCurrentFrame() <
+                   static_cast<int64_t>(std::ceil(player.frameRate)) &&
+               player.IsPlaying() &&
                std::chrono::steady_clock::now() < pauseDeadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         player.Pause();
@@ -1332,6 +1603,52 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.SeekToFrame(startFrame + 1);
         int64_t newFrame = player.GetCurrentFrame();
         TEST_ASSERT_GE(newFrame, startFrame, "Frame should advance or stay (never go backward on forward step)");
+    });
+
+    suite.addTest("FrameStep_HeldForwardUsesBufferedSilentPlayback", []() {
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
+                    "held-forward regression source must load");
+        player.SeekToFrame(10);
+        player.SetPlaybackSpeed(5.0);
+        player.StepFrame(1);
+
+        const int64_t startingFrame = player.GetCurrentFrame();
+        const uint64_t startingPresentations =
+            player.GetPresentedPlaybackFrameCount();
+        const uint64_t startingAudioStarts =
+            player.GetAudioClientStartCountForTesting();
+        const auto submissionStarted = std::chrono::steady_clock::now();
+        TEST_ASSERT(player.BeginContinuousFrameStepping(),
+                    "held period must start buffered frame review");
+        const auto submissionMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - submissionStarted).count();
+
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(900);
+        while (player.GetPresentedPlaybackFrameCount() <
+                   startingPresentations + 8 &&
+               std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        player.EndContinuousFrameStepping();
+
+        TEST_ASSERT_LT(submissionMs, static_cast<int64_t>(100),
+                       "held period must not decode a frame on the UI thread");
+        TEST_ASSERT_GE(player.GetPresentedPlaybackFrameCount(),
+                       startingPresentations + 8,
+                       "held period must continuously present buffered frames");
+        TEST_ASSERT_GT(player.GetCurrentFrame(), startingFrame + 5,
+                       "held period must advance through consecutive frames");
+        TEST_ASSERT(!player.IsPlaying() && !player.IsContinuousFrameStepping(),
+                    "releasing period must leave frame review paused");
+        TEST_ASSERT_NEAR(player.GetPlaybackSpeed(), 5.0, 0.001,
+                         "frame review must preserve the configured playback speed");
+        TEST_ASSERT_EQ(player.GetAudioClientStartCountForTesting(),
+                       startingAudioStarts,
+                       "held frame review must remain silent");
     });
 
     suite.addTest("FrameStep_ForwardLongRun_UsesAlignedDecoder", []() {

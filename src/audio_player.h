@@ -37,6 +37,9 @@ public:
     uint64_t GetClientResetCountForTesting() const {
         return m_clientResetCount.load(std::memory_order_acquire);
     }
+    double GetLastSubmittedEndPtsForTesting() const {
+        return m_lastSubmittedEndPts.load(std::memory_order_acquire);
+    }
 #endif
 
 private:
@@ -64,5 +67,6 @@ private:
     std::atomic<uint64_t> m_clientStartCount{0};
     std::atomic<uint64_t> m_clientStartFailureCount{0};
     std::atomic<uint64_t> m_clientResetCount{0};
+    std::atomic<double> m_lastSubmittedEndPts{-1.0};
 #endif
 };

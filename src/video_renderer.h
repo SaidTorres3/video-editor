@@ -11,7 +11,7 @@ public:
 
     bool Initialize();
     void Cleanup();
-    void UpdateDisplay();
+    void UpdateDisplay(bool waitForFrame = true);
     void SetPosition(int x, int y, int width, int height);
     void Render();
     void OnVideoWindowPaint();
