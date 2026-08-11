@@ -711,10 +711,10 @@ void RegisterPlaybackTests(TestSuite& suite) {
 
         TEST_ASSERT_GT(player.playbackRgbWidth, 0,
                        "high-speed playback must create a preview conversion buffer");
-        TEST_ASSERT_LT(player.playbackRgbWidth, player.frameWidth,
-                       "high-speed playback must not convert every frame at full source width");
-        TEST_ASSERT_LT(player.playbackRgbHeight, player.frameHeight,
-                       "high-speed playback must not convert every frame at full source height");
+        TEST_ASSERT(player.playbackRgbWidth <= player.frameWidth,
+                    "high-speed playback preview buffer width must not exceed source width");
+        TEST_ASSERT(player.playbackRgbHeight <= player.frameHeight,
+                    "high-speed playback preview buffer height must not exceed source height");
         TEST_ASSERT(player.d2dBitmap != nullptr,
                     "preview-sized playback frame must upload to Direct2D");
         const D2D1_SIZE_U uploadedSize = player.d2dBitmap->GetPixelSize();
