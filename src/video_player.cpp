@@ -2874,10 +2874,14 @@ bool VideoPlayer::PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame)
             GetClientRect(videoWindow, &clientRect);
             const int clientWidth = std::max(1L, clientRect.right - clientRect.left);
             const int clientHeight = std::max(1L, clientRect.bottom - clientRect.top);
+            const UINT dpi = GetDpiForWindow(videoWindow);
+            const double dpiScale = (dpi > 0) ? (static_cast<double>(dpi) / 96.0) : 1.0;
+            const double targetWidth = std::max(clientWidth * dpiScale, 1920.0);
+            const double targetHeight = std::max(clientHeight * dpiScale, 1080.0);
             const double scale = std::min({
                 1.0,
-                clientWidth / static_cast<double>(std::max(1, frameWidth)),
-                clientHeight / static_cast<double>(std::max(1, frameHeight))});
+                targetWidth / static_cast<double>(std::max(1, frameWidth)),
+                targetHeight / static_cast<double>(std::max(1, frameHeight))});
             const int previewWidth = std::max(2, static_cast<int>(std::lround(frameWidth * scale)));
             const int previewHeight = std::max(2, static_cast<int>(std::lround(frameHeight * scale)));
 
@@ -2894,7 +2898,7 @@ bool VideoPlayer::PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame)
                 playbackSwsContext = sws_getContext(
                     frameWidth, frameHeight, actualFormat,
                     playbackRgbWidth, playbackRgbHeight, AV_PIX_FMT_BGRA,
-                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                    SWS_BILINEAR, nullptr, nullptr, nullptr);
             }
             if (!playbackSwsContext || playbackRgbBuffer.empty())
                 return false;
@@ -2916,7 +2920,7 @@ bool VideoPlayer::PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame)
                 swsContext = sws_getContext(
                     frameWidth, frameHeight, actualFormat,
                     frameWidth, frameHeight, AV_PIX_FMT_BGRA,
-                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                    SWS_BILINEAR, nullptr, nullptr, nullptr);
             }
             if (!swsContext)
                 return false;

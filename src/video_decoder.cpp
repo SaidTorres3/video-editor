@@ -412,7 +412,7 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
                         m_player->swsContext = sws_getContext(
                             m_player->frameWidth, m_player->frameHeight, actualFmt,
                             m_player->frameWidth, m_player->frameHeight, AV_PIX_FMT_BGRA,
-                            SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                            SWS_BILINEAR, nullptr, nullptr, nullptr);
                     }
 
                     {
@@ -587,9 +587,8 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
         // from loop-filter skipping and the clock-based frame dropping below.
         m_player->codecContext->skip_frame = canDiscardInterFrames
             ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
-        m_player->codecContext->skip_idct = canDiscardInterFrames
-            ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
-        m_player->codecContext->skip_loop_filter = AVDISCARD_ALL;
+        m_player->codecContext->skip_idct = AVDISCARD_DEFAULT;
+        m_player->codecContext->skip_loop_filter = AVDISCARD_DEFAULT;
     }
     else
     {
@@ -724,8 +723,7 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                     m_moderateLagStartNs = 0;
                     m_player->codecContext->skip_frame = canDiscardInterFrames
                         ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
-                    m_player->codecContext->skip_idct = canDiscardInterFrames
-                        ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
+                    m_player->codecContext->skip_idct = AVDISCARD_DEFAULT;
                 }
                 else if (m_moderateLagStartNs == 0)
                 {
@@ -739,8 +737,7 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                     // real clock gap. Full cadence resumes once lag recovers.
                     m_player->codecContext->skip_frame = canDiscardInterFrames
                         ? AVDISCARD_BIDIR : AVDISCARD_DEFAULT;
-                    m_player->codecContext->skip_idct = canDiscardInterFrames
-                        ? AVDISCARD_BIDIR : AVDISCARD_DEFAULT;
+                    m_player->codecContext->skip_idct = AVDISCARD_DEFAULT;
                 }
 
                 // Preview-sized conversion removes the main transient cost,
