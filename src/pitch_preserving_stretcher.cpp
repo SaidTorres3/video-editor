@@ -20,7 +20,7 @@ PitchPreservingStretcher::PitchPreservingStretcher(
         Stretcher::OptionEngineFaster |
         Stretcher::OptionPitchHighConsistency |
         Stretcher::OptionChannelsTogether);
-    const double safeSpeed = std::clamp(speed, 0.1, 4.0);
+    const double safeSpeed = std::clamp(speed, 0.1, 5.0);
     m_stretcher = std::make_unique<Stretcher>(
         std::max(1, sampleRate), static_cast<size_t>(m_channels), options,
         1.0 / safeSpeed, 1.0);

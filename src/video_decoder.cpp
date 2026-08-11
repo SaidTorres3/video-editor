@@ -485,13 +485,13 @@ VideoDecoder::BufferedReceiveResult VideoDecoder::ReceiveBufferedFrame(
                           m_player->startTimeOffset)
         : -1.0;
     const double speed = m_player->GetPlaybackTimingSpeed();
-    if (speed >= 4.0 && decodedPts >= 0.0)
+    if (speed >= 5.0 && decodedPts >= 0.0)
     {
         const double clockTarget = m_player->GetPlaybackClockTarget();
         const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         // Every high-speed mode uses clock-based frame dropping. On a source
-        // that is expensive enough to remain late, 4x-7.9x could otherwise
+        // that is expensive enough to remain late, 5x-7.9x could otherwise
         // discard every decoded frame forever because the overdue-delivery
         // escape hatch used to begin only at 8x. Still publish at display
         // cadence so delivered progress advances and the catch-up seek logic
@@ -542,7 +542,7 @@ VideoDecoder::BufferedReceiveResult VideoDecoder::ReceiveBufferedFrame(
     pts = std::max(0.0, pts);
     frameNumber = static_cast<int64_t>(pts * m_player->frameRate + 0.5);
     av_frame_unref(m_player->hwFrame);
-    if (speed >= 4.0)
+    if (speed >= 5.0)
     {
         m_lastHighSpeedFrameDeliveryPts = pts;
         m_player->m_lastHighSpeedFrameDeliveryNs =
@@ -575,7 +575,7 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
         m_lastHighSpeedFrameDeliveryPts = -1.0;
         m_moderateLagStartNs = 0;
     }
-    if (initialSpeed >= 4.0 && initialSpeed < 64.0)
+    if (initialSpeed >= 5.0 && initialSpeed < 64.0)
     {
         // At these rates the display cannot show every source frame. Decode
         // reference frames from the outset so demanding sources do not become
@@ -699,7 +699,7 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                 ? clockTarget - deliveredProgress
                 : 0.0;
 
-            if (packetSpeed >= 4.0 && packetSpeed < 64.0 &&
+            if (packetSpeed >= 5.0 && packetSpeed < 64.0 &&
                 packetPts >= 0.0 && !jumpedToClockTarget)
             {
                 // A packet can briefly be late because of ordinary decoder or
@@ -929,7 +929,7 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
             // Audio at these rates is not intelligible, and decoding/resampling
             // it can consume enough time to throttle the video clock.
             if (scanningToForwardKeyframe ||
-                m_player->GetPlaybackTimingSpeed() >= 4.0)
+                m_player->GetPlaybackTimingSpeed() >= 5.0)
             {
                 av_packet_unref(m_player->packet);
                 continue;

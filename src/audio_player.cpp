@@ -652,7 +652,7 @@ void AudioPlayer::ResetPitchPreservingTimeStretch(double startPts)
     m_nextStretchSourcePts = startPts;
 
     const double speed = m_player->GetPlaybackTimingSpeed();
-    if (std::fabs(speed - 1.0) >= 0.0001 && speed < 4.0)
+    if (std::fabs(speed - 1.0) >= 0.0001 && speed < 5.0)
     {
         m_timeStretcher = std::make_unique<PitchPreservingStretcher>(
             m_player->audioSampleRate, m_player->audioChannels, speed);

@@ -176,8 +176,8 @@ void RegisterPlaybackTests(TestSuite& suite) {
         VideoPlayer player(g_testHwnd);
         TEST_ASSERT(player.LoadVideo(g_testVideoPath),
                     "high-to-audible speed regression source must load");
-        player.SetPlaybackSpeed(4.0);
-        TEST_ASSERT(player.Play(), "4x playback must start before the transition");
+        player.SetPlaybackSpeed(5.0);
+        TEST_ASSERT(player.Play(), "5x playback must start before the transition");
 
         const auto highSpeedDeadline = std::chrono::steady_clock::now() +
                                        std::chrono::seconds(2);
@@ -187,7 +187,7 @@ void RegisterPlaybackTests(TestSuite& suite) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         TEST_ASSERT_GE(player.GetPresentedPlaybackFrameCount(), 4u,
-                       "4x playback must present before returning to 1x");
+                       "5x playback must present before returning to 1x");
 
         const double transitionPts = player.GetCurrentTime();
         const uint64_t generationBefore =
@@ -198,7 +198,7 @@ void RegisterPlaybackTests(TestSuite& suite) {
 
         TEST_ASSERT_GT(player.GetPlaybackSeekGenerationForTesting(),
                        generationBefore,
-                       "dropping below 4x must start a flushed A/V clock epoch");
+                       "dropping below 5x must start a flushed A/V clock epoch");
 
         const auto recoveryDeadline = std::chrono::steady_clock::now() +
                                       std::chrono::seconds(3);
@@ -224,21 +224,21 @@ void RegisterPlaybackTests(TestSuite& suite) {
             VideoPlayer moderatePlayer(g_testHwnd);
             TEST_ASSERT(moderatePlayer.LoadVideo(sourcePath),
                         "AV1 moderate-speed regression source must load");
-            moderatePlayer.SetPlaybackSpeed(3.9);
-            TEST_ASSERT(moderatePlayer.Play(), "AV1 playback must start at 3.9x");
+            moderatePlayer.SetPlaybackSpeed(4.0);
+            TEST_ASSERT(moderatePlayer.Play(), "AV1 playback must start at 4x");
             std::this_thread::sleep_for(std::chrono::milliseconds(1200));
             const double presentedTime = moderatePlayer.frameRate > 0.0
                 ? moderatePlayer.GetCurrentFrame() / moderatePlayer.frameRate
                 : 0.0;
             TEST_ASSERT_GT(presentedTime, 2.4,
-                           "3.9x AV1 presentation must advance faster than real time");
+                           "4x AV1 presentation must advance faster than real time");
         }
 
         VideoPlayer player(g_testHwnd);
         TEST_ASSERT(player.LoadVideo(sourcePath),
                     "AV1 high-speed regression source must load");
-        player.SetPlaybackSpeed(4.0);
-        TEST_ASSERT(player.Play(), "AV1 playback must start at 4x");
+        player.SetPlaybackSpeed(5.0);
+        TEST_ASSERT(player.Play(), "AV1 playback must start at 5x");
 
         const auto deadline = std::chrono::steady_clock::now() +
                               std::chrono::milliseconds(900);
@@ -247,9 +247,9 @@ void RegisterPlaybackTests(TestSuite& suite) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
         TEST_ASSERT_GT(player.GetCurrentTime(), 0.5,
-                       "4x AV1 time must advance before the next GOP boundary");
+                       "5x AV1 time must advance before the next GOP boundary");
         TEST_ASSERT_GT(player.GetPresentedPlaybackFrameCount(), 3u,
-                       "4x AV1 must deliver inter frames, not only sparse keyframes");
+                       "5x AV1 must deliver inter frames, not only sparse keyframes");
     });
 
     suite.addTest("PlaybackClock_AdvancesBetweenPresentedFrames", []() {
@@ -276,12 +276,12 @@ void RegisterPlaybackTests(TestSuite& suite) {
         }
     });
 
-    suite.addTest("PlaybackQuality_Below4xUsesFullResolutionConversion", []() {
+    suite.addTest("PlaybackQuality_Below5xUsesFullResolutionConversion", []() {
         VideoPlayer player(g_testHwnd);
         TEST_ASSERT(player.LoadVideo(g_testVideoPath),
                     "full-quality playback regression source must load");
-        player.SetPlaybackSpeed(3.9);
-        TEST_ASSERT(player.Play(), "full-quality playback must start at 3.9x");
+        player.SetPlaybackSpeed(4.0);
+        TEST_ASSERT(player.Play(), "full-quality playback must start at 4x");
 
         const auto deadline = std::chrono::steady_clock::now() +
                               std::chrono::seconds(2);
@@ -291,9 +291,9 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Pause();
 
         TEST_ASSERT_EQ(player.playbackRgbWidth, 0,
-                       "speeds below 4x must not use the reduced-quality preview buffer");
+                       "speeds below 5x must not use the reduced-quality preview buffer");
         TEST_ASSERT(!player.displayUsesPlaybackBuffer,
-                    "3.9x playback must retain the full-resolution color path");
+                    "4x playback must retain the full-resolution color path");
     });
 
     suite.addTest("PlaybackUi_CurrentTimeUpdatesContinuouslyAfterSpeedChange", []() {
@@ -602,7 +602,7 @@ void RegisterPlaybackTests(TestSuite& suite) {
         TEST_ASSERT(player.LoadVideo(g_testVideoPath),
                     "EOF recovery regression source must load");
         player.SeekToTimeExact(player.GetDuration() - 0.5);
-        player.SetPlaybackSpeed(4.0);
+        player.SetPlaybackSpeed(5.0);
         TEST_ASSERT(player.Play(), "near-EOF playback must start");
 
         const auto eofDeadline = std::chrono::steady_clock::now() +

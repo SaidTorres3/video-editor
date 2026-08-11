@@ -396,12 +396,12 @@ bool VideoPlayer::Play()
     playbackPrebufferFrames = std::min(
         playbackBufferCapacity,
         std::max<size_t>(2, playbackBufferCapacity / 2));
-    if (GetPlaybackTimingSpeed() >= 4.0 || IsContinuousFrameStepping())
+    if (GetPlaybackTimingSpeed() >= 5.0 || IsContinuousFrameStepping())
     {
         // High-speed decode intentionally emits a thinner reference-frame
         // stream. Starting presentation from a single frame exposes every
         // decoder scheduling hiccup as a visible pause; keep a small cushion
-        // so 4x and above have the same steady delivery as lower speeds.
+        // so 5x and above have the same steady delivery as lower speeds.
         playbackPrebufferFrames = std::min(
             playbackBufferCapacity,
             std::max<size_t>(3, playbackBufferCapacity / 2));
@@ -793,7 +793,7 @@ void VideoPlayer::SetPlaybackSpeed(double speed)
         playbackThreadRunning.load(std::memory_order_acquire) &&
         std::fabs(previous - speed) > 0.0001;
     const bool restoringAudiblePlayback =
-        changingWhilePlaying && previous >= 4.0 && speed < 4.0 &&
+        changingWhilePlaying && previous >= 5.0 && speed < 5.0 &&
         !IsContinuousFrameStepping();
     double reanchorPts = currentPts.load(std::memory_order_acquire);
     if (changingWhilePlaying &&
@@ -810,7 +810,7 @@ void VideoPlayer::SetPlaybackSpeed(double speed)
     {
         if (restoringAudiblePlayback)
         {
-            // At 4x and above audio packets are deliberately discarded and
+            // At 5x and above audio packets are deliberately discarded and
             // the high-speed decoder is allowed to jump/coalesce around the
             // media clock. Restarting only WASAPI here can therefore leave it
             // waiting at a demux position well ahead of the visible frame.
@@ -2864,9 +2864,9 @@ bool VideoPlayer::PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame)
         std::lock_guard<std::mutex> renderLock(renderMutex);
         const AVPixelFormat actualFormat = static_cast<AVPixelFormat>(bufferedFrame.frame->format);
         // Preserve full source quality (including the original color
-        // conversion path) through 3.9x. Preview-sized conversion is reserved
-        // for the established high-speed mode at 4x and above.
-        const bool usePreviewBuffer = GetPlaybackTimingSpeed() >= 4.0 ||
+        // conversion path) through 4x. Preview-sized conversion is reserved
+        // for the established high-speed mode at 5x and above.
+        const bool usePreviewBuffer = GetPlaybackTimingSpeed() >= 5.0 ||
                                       IsContinuousFrameStepping();
         if (usePreviewBuffer)
         {
@@ -3085,7 +3085,7 @@ void VideoPlayer::PlaybackThreadFunction()
             masterStartTime = startTime;
             masterStartPts = startPts;
             ResetPlaybackClock(startPts);
-            if (GetPlaybackTimingSpeed() < 4.0 &&
+            if (GetPlaybackTimingSpeed() < 5.0 &&
                 !IsContinuousFrameStepping())
                 m_audioPlayer->StartThread();
             clockStarted = true;
@@ -3104,7 +3104,7 @@ void VideoPlayer::PlaybackThreadFunction()
             masterStartPts = startPts;
             ResetPlaybackClock(startPts);
             if (playbackThreadRunning && isPlaying &&
-                GetPlaybackTimingSpeed() < 4.0 &&
+                GetPlaybackTimingSpeed() < 5.0 &&
                 !IsContinuousFrameStepping())
                 m_audioPlayer->StartThread();
         }
