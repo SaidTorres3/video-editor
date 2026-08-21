@@ -1,4 +1,4 @@
-# Video Editor with Audio Support
+# Video Editor
 
 A Windows-based video player application built with C++ and FFmpeg that supports both video playback and multitrack audio functionality.
 
@@ -26,7 +26,7 @@ All source files now reside under the `src/` directory to keep the project organ
 
 ### Audio Playback
 
-- **Multitrack Audio Support**: Automatically detects and loads all audio tracks from video files
+- **Multitrack Audio Support**: Automatically detects and loads all audio tracks from video files and mixes them together for playback in real-time.
 - **Individual Track Control**: Each audio track can be controlled independently
 - **Mute/Unmute Tracks**: Toggle audio tracks on/off without affecting other tracks
 - **Per-Track Volume Control**: Adjust volume for each audio track individually (0-200%)
