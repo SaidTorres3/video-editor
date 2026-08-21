@@ -1563,37 +1563,6 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             double dur = g_videoPlayer->GetDuration();
             if (dur > 0.0 && rc.right > 0)
             {
-                if (g_enableMultiClipEditing && y >= std::max(0L, rc.bottom - 10))
-                {
-                    int selectedSegment = -1;
-                    for (size_t i = 0; i < g_cutSegments.size(); ++i)
-                    {
-                        int sx = TimeToPixel(g_cutSegments[i].start, rc, dur);
-                        int ex = TimeToPixel(g_cutSegments[i].end, rc, dur);
-                        int left = std::max(0, sx);
-                        int right = std::min(static_cast<int>(rc.right), std::max(sx + 1, ex));
-                        if (right >= 0 && left <= rc.right && x >= left && x <= right)
-                        {
-                            selectedSegment = static_cast<int>(i);
-                            break;
-                        }
-                    }
-
-                    if (selectedSegment >= 0)
-                    {
-                        POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                        ClientToScreen(hwnd, &pt);
-                        HMENU menu = CreatePopupMenu();
-                        AppendMenuW(menu, MF_STRING, 10, L"Edit");
-                        int cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
-                                                 pt.x, pt.y, 0, hwnd, nullptr);
-                        DestroyMenu(menu);
-                        if (cmd == 10)
-                            SelectCutSegmentForEditing(GetParent(hwnd), selectedSegment);
-                        return 0;
-                    }
-                }
-
                 auto keys = g_videoPlayer->GetCropKeyframes();
                 double selectedTime = -1.0;
                 for (const auto& key : keys)
@@ -1643,6 +1612,37 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         SetCapture(hwnd);
                     }
                     return 0;
+                }
+
+                if (g_enableMultiClipEditing)
+                {
+                    int selectedSegment = -1;
+                    for (size_t i = 0; i < g_cutSegments.size(); ++i)
+                    {
+                        int sx = TimeToPixel(g_cutSegments[i].start, rc, dur);
+                        int ex = TimeToPixel(g_cutSegments[i].end, rc, dur);
+                        int left = std::min(sx, ex);
+                        int right = std::max(sx, ex);
+                        if (right >= 0 && left <= rc.right && x >= left && x <= right)
+                        {
+                            selectedSegment = static_cast<int>(i);
+                            break;
+                        }
+                    }
+
+                    if (selectedSegment >= 0)
+                    {
+                        POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                        ClientToScreen(hwnd, &pt);
+                        HMENU menu = CreatePopupMenu();
+                        AppendMenuW(menu, MF_STRING, 10, L"Edit");
+                        int cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                                 pt.x, pt.y, 0, hwnd, nullptr);
+                        DestroyMenu(menu);
+                        if (cmd == 10)
+                            SelectCutSegmentForEditing(GetParent(hwnd), selectedSegment);
+                        return 0;
+                    }
                 }
             }
         }
@@ -1832,6 +1832,59 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             double dur = g_videoPlayer->GetDuration();
 
+            const int viewLeft = hasLeftArrow ? ARROW_WIDTH : 0;
+            const int viewRight = hasRightArrow ? rc.right - ARROW_WIDTH : rc.right;
+
+            if (g_enableMultiClipEditing && dur > 0.0 && !g_cutSegments.empty())
+            {
+                for (size_t i = 0; i < g_cutSegments.size(); ++i)
+                {
+                    const auto& segment = g_cutSegments[i];
+                    int sx = TimeToPixel(segment.start, rc, dur);
+                    int ex = TimeToPixel(segment.end, rc, dur);
+                    int segLeft = std::min(sx, ex);
+                    int segRight = std::max(sx, ex);
+                    if (segRight <= segLeft)
+                        segRight = segLeft + 1;
+
+                    int drawLeft = std::max(viewLeft, segLeft);
+                    int drawRight = std::min(viewRight, segRight);
+                    if (drawRight <= drawLeft)
+                        continue;
+
+                    bool isSelected = (static_cast<int>(i) == g_selectedCutSegment);
+
+                    // Background tint for the segment area
+                    RECT segRect = { drawLeft, 0, drawRight, rc.bottom };
+                    HBRUSH bgBrush = CreateSolidBrush(isSelected ? RGB(38, 70, 52) : RGB(30, 50, 40));
+                    FillRect(hdc, &segRect, bgBrush);
+                    DeleteObject(bgBrush);
+
+                    // Draw segment borders (left, right, top, bottom)
+                    HPEN borderPen = CreatePen(PS_SOLID, isSelected ? 2 : 1,
+                                               isSelected ? RGB(105, 240, 165) : RGB(52, 168, 83));
+                    HGDIOBJ oldPen = SelectObject(hdc, borderPen);
+
+                    if (segLeft >= viewLeft && segLeft <= viewRight)
+                    {
+                        MoveToEx(hdc, segLeft, 0, NULL);
+                        LineTo(hdc, segLeft, rc.bottom);
+                    }
+                    if (segRight >= viewLeft && segRight <= viewRight)
+                    {
+                        MoveToEx(hdc, segRight, 0, NULL);
+                        LineTo(hdc, segRight, rc.bottom);
+                    }
+                    MoveToEx(hdc, drawLeft, 0, NULL);
+                    LineTo(hdc, drawRight, 0);
+                    MoveToEx(hdc, drawLeft, rc.bottom - 1, NULL);
+                    LineTo(hdc, drawRight, rc.bottom - 1);
+
+                    SelectObject(hdc, oldPen);
+                    DeleteObject(borderPen);
+                }
+            }
+
             if (g_showAudioWaveform && dur > 0.0)
             {
                 std::vector<AudioWaveformTrack> waveforms;
@@ -1843,8 +1896,8 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 int trackCount = g_videoPlayer->GetAudioTrackCount();
                 if (!waveforms.empty() && trackCount > 0)
                 {
-                    const int left = hasLeftArrow ? ARROW_WIDTH : 0;
-                    const int right = hasRightArrow ? rc.right - ARROW_WIDTH : rc.right;
+                    const int left = viewLeft;
+                    const int right = viewRight;
                     const COLORREF trackColors[] = {
                         RGB(94, 169, 154),
                         RGB(213, 116, 101),
@@ -1969,20 +2022,6 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     }
                 }
             }
-
-            HBRUSH segmentBrush = CreateSolidBrush(RGB(35, 145, 95));
-            HBRUSH selectedSegmentBrush = CreateSolidBrush(RGB(70, 210, 135));
-            for (size_t i = 0; g_enableMultiClipEditing && i < g_cutSegments.size(); ++i)
-            {
-                const auto& segment = g_cutSegments[i];
-                int sx = TimeToPixel(segment.start, rc, dur);
-                int ex = TimeToPixel(segment.end, rc, dur);
-                RECT segmentRect = { sx, std::max(0L, rc.bottom - 8), std::max(sx + 1, ex), rc.bottom };
-                FillRect(hdc, &segmentRect,
-                         static_cast<int>(i) == g_selectedCutSegment ? selectedSegmentBrush : segmentBrush);
-            }
-            DeleteObject(segmentBrush);
-            DeleteObject(selectedSegmentBrush);
 
             double cur = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
             int x = TimeToPixel(cur, rc, dur);
