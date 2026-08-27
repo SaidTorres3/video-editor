@@ -100,10 +100,12 @@ bool UploadToB2(const std::wstring& filePath, std::string& outUrl, HWND progress
     std::wstring wname = filePath.substr(filePath.find_last_of(L"/\\") + 1);
     std::string name = Narrow(wname);
     char* esc = curl_easy_escape(curl, name.c_str(), 0);
+    std::string escapedName = esc ? esc : name;
+    if (esc) curl_free(esc);
 
     hdrs = nullptr;
     hdrs = curl_slist_append(hdrs, ("Authorization: " + uploadAuth).c_str());
-    hdrs = curl_slist_append(hdrs, (std::string("X-Bz-File-Name: ") + esc).c_str());
+    hdrs = curl_slist_append(hdrs, (std::string("X-Bz-File-Name: ") + escapedName).c_str());
     hdrs = curl_slist_append(hdrs, "Content-Type: b2/x-auto");
     hdrs = curl_slist_append(hdrs, "X-Bz-Content-Sha1: do_not_verify");
 
@@ -126,16 +128,15 @@ bool UploadToB2(const std::wstring& filePath, std::string& outUrl, HWND progress
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     res = curl_easy_perform(curl);
     curl_slist_free_all(hdrs);
-    curl_free(esc);
     fclose(fp);
     if (res != CURLE_OK) { curl_easy_cleanup(curl); return false; }
 
     if (!g_b2CustomUrl.empty()) {
         std::string base = Narrow(g_b2CustomUrl);
         if (base.back() != '/' && base.back() != '\\') base += '/';
-        outUrl = base + name;
+        outUrl = base + escapedName;
     } else {
-        outUrl = downloadUrl + "/file/" + Narrow(g_b2BucketName) + "/" + name;
+        outUrl = downloadUrl + "/file/" + Narrow(g_b2BucketName) + "/" + escapedName;
     }
     curl_easy_cleanup(curl);
     return true;

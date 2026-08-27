@@ -866,7 +866,7 @@ void ShowB2ConfigWindow(HWND parent)
 
     g_hB2Wnd = CreateWindowEx(0, L"B2ConfigClass", L"Backblaze B2 Configuration",
                               WS_CAPTION | WS_POPUPWINDOW | WS_VISIBLE | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_VSCROLL,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 650, 380,
+                              CW_USEDEFAULT, CW_USEDEFAULT, 650, 470,
                               parent, nullptr,
                               (HINSTANCE)GetWindowLongPtr(parent, GWLP_HINSTANCE), nullptr);
     ApplyDarkTheme(g_hB2Wnd);
@@ -933,20 +933,28 @@ void ShowB2ConfigWindow(HWND parent)
                                   inputX, 263, inputWidth, 22, g_hB2Wnd,
                                   (HMENU)ID_EDIT_B2_CUSTOM_URL, hInst, nullptr);
 
+    HWND hCustomUrlDesc = CreateWindow(L"STATIC",
+                                       L"Optional custom base URL or CDN domain (e.g. https://media.example.com).\r\n"
+                                       L"If set: creates links like https://media.example.com/video.mp4\r\n"
+                                       L"If empty: defaults to https://<downloadUrl>/file/<bucket-name>/video.mp4",
+                                       WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                       inputX, 290, 480, 68, g_hB2Wnd, nullptr, hInst, nullptr);
+
     ApplyDarkTheme(hKeyId);
     ApplyDarkTheme(hAppKey);
     ApplyDarkTheme(hBucketId);
     ApplyDarkTheme(hBucketName);
     ApplyDarkTheme(hCustomUrl);
+    ApplyDarkTheme(hCustomUrlDesc);
 
     // Bottom buttons
     HWND hOk = CreateWindow(L"BUTTON", L"OK",
                             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                            300, 300, 85, 28, g_hB2Wnd,
+                            300, 375, 85, 28, g_hB2Wnd,
                             (HMENU)IDOK, hInst, nullptr);
     HWND hCancel = CreateWindow(L"BUTTON", L"Cancel",
                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                395, 300, 85, 28, g_hB2Wnd,
+                                395, 375, 85, 28, g_hB2Wnd,
                                 (HMENU)IDCANCEL, hInst, nullptr);
 
     ApplyDarkTheme(hOk);
