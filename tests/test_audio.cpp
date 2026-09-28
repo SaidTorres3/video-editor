@@ -546,4 +546,107 @@ void RegisterAudioTests(TestSuite& suite) {
         TEST_ASSERT(progress >= -1 && progress <= 100,
                     "GetAudioWaveformProgress should return valid progress value (-1 to 100)");
     });
+
+    suite.addTest("AudioWaveform_OriginalReplacesPreview", []() {
+        const auto missing = WaveformCoverage::Missing;
+        const auto preview = WaveformCoverage::Preview;
+        const auto primary = WaveformCoverage::Primary;
+        AudioWaveformTrack original{ 4, { 0.2f, 0.0f, 0.0f, 0.0f },
+            { 1, 0, 0, 0 }, { primary, primary, missing, missing } };
+        AudioWaveformTrack ahead{ 4, { 0.9f, 0.9f, 0.6f, 0.8f },
+            { 0, 1, 1, 1 }, { preview, preview, preview, preview } };
+        std::vector<AudioWaveformTrack> cache{ original };
+        MergeAudioWaveforms(cache, { ahead });
+        TEST_ASSERT_EQ(cache[0].samples[0], 0.2f, "preview cannot overwrite original");
+        TEST_ASSERT_EQ(cache[0].samples[1], 0.0f, "original silence is covered, not missing");
+        TEST_ASSERT_EQ(cache[0].samples[3], 0.8f, "preview fills ahead of original");
+        original.samples[2] = 0.3f;
+        original.coverage[2] = primary;
+        MergeAudioWaveforms(cache, { original });
+        TEST_ASSERT_EQ(cache[0].samples[2], 0.3f, "original progressively replaces preview");
+        TEST_ASSERT_EQ(cache[0].probableSpeech[2], 0, "original speech classification replaces preview");
+        TEST_ASSERT_EQ(cache[0].samples[3], 0.8f, "original must preserve preview farther ahead");
+        MergeAudioWaveforms(cache, { ahead });
+        TEST_ASSERT_EQ(cache[0].samples[2], 0.3f, "later preview publications cannot undo original");
+    });
+
+    suite.addTest("AudioWaveform_RetargetPreservesIslandsAndTracks", []() {
+        const auto missing = WaveformCoverage::Missing;
+        const auto preview = WaveformCoverage::Preview;
+        AudioWaveformTrack middle{ 7, { 0, 0.4f, 0, 0 },
+            { 0, 1, 0, 0 }, { missing, preview, missing, missing } };
+        AudioWaveformTrack end{ 7, { 0, 0, 0, 0.7f },
+            { 0, 0, 0, 1 }, { missing, missing, missing, preview } };
+        AudioWaveformTrack other = end;
+        other.streamIndex = 2;
+        std::vector<AudioWaveformTrack> cache;
+        MergeAudioWaveforms(cache, { middle });
+        MergeAudioWaveforms(cache, { other, end });
+        TEST_ASSERT_EQ(cache.size(), size_t(2), "tracks are matched by stream, not list order");
+        TEST_ASSERT_EQ(cache[0].samples[1], 0.4f, "retarget retains previously generated island");
+        TEST_ASSERT_EQ(cache[0].samples[3], 0.7f, "new target appears independently");
+        TEST_ASSERT(cache[0].coverage[2] == missing, "gap between islands stays ungenerated");
+    });
+
+    suite.addTest("AudioWaveform_SeekDecodesToEnd", []() {
+        std::vector<AudioWaveformTrack> original, preview, retargeted;
+        TEST_ASSERT(BuildAudioWaveformsForTesting(g_testVideoPath, 5.0, 0.0, original),
+                    "original waveform pass must decode");
+        const int progress = GetAudioWaveformProgress();
+        TEST_ASSERT(BuildAudioWaveformsForTesting(g_testVideoPath, 5.0, 2.5, preview),
+                    "parallel pass must seek and decode from midpoint");
+        TEST_ASSERT(BuildAudioWaveformsForTesting(g_testVideoPath, 5.0, 3.75, retargeted),
+                    "parallel pass must support another target");
+        TEST_ASSERT_EQ(GetAudioWaveformProgress(), progress,
+                       "preview must not change original progress");
+        TEST_ASSERT_EQ(preview.size(), original.size(), "seek must generate every audio track");
+        TEST_ASSERT(!preview.empty(), "test source must have audio");
+        for (const auto& track : preview)
+        {
+            const size_t halfway = track.samples.size() / 2;
+            TEST_ASSERT(track.coverage[halfway - 1] == WaveformCoverage::Missing,
+                        "seek preroll must not claim coverage before cursor");
+            TEST_ASSERT(track.coverage[halfway] == WaveformCoverage::Preview &&
+                        track.coverage.back() == WaveformCoverage::Preview,
+                        "preview must cover cursor through end");
+            TEST_ASSERT(std::any_of(track.samples.begin() + halfway, track.samples.end(),
+                        [](float sample) { return sample > 0.0f; }),
+                        "seek must decode real audio, not just mark coverage");
+        }
+        MergeAudioWaveforms(preview, retargeted);
+        MergeAudioWaveforms(preview, original);
+        for (size_t i = 0; i < original.size(); ++i)
+        {
+            TEST_ASSERT(preview[i].samples == original[i].samples &&
+                        preview[i].coverage == original[i].coverage &&
+                        preview[i].probableSpeech == original[i].probableSpeech,
+                        "final result must exactly match uninterrupted original pass");
+        }
+    });
+
+    suite.addTest("AudioWaveform_CancelStaleRequests", []() {
+        TEST_ASSERT(VerifyWaveformCancellationForTesting(),
+                    "retarget cancels only preview; refresh cancels both and rejects stale results");
+    });
+
+    suite.addTest("AudioWaveform_ConcurrentDecoders", []() {
+        std::vector<AudioWaveformTrack> original, preview, reference;
+        bool originalBuilt = false;
+        bool previewBuilt = false;
+        std::thread originalWorker([&]() {
+            originalBuilt = BuildAudioWaveformsForTesting(g_testVideoPath, 5.0, 0.0, original);
+        });
+        std::thread previewWorker([&]() {
+            previewBuilt = BuildAudioWaveformsForTesting(g_testVideoPath, 5.0, 2.5, preview);
+        });
+        originalWorker.join();
+        previewWorker.join();
+        TEST_ASSERT(originalBuilt && previewBuilt, "both independent decoders must finish");
+        TEST_ASSERT(BuildAudioWaveformsForTesting(g_testVideoPath, 5.0, 0.0, reference),
+                    "reference pass must decode");
+        TEST_ASSERT_EQ(original.size(), reference.size(), "concurrency preserves all tracks");
+        for (size_t i = 0; i < reference.size(); ++i)
+            TEST_ASSERT(original[i].samples == reference[i].samples,
+                        "parallel seek must not affect original decoding");
+    });
 }

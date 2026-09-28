@@ -8,6 +8,7 @@
 #include "options_window.h"
 #include "editing.h"
 #include "ten_vad_embedded.h"
+#include "audio_waveform_cache.h"
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
@@ -156,15 +157,6 @@ static std::thread                g_thumbThread;
 // while keeping the cache and repaint cost very small.
 static const int                  WAVEFORM_BIN_COUNT = 4096;
 static const UINT                 WM_AUDIO_WAVEFORM_READY = WM_APP + 20;
-struct AudioWaveformTrack
-{
-    int streamIndex = -1;
-    size_t validBins = 0;
-    std::vector<float> samples;
-    // One entry per waveform bin. A non-zero value means the lightweight
-    // neural VAD found a temporally stable speech segment around that point.
-    std::vector<uint8_t> probableSpeech;
-};
 static std::mutex                 g_waveformCacheMutex;
 static std::vector<AudioWaveformTrack> g_waveformCache;
 static std::mutex                 g_waveformRequestMutex;
@@ -177,6 +169,87 @@ static std::atomic<bool>          g_waveformThreadExit{false};
 static std::atomic<int>           g_waveformProgress{-1};
 static HANDLE                     g_waveformRequestEvent = nullptr;
 static std::thread                g_waveformThread;
+static HANDLE                     g_waveformPreviewEvent = nullptr;
+static std::thread                g_waveformPreviewThread;
+static std::atomic<std::uint64_t>  g_waveformPreviewRevision{0};
+// Protected by the cache mutex, including changes to generation/revision.
+static double                     g_waveformPreviewStart = 0.0;
+static int                        g_waveformLastCursorBin = -1;
+static bool                       g_waveformPrimaryComplete = true;
+static bool                       g_waveformPreviewPending = false;
+
+struct WaveformJob
+{
+    std::uint64_t generation = 0;
+    std::uint64_t previewRevision = 0; // Zero identifies the uninterrupted pass.
+    double startTime = 0.0;
+
+    bool Cancelled() const
+    {
+        return g_waveformThreadExit.load() || g_waveformGeneration.load() != generation ||
+            (previewRevision != 0 && g_waveformPreviewRevision.load() != previewRevision);
+    }
+};
+
+static void PublishAudioWaveforms(const WaveformJob& job,
+                                  const std::vector<AudioWaveformTrack>& tracks,
+                                  bool complete)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+        if (job.Cancelled())
+            return;
+        if (complete && job.previewRevision == 0)
+        {
+            // The complete original pass also replaces gaps and normalization.
+            g_waveformCache = tracks;
+            g_waveformPrimaryComplete = true;
+            g_waveformPreviewRevision.fetch_add(1);
+            g_waveformProgress.store(-1);
+        }
+        else
+        {
+            MergeAudioWaveforms(g_waveformCache, tracks);
+        }
+    }
+    if (g_hTimeline)
+        PostMessage(g_hTimeline, WM_AUDIO_WAVEFORM_READY, 0, 0);
+}
+
+static void RequestWaveformsAtCursor(double time, double duration)
+{
+    if (!g_showAudioWaveform || !g_waveformPreviewEvent ||
+        !std::isfinite(time) || duration <= 0.0)
+        return;
+    const int bin = std::clamp(static_cast<int>(
+        std::clamp(time / duration, 0.0, 1.0) * WAVEFORM_BIN_COUNT),
+        0, WAVEFORM_BIN_COUNT - 1);
+    {
+        std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+        if (g_waveformPrimaryComplete || bin == g_waveformLastCursorBin)
+            return;
+        g_waveformLastCursorBin = bin;
+        if (!g_waveformCache.empty() && std::all_of(
+                g_waveformCache.begin(), g_waveformCache.end(), [bin](const auto& track) {
+                    return track.coverage[bin] != WaveformCoverage::Missing;
+                }))
+            return;
+        // Starting on a bin boundary avoids leaving the cursor's bin incomplete.
+        g_waveformPreviewStart = bin * duration / WAVEFORM_BIN_COUNT;
+        g_waveformPreviewRevision.fetch_add(1);
+        g_waveformPreviewPending = true;
+    }
+    SetEvent(g_waveformPreviewEvent);
+}
+
+static void UpdateWaveformProgress(const WaveformJob& job, int percent)
+{
+    if (job.previewRevision != 0)
+        return;
+    std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+    if (!job.Cancelled())
+        g_waveformProgress.store(percent);
+}
 
 int GetAudioWaveformProgress()
 {
@@ -317,11 +390,11 @@ static double ReadNormalizedAudioSample(const AVFrame* frame, int channel, int s
 }
 
 static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
-                                std::uint64_t generation,
+                                const WaveformJob& job,
                                 bool highlightSpeech,
                                 std::vector<AudioWaveformTrack>& result)
 {
-    if (filename.empty() || duration <= 0.0)
+    if (filename.empty() || duration <= 0.0 || job.Cancelled())
         return false;
 
     int utf8Size = WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -331,7 +404,13 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
     WideCharToMultiByte(CP_UTF8, 0, filename.c_str(), -1,
                         utf8Filename.data(), utf8Size, nullptr, nullptr);
 
-    AVFormatContext* formatContext = nullptr;
+    AVFormatContext* formatContext = avformat_alloc_context();
+    if (!formatContext)
+        return false;
+    formatContext->interrupt_callback.callback = [](void* opaque) -> int {
+        return static_cast<const WaveformJob*>(opaque)->Cancelled() ? 1 : 0;
+    };
+    formatContext->interrupt_callback.opaque = const_cast<WaveformJob*>(&job);
     if (avformat_open_input(&formatContext, utf8Filename.c_str(), nullptr, nullptr) < 0)
         return false;
     if (avformat_find_stream_info(formatContext, nullptr) < 0)
@@ -419,6 +498,21 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
     bool cancelled = !packet || !audioFrame;
     double maxProcessedTime = 0.0;
 
+    if (job.startTime > 0.0)
+    {
+        const int64_t seekTimestamp = static_cast<int64_t>(
+            (job.startTime + startTimeOffset) * AV_TIME_BASE);
+        // Each worker owns its demuxer and decoders. Seeking here never moves
+        // playback or the original waveform pass.
+        if (av_seek_frame(formatContext, -1, seekTimestamp, AVSEEK_FLAG_BACKWARD) < 0)
+            cancelled = true;
+        for (auto& decoder : decoders)
+        {
+            avcodec_flush_buffers(decoder.codecContext);
+            decoder.nextTime = job.startTime;
+        }
+    }
+
     auto consumeFrames = [&](WaveformDecoder& decoder, AVPacket* inputPacket)
     {
         if (avcodec_send_packet(decoder.codecContext, inputPacket) < 0)
@@ -426,7 +520,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
 
         while (!cancelled && avcodec_receive_frame(decoder.codecContext, audioFrame) == 0)
         {
-            if (g_waveformThreadExit.load() || g_waveformGeneration.load() != generation)
+            if (job.Cancelled())
             {
                 cancelled = true;
                 break;
@@ -453,11 +547,8 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
             if (decoder.nextTime > maxProcessedTime && duration > 0.0)
             {
                 maxProcessedTime = decoder.nextTime;
-                if (g_waveformGeneration.load() == generation)
-                {
-                    int pct = std::clamp(static_cast<int>((maxProcessedTime / duration) * 100.0), 0, 99);
-                    g_waveformProgress.store(pct);
-                }
+                int pct = std::clamp(static_cast<int>((maxProcessedTime / duration) * 100.0), 0, 99);
+                UpdateWaveformProgress(job, pct);
             }
 
             // Neural speech detection runs in the waveform decoding pass, so
@@ -577,7 +668,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
             for (int sample = 0; sample < audioFrame->nb_samples; sample += stride)
             {
                 double time = frameStart + sample / static_cast<double>(sampleRate);
-                if (time < 0.0 || time >= duration)
+                if (time < job.startTime || time >= duration)
                     continue;
 
                 double channelEnergy = 0.0;
@@ -597,7 +688,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         }
     };
 
-    auto buildTracksFromDecoders = [&](std::vector<AudioWaveformTrack>& outTracks) {
+    auto buildTracksFromDecoders = [&](std::vector<AudioWaveformTrack>& outTracks, bool complete = false) {
         outTracks.clear();
         outTracks.reserve(decoders.size());
         for (auto& decoder : decoders)
@@ -606,17 +697,16 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
             track.streamIndex = decoder.streamIndex;
             track.samples.assign(WAVEFORM_BIN_COUNT, 0.0f);
             track.probableSpeech.assign(WAVEFORM_BIN_COUNT, 0);
-
-            size_t maxValidBin = 0;
-            for (int i = WAVEFORM_BIN_COUNT - 1; i >= 0; --i)
-            {
-                if (decoder.sampleCounts[i] > 0)
-                {
-                    maxValidBin = static_cast<size_t>(i + 1);
-                    break;
-                }
-            }
-            track.validBins = maxValidBin;
+            track.coverage.assign(WAVEFORM_BIN_COUNT, WaveformCoverage::Missing);
+            const int firstBin = std::clamp(static_cast<int>(std::llround(
+                job.startTime * WAVEFORM_BIN_COUNT / duration)), 0, WAVEFORM_BIN_COUNT);
+            // Only publish bins whose full time span has been decoded. At EOF,
+            // cover trailing silence too, including audio shorter than video.
+            const int endBin = complete ? WAVEFORM_BIN_COUNT : std::clamp(
+                static_cast<int>(std::floor(decoder.nextTime * WAVEFORM_BIN_COUNT / duration)),
+                firstBin, WAVEFORM_BIN_COUNT);
+            std::fill(track.coverage.begin() + firstBin, track.coverage.begin() + endBin,
+                job.previewRevision == 0 ? WaveformCoverage::Primary : WaveformCoverage::Preview);
 
             std::vector<float> nonSilent;
             nonSilent.reserve(WAVEFORM_BIN_COUNT);
@@ -752,7 +842,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
 
     while (!cancelled && av_read_frame(formatContext, packet) >= 0)
     {
-        if (g_waveformThreadExit.load() || g_waveformGeneration.load() != generation)
+        if (job.Cancelled())
         {
             cancelled = true;
             av_packet_unref(packet);
@@ -765,11 +855,8 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
             if (packetTime > maxProcessedTime && packetTime <= duration)
             {
                 maxProcessedTime = packetTime;
-                if (g_waveformGeneration.load() == generation)
-                {
-                    int pct = std::clamp(static_cast<int>((maxProcessedTime / duration) * 100.0), 0, 99);
-                    g_waveformProgress.store(pct);
-                }
+                int pct = std::clamp(static_cast<int>((maxProcessedTime / duration) * 100.0), 0, 99);
+                UpdateWaveformProgress(job, pct);
             }
         }
 
@@ -784,19 +871,14 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         av_packet_unref(packet);
 
         ULONGLONG now = GetTickCount64();
-        if (now - lastPublishTime >= 1000)
+        if (now - lastPublishTime >= (job.previewRevision != 0 ? 250 : 1000))
         {
             lastPublishTime = now;
-            if (g_waveformGeneration.load() == generation)
+            if (!job.Cancelled())
             {
                 std::vector<AudioWaveformTrack> partialWaveforms;
                 buildTracksFromDecoders(partialWaveforms);
-                {
-                    std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
-                    g_waveformCache = std::move(partialWaveforms);
-                }
-                if (g_hTimeline)
-                    PostMessage(g_hTimeline, WM_AUDIO_WAVEFORM_READY, 0, 0);
+                PublishAudioWaveforms(job, partialWaveforms, false);
             }
         }
     }
@@ -805,12 +887,10 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
     {
         for (auto& decoder : decoders)
             consumeFrames(decoder, nullptr);
-        if (g_waveformGeneration.load() == generation)
-        {
-            g_waveformProgress.store(100);
-        }
+        UpdateWaveformProgress(job, 100);
     }
 
+    cancelled = cancelled || job.Cancelled();
     if (cancelled)
     {
         av_frame_free(&audioFrame);
@@ -826,7 +906,7 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
         return false;
     }
 
-    buildTracksFromDecoders(result);
+    buildTracksFromDecoders(result, true);
 
     av_frame_free(&audioFrame);
     av_packet_free(&packet);
@@ -841,55 +921,101 @@ static bool BuildAudioWaveforms(const std::wstring& filename, double duration,
     return true;
 }
 
-static void WaveformThreadFunc()
+#ifdef VIDEO_EDITOR_TESTING
+bool BuildAudioWaveformsForTesting(const std::wstring& filename, double duration,
+                                  double startTime, std::vector<AudioWaveformTrack>& result)
 {
+    WaveformJob job;
+    job.generation = g_waveformGeneration.load();
+    job.startTime = startTime;
+    if (startTime > 0.0)
+        job.previewRevision = g_waveformPreviewRevision.fetch_add(1) + 1;
+    return BuildAudioWaveforms(filename, duration, job, false, result);
+}
+
+bool VerifyWaveformCancellationForTesting()
+{
+    WaveformJob primary;
+    primary.generation = g_waveformGeneration.load();
+    WaveformJob preview = primary;
+    preview.previewRevision = g_waveformPreviewRevision.fetch_add(1) + 1;
+    g_waveformPreviewRevision.fetch_add(1);
+    const bool retargetOnlyCancelsPreview = preview.Cancelled() && !primary.Cancelled();
+    // Rejected stale publications must not replace even an empty cache.
+    AudioWaveformTrack stale;
+    stale.streamIndex = 123;
+    PublishAudioWaveforms(preview, { stale }, false);
+    bool staleRejected;
+    {
+        std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+        staleRejected = std::none_of(g_waveformCache.begin(), g_waveformCache.end(),
+            [](const auto& track) { return track.streamIndex == 123; });
+        g_waveformGeneration.fetch_add(1);
+        g_waveformCache.clear();
+    }
+    UpdateWaveformProgress(primary, 75);
+    const bool oldProgressRejected = g_waveformProgress.load() != 75;
+    return retargetOnlyCancelsPreview && staleRejected && primary.Cancelled() && oldProgressRejected;
+}
+#endif
+
+static void WaveformThreadFunc(bool preview)
+{
+    const HANDLE requestEvent = preview ? g_waveformPreviewEvent : g_waveformRequestEvent;
     while (!g_waveformThreadExit.load())
     {
-        if (WaitForSingleObject(g_waveformRequestEvent, INFINITE) != WAIT_OBJECT_0)
+        if (WaitForSingleObject(requestEvent, INFINITE) != WAIT_OBJECT_0)
             continue;
         if (g_waveformThreadExit.load())
             break;
 
         std::wstring filename;
         double duration = 0.0;
-        std::uint64_t generation = 0;
+        WaveformJob job;
         bool highlightSpeech = false;
         {
             std::lock_guard<std::mutex> lock(g_waveformRequestMutex);
             filename = g_waveformRequestFile;
             duration = g_waveformRequestDuration;
-            generation = g_waveformRequestGeneration;
+            job.generation = g_waveformRequestGeneration;
             highlightSpeech = g_waveformRequestHighlightSpeech;
+        }
+        if (preview)
+        {
+            std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+            if (g_waveformPrimaryComplete || !g_waveformPreviewPending || job.Cancelled())
+                continue;
+            g_waveformPreviewPending = false;
+            job.previewRevision = g_waveformPreviewRevision.load();
+            job.startTime = g_waveformPreviewStart;
         }
 
         // Optional speech coloring is derived in the same pass. With it
         // disabled, no neural runtime or 16 kHz speech resampler is created.
         std::vector<AudioWaveformTrack> waveforms;
         bool built = BuildAudioWaveforms(
-            filename, duration, generation, highlightSpeech, waveforms);
-        if (built && !g_waveformThreadExit.load() &&
-            g_waveformGeneration.load() == generation)
+            filename, duration, job, highlightSpeech, waveforms);
+        if (built)
         {
-            {
-                std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
-                g_waveformCache = std::move(waveforms);
-            }
-            g_waveformProgress.store(-1);
-            if (g_hTimeline)
-                PostMessage(g_hTimeline, WM_AUDIO_WAVEFORM_READY, 0, 0);
+            PublishAudioWaveforms(job, waveforms, true);
         }
         else
         {
-            g_waveformProgress.store(-1);
+            UpdateWaveformProgress(job, -1);
         }
     }
 }
 
 void RefreshAudioWaveformPreview()
 {
-    std::uint64_t generation = g_waveformGeneration.fetch_add(1) + 1;
+    std::uint64_t generation;
     {
         std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+        generation = g_waveformGeneration.fetch_add(1) + 1;
+        g_waveformPreviewRevision.fetch_add(1);
+        g_waveformPrimaryComplete = true;
+        g_waveformPreviewPending = false;
+        g_waveformLastCursorBin = 0;
         g_waveformCache.clear();
     }
     if (g_hTimeline)
@@ -902,14 +1028,17 @@ void RefreshAudioWaveformPreview()
         return;
     }
 
-    g_waveformProgress.store(0);
-
     {
         std::lock_guard<std::mutex> lock(g_waveformRequestMutex);
         g_waveformRequestFile = g_videoPlayer->loadedFilename;
         g_waveformRequestDuration = g_videoPlayer->GetDuration();
         g_waveformRequestGeneration = generation;
         g_waveformRequestHighlightSpeech = g_highlightSpeechWaveforms;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
+        g_waveformPrimaryComplete = false;
+        g_waveformProgress.store(0);
     }
     SetEvent(g_waveformRequestEvent);
 }
@@ -1100,7 +1229,10 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_waveformThreadExit.store(false);
         g_waveformRequestEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (g_waveformRequestEvent)
-            g_waveformThread = std::thread(WaveformThreadFunc);
+            g_waveformThread = std::thread(WaveformThreadFunc, false);
+        g_waveformPreviewEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (g_waveformPreviewEvent)
+            g_waveformPreviewThread = std::thread(WaveformThreadFunc, true);
         return 0;
     }
     case WM_DESTROY:
@@ -1108,8 +1240,17 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_waveformThreadExit.store(true);
         if (g_waveformRequestEvent)
             SetEvent(g_waveformRequestEvent);
+        if (g_waveformPreviewEvent)
+            SetEvent(g_waveformPreviewEvent);
         if (g_waveformThread.joinable())
             g_waveformThread.join();
+        if (g_waveformPreviewThread.joinable())
+            g_waveformPreviewThread.join();
+        if (g_waveformPreviewEvent)
+        {
+            CloseHandle(g_waveformPreviewEvent);
+            g_waveformPreviewEvent = nullptr;
+        }
         if (g_waveformRequestEvent)
         {
             CloseHandle(g_waveformRequestEvent);
@@ -1887,6 +2028,8 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             if (g_showAudioWaveform && dur > 0.0)
             {
+                RequestWaveformsAtCursor(g_previewSeekTime >= 0.0
+                    ? g_previewSeekTime : g_videoPlayer->GetCurrentTime(), dur);
                 std::vector<AudioWaveformTrack> waveforms;
                 {
                     std::lock_guard<std::mutex> lock(g_waveformCacheMutex);
@@ -1930,95 +2073,47 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         int centerY = (laneTop + laneBottom) / 2;
                         int maxAmplitude = std::max(1, (laneBottom - laneTop - 2) / 2);
 
-                        size_t validBinCount = waveformIt->validBins > 0 ? waveformIt->validBins : waveformIt->samples.size();
                         std::vector<POINT> points;
-                        points.reserve(static_cast<size_t>(std::max(0, right - left) / 2 + 2));
+                        std::vector<bool> covered, speech;
+                        auto appendPoint = [&](int px) {
+                            const double time = PixelToTime(px, rc, dur);
+                            const int bin = static_cast<int>(
+                                time * waveformIt->samples.size() / dur);
+                            const bool available = bin >= 0 &&
+                                static_cast<size_t>(bin) < waveformIt->coverage.size() &&
+                                waveformIt->coverage[bin] != WaveformCoverage::Missing;
+                            const float scaled = available
+                                ? std::min(1.0f, waveformIt->samples[bin]) : 0.0f;
+                            points.push_back({ px, centerY - static_cast<int>(
+                                std::round(scaled * maxAmplitude)) });
+                            covered.push_back(available);
+                            speech.push_back(available && waveformIt->probableSpeech[bin] != 0);
+                        };
                         for (int px = left; px < right; px += 2)
-                        {
-                            double time = PixelToTime(px, rc, dur);
-                            int sampleIndex = static_cast<int>(
-                                time * waveformIt->samples.size() / dur);
-                            if (sampleIndex < 0) continue;
-                            if (static_cast<size_t>(sampleIndex) >= validBinCount)
-                                break;
-                            float scaled = std::min(1.0f, waveformIt->samples[sampleIndex]);
-                            int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
-                            points.push_back({ px, centerY - amplitude });
-                        }
+                            appendPoint(px);
                         if (!points.empty() && points.back().x != right - 1)
-                        {
-                            double time = PixelToTime(right - 1, rc, dur);
-                            int sampleIndex = static_cast<int>(
-                                time * waveformIt->samples.size() / dur);
-                            if (sampleIndex >= 0 && static_cast<size_t>(sampleIndex) < validBinCount)
-                            {
-                                float scaled = std::min(1.0f, waveformIt->samples[sampleIndex]);
-                                int amplitude = static_cast<int>(std::round(scaled * maxAmplitude));
-                                points.push_back({ right - 1, centerY - amplitude });
-                            }
-                        }
+                            appendPoint(right - 1);
 
-                        if (points.size() >= 2)
-                        {
-                            HPEN waveformPen = CreatePen(
-                                PS_SOLID, 1,
-                                trackColors[trackIndex % _countof(trackColors)]);
-                            HGDIOBJ oldPen = SelectObject(hdc, waveformPen);
-                            Polyline(hdc, points.data(), static_cast<int>(points.size()));
-                            SelectObject(hdc, oldPen);
-                            DeleteObject(waveformPen);
-                        }
-
-                        if (!waveformIt->probableSpeech.empty())
-                        {
-                            // Repaint only the waveform sections classified as
-                            // probable speech. No extra bars or icons compete
-                            // with the audio trace.
-                            HPEN speechPen =
-                                CreatePen(PS_SOLID, 2, RGB(105, 226, 154));
-                            HGDIOBJ oldSpeechPen =
-                                SelectObject(hdc, speechPen);
-                            size_t speechStart = points.size();
+                        // Draw each available stretch separately so ungenerated
+                        // regions are not joined by a misleading flat line.
+                        auto drawSegments = [&](const std::vector<bool>& visible,
+                                                COLORREF color, int width) {
+                            HPEN pen = CreatePen(PS_SOLID, width, color);
+                            HGDIOBJ oldPen = SelectObject(hdc, pen);
+                            size_t start = 0;
                             for (size_t i = 0; i <= points.size(); ++i)
                             {
-                                bool speech = false;
-                                if (i < points.size())
-                                {
-                                    double time =
-                                        PixelToTime(points[i].x, rc, dur);
-                                    int speechIndex = std::clamp(
-                                        static_cast<int>(
-                                            time *
-                                            waveformIt->probableSpeech.size() /
-                                            dur),
-                                        0, static_cast<int>(
-                                            waveformIt->probableSpeech.size()) -
-                                            1);
-                                    speech = waveformIt
-                                                 ->probableSpeech[speechIndex] !=
-                                             0;
-                                }
-
-                                if (speech && speechStart == points.size())
-                                {
-                                    speechStart = i;
-                                }
-                                else if (!speech &&
-                                         speechStart != points.size())
-                                {
-                                    const size_t pointCount = i - speechStart;
-                                    if (pointCount >= 2)
-                                    {
-                                        Polyline(
-                                            hdc, points.data() + speechStart,
-                                            static_cast<int>(pointCount));
-                                    }
-                                    speechStart = points.size();
-                                }
+                                if (i < points.size() && visible[i])
+                                    continue;
+                                if (i - start >= 2)
+                                    Polyline(hdc, points.data() + start, static_cast<int>(i - start));
+                                start = i + 1;
                             }
-                            SelectObject(hdc, oldSpeechPen);
-                            DeleteObject(speechPen);
-                        }
+                            SelectObject(hdc, oldPen);
+                            DeleteObject(pen);
+                        };
+                        drawSegments(covered, trackColors[trackIndex % _countof(trackColors)], 1);
+                        drawSegments(speech, RGB(105, 226, 154), 2);
                     }
                 }
             }

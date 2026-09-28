@@ -23,3 +23,13 @@ void RefreshAudioWaveformPreview();
 // Returns the current progress percentage (0-100) of audio waveform decoding, or -1 if idle/complete.
 int GetAudioWaveformProgress();
 
+#ifdef VIDEO_EDITOR_TESTING
+#include "audio_waveform_cache.h"
+#include <string>
+
+// Exercise the production decoder without creating timeline windows/workers.
+bool BuildAudioWaveformsForTesting(const std::wstring& filename, double duration,
+                                  double startTime, std::vector<AudioWaveformTrack>& result);
+bool VerifyWaveformCancellationForTesting();
+#endif
+
