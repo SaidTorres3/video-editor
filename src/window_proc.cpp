@@ -8,6 +8,7 @@
 #include "editing.h"
 #include "upload_dialog.h"
 #include "utils.h"
+#include "media_tools.h"
 #include <windowsx.h>
 #include <cmath>
 #include <cstdlib>
@@ -66,6 +67,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                              DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
         CreateControls(hwnd);
+        AddMediaToolsMenu(hwnd);
         g_videoPlayer = new VideoPlayer(hwnd);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)g_videoPlayer);
         SetTimer(hwnd, 1006, 100, nullptr); // ID_TIMER_UPDATE
@@ -78,6 +80,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_COMMAND:
         switch (LOWORD(wParam))
         {
+        case ID_MEDIA_ALIGN:
+            AlignAudioTracks(hwnd);
+            break;
+        case ID_MEDIA_OPENFX:
+            ApplyOpenFx(hwnd);
+            break;
         case 1001: // ID_BUTTON_OPEN
             if (!g_isExporting)
                 OpenVideoFile(hwnd);

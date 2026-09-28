@@ -297,6 +297,15 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
     }
     DebugLog("Output context allocated");
 
+    // Working copies may use FFV1 video or PCM audio. Convert only streams that
+    // the selected output container cannot carry (e.g. FFV1/float PCM -> MP4).
+    if (avformat_query_codec(outputCtx->oformat,
+            inputCtx->streams[m_player->videoStreamIndex]->codecpar->codec_id,
+            FF_COMPLIANCE_NORMAL) == 0) {
+        convertH264 = true;
+        needReencode = true;
+    }
+
     std::vector<int> streamMapping(inputCtx->nb_streams, -1);
     int mergedAudioIndex = -1;
     for (unsigned i = 0; i < inputCtx->nb_streams; ++i) {
@@ -458,7 +467,9 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
                 success = false;
                 goto cleanup;
             }
-        } else if (needReencode && inStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+        } else if (inStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
+                   (needReencode || avformat_query_codec(outputCtx->oformat,
+                       inStream->codecpar->codec_id, FF_COMPLIANCE_NORMAL) == 0)) {
             if (mergeAudio) {
                 // We'll create a single output audio stream later
                 MergeTrack mt{};
@@ -500,7 +511,9 @@ bool VideoCutter::CutVideo(const std::wstring& outputFilename, const std::vector
                         break;
                     }
                 }
-                if (isolate || applyExportMasterGain) {
+                if (isolate || applyExportMasterGain ||
+                    avformat_query_codec(outputCtx->oformat, inStream->codecpar->codec_id,
+                                         FF_COMPLIANCE_NORMAL) == 0) {
                     IsolationTrack it{};
                     it.index = i;
                     it.volume = vol * exportMasterGainLinear;

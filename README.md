@@ -54,6 +54,57 @@ All source files now reside under the `src/` directory to keep the project organ
 - **Optional Cloud Upload**: Exported files can be uploaded automatically to Backblaze B2 or catbox.moe and the download URL is shown
 - **Different H.264 providers**: Select between exporting with CPU (libx264), NVIDIA (nvenc) or AMD (amf).
 
+### Audio Alignment and OpenFX
+
+The **Media** menu provides two operations that save and open a new Matroska
+working copy. Originals and existing destination files are never overwritten.
+Opening the result resets the current cut and crop selections, so process the
+source before editing. Both operations run in a cancellable background worker.
+The saved result works with ordinary playback, waveforms, seeking, cutting and
+export; no plugin is required to play a rendered copy.
+
+- **Align audio tracks to selected track…**: select the reference in the audio
+  track list, then run this command. The editor compares shared audio in the
+  first 120 seconds and searches offsets up to 30 seconds in either direction.
+  It reports each proposed adjustment and match strength before saving. Positive
+  offsets delay audio; negative offsets advance it. Unrelated, silent or
+  ambiguous tracks remain unchanged. Video is copied without re-encoding;
+  audio is stored as uncompressed float PCM with timestamp gaps represented by
+  silence, which can make large files.
+  This operates on streams in the loaded file, estimates a single fixed offset,
+  and does not correct clock drift or import separate recordings. Matching uses
+  normalized waveform correlation, not acoustic fingerprints; recordings with
+  substantial noise, reverberation or different mixes may not match reliably.
+- **Render OpenFX effect to copy…**: choose an installed Windows x64 `.ofx`
+  binary inside its `.ofx.bundle/Contents/Win64` folder, select an effect if the
+  binary contains several, and edit its exposed parameter values. Rendering uses
+  the upstream OpenFX host suites and writes FFV1 video with the source audio
+  copied. The initial host supports progressive, full-frame CPU RGBA 8-bit
+  Filter effects with one source and constant parameters. GPU-only effects,
+  temporal frame access, additional required inputs, custom parameter types,
+  animation and custom interact controls are unsupported. This is an offline
+  render, not a live effect stack. Processing converts video to RGBA8, so it is
+  intended for SDR material rather than a high-bit-depth/HDR finishing workflow.
+  Lossless encoding of the processed RGBA8 frames can make large working files.
+
+These operations retain audio/video streams and compatible subtitle streams.
+Container chapters, attachments and data streams are not carried into working
+copies. Unsupported Matroska codecs cause an error without publishing a partial
+output. Select only trusted plugins: OpenFX bundles execute native code in the
+editor process.
+
+When exporting a working copy to a container that cannot store its codecs
+(for example, MP4), incompatible video and audio streams automatically convert
+to H.264 and AAC, even when **Copy Codec** is selected.
+
+FFmpeg remains the media engine for decoding, resampling, FFT correlation,
+encoding and muxing. The OpenFX API and HostSupport library are pinned and
+vendored; see [vendor/openfx/README.video-editor.md](vendor/openfx/README.video-editor.md).
+[AudioAlign](https://github.com/protyposis/AudioAlign),
+[Aurio](https://github.com/protyposis/Aurio) and the
+[HyMPS collection](https://github.com/FORARTfe/HyMPS) informed the feature direction.
+Aurio is not bundled; the native matcher uses the existing FFmpeg dependency.
+
 ## Technical Implementation
 
 ### Video Rendering Architecture
@@ -234,9 +285,9 @@ export operations.
 ## Future Enhancements
 
 - Audio effects and filters
-- Audio track synchronization controls
+- Multi-file audio alignment and recording-clock drift correction
 - Export audio tracks separately
-- Audio waveform visualization
+- Live OpenFX preview, animated parameters and additional plugin contexts
 - Surround sound support
 
 ## License

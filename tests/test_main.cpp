@@ -80,6 +80,7 @@ void RegisterAudioTests(TestSuite& suite);
 void RegisterCropTests(TestSuite& suite);
 void RegisterCuttingTests(TestSuite& suite);
 void RegisterThumbnailTests(TestSuite& suite);
+void RegisterMediaToolsTests(TestSuite& suite);
 
 // Hidden window procedure — does nothing
 static LRESULT CALLBACK HiddenWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -846,6 +847,10 @@ int wmain(int argc, wchar_t* argv[]) {
     TestSuite thumbnailSuite("Thumbnails");
     RegisterThumbnailTests(thumbnailSuite);
     runner.addSuite(&thumbnailSuite);
+
+    TestSuite mediaToolsSuite("Audio alignment & OpenFX");
+    RegisterMediaToolsTests(mediaToolsSuite);
+    runner.addSuite(&mediaToolsSuite);
 
     int result = runner.runAll();
 

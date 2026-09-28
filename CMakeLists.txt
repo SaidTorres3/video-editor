@@ -77,6 +77,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Enable UNICODE on Win32
 add_compile_definitions(UNICODE _UNICODE)
 
+# Official OpenFX host suites, vendored for reproducible offline static builds.
+file(GLOB OPENFX_HOST_SOURCES CONFIGURE_DEPENDS vendor/openfx/HostSupport/src/*.cpp)
+add_library(VideoEditorOpenFxHost STATIC ${OPENFX_HOST_SOURCES})
+set_target_properties(VideoEditorOpenFxHost PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/openfx-host")
+target_include_directories(VideoEditorOpenFxHost PUBLIC
+    vendor/openfx/include vendor/openfx/HostSupport/include)
+if(MSVC)
+    target_compile_options(VideoEditorOpenFxHost PRIVATE /UUNICODE /U_UNICODE /wd4996)
+endif()
+
 # Default paths (can override with -DFFMPEG_ROOT=... or -DCURL_ROOT=...)
 set(FFMPEG_ROOT "${CMAKE_SOURCE_DIR}/third_party/ffmpeg" CACHE PATH "Path to FFmpeg installation")
 set(CURL_ROOT   "${CMAKE_SOURCE_DIR}/vendor/libcurl" CACHE PATH "Path to libcurl installation")
@@ -157,6 +168,10 @@ add_executable(VideoEditor WIN32
     src/utils.cpp
     src/video_decoder.cpp
     src/audio_player.cpp
+    src/audio_alignment.cpp
+    src/media_processing.cpp
+    src/openfx_effect.cpp
+    src/media_tools.cpp
     src/pitch_preserving_stretcher.cpp
     src/video_renderer.cpp
     src/video_cutter.cpp
@@ -243,6 +258,7 @@ endif()
 
 # ==== FINAL LINKING ====
 target_link_libraries(VideoEditor PRIVATE
+    VideoEditorOpenFxHost
     ${PLATFORM_LIBS}
     ${FFMPEG_LIBS}
     ${RNNOISE_LIBRARY}
@@ -277,6 +293,14 @@ endif()
 option(BUILD_TESTS "Build the test executable" ON)
 
 if(BUILD_TESTS)
+    # The unmodified upstream example exercises a real, externally loaded OFX
+    # binary and its parameter/property/image/multithread suites.
+    add_library(OpenFxTestPlugin MODULE vendor/openfx/Examples/Basic/basic.cpp)
+    target_include_directories(OpenFxTestPlugin PRIVATE vendor/openfx/include)
+    set_target_properties(OpenFxTestPlugin PROPERTIES PREFIX "" SUFFIX ".ofx"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-plugins"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-plugins"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-plugins")
     # Shared source files (everything except main.cpp which has WinMain)
     set(SHARED_SOURCES
         src/window_proc.cpp
@@ -288,6 +312,10 @@ if(BUILD_TESTS)
         src/utils.cpp
         src/video_decoder.cpp
         src/audio_player.cpp
+        src/audio_alignment.cpp
+        src/media_processing.cpp
+        src/openfx_effect.cpp
+        src/media_tools.cpp
         src/pitch_preserving_stretcher.cpp
         src/video_renderer.cpp
         src/video_cutter.cpp
@@ -311,6 +339,7 @@ if(BUILD_TESTS)
         tests/test_crop.cpp
         tests/test_cutting.cpp
         tests/test_thumbnail.cpp
+        tests/test_media_tools.cpp
     )
 
     # Console application (NOT WIN32) so it prints to stdout
@@ -328,6 +357,7 @@ if(BUILD_TESTS)
         ${RNNOISE_INCLUDE_DIR}
     )
     target_compile_definitions(VideoEditorTests PRIVATE
+        OPENFX_TEST_PLUGIN=L"$<TARGET_FILE:OpenFxTestPlugin>"
         VIDEO_EDITOR_TESTING
         RUBBERBAND_STATIC
         NOMINMAX
@@ -336,6 +366,7 @@ if(BUILD_TESTS)
     if(USE_STATIC_FFMPEG)
         target_compile_definitions(VideoEditorTests PRIVATE TEN_VAD_IN_MEMORY)
     endif()
+    add_dependencies(VideoEditorTests OpenFxTestPlugin)
 
     # Same compile/link options as main executable
     if(MSVC AND USE_STATIC_FFMPEG)
@@ -359,6 +390,7 @@ if(BUILD_TESTS)
     endif()
 
     target_link_libraries(VideoEditorTests PRIVATE
+        VideoEditorOpenFxHost
         ${PLATFORM_LIBS}
         ${FFMPEG_LIBS}
         ${RNNOISE_LIBRARY}
