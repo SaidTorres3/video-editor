@@ -92,6 +92,10 @@ void LoadVideoFile(HWND hwnd, const std::wstring& filename)
             SendMessage(g_hRadioCopyCodec, BM_SETCHECK, BST_CHECKED, 0);
             SendMessage(g_hRadioH264, BM_SETCHECK, BST_UNCHECKED, 0);
         }
+
+        // Apply default merge audio setting
+        bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
+        SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, (g_mergeAudioByDefault && canMerge) ? BST_CHECKED : BST_UNCHECKED, 0);
         g_cutStartTime = -1.0;
         g_cutEndTime = -1.0;
         g_cutSegments.clear();

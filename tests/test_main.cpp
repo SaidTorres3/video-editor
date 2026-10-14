@@ -670,6 +670,7 @@ int wmain(int argc, wchar_t* argv[]) {
     g_logToFile = false;
     g_autoPlay = false;
     g_improveSeekPerformance = true;
+    g_mergeAudioByDefault = false;
 
     HINSTANCE hInstance = GetModuleHandle(nullptr);
 

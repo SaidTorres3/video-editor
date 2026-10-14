@@ -3,6 +3,7 @@
 #include "ui_controls.h"
 #include "ui_updates.h"
 #include "timeline.h"
+#include "video_player.h"
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <commctrl.h>
@@ -22,9 +23,37 @@ static HWND g_hExportPanel = nullptr;
 static HWND g_hExportMasterGainLabel = nullptr;
 static int g_selectedCategory = ID_TAB_GENERAL;
 static HBRUSH g_hOptionsBgBrush = (HBRUSH)GetStockObject(BLACK_BRUSH);
+static std::vector<HWND> g_tooltipWindows;
 
 static LRESULT CALLBACK OptionsPanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void EnsurePanelClassRegistered(HINSTANCE hInst);
+
+static void AddControlTooltip(HWND hParentPanel, HWND hControl, const wchar_t* text, HINSTANCE hInst)
+{
+    INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_WIN95_CLASSES };
+    InitCommonControlsEx(&icex);
+
+    HWND hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr,
+                                   WS_POPUP | TTS_ALWAYSTIP | TTS_BALLOON,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                                   nullptr, nullptr, hInst, nullptr);
+    if (!hTooltip)
+        return;
+
+    g_tooltipWindows.push_back(hTooltip);
+    SendMessage(hTooltip, TTM_SETMAXTIPWIDTH, 0, 320);
+
+    TOOLINFO ti = { 0 };
+    ti.cbSize = sizeof(ti);
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = hParentPanel;
+    ti.uId = (UINT_PTR)hControl;
+    ti.lpszText = const_cast<LPWSTR>(text);
+
+    SendMessage(hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+    SendMessage(hTooltip, TTM_ACTIVATE, TRUE, 0);
+    SendMessage(hTooltip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
+}
 
 static HBRUSH ApplyDarkColors(HDC hdc, UINT msg)
 {
@@ -42,6 +71,7 @@ bool g_improveSeekPerformance = true;
 bool g_enableMultiClipEditing = false;
 bool g_showAudioWaveform = true;
 bool g_highlightSpeechWaveforms = false;
+bool g_mergeAudioByDefault = false;
 int g_exportMasterGainDb = 0;
 std::wstring g_qualityPreset = L"Medium";
 std::wstring g_b2KeyId;
@@ -110,6 +140,9 @@ void LoadSettings()
         size = sizeof(val); val = 0;
         if (RegQueryValueExW(hKey, L"HighlightSpeechWaveforms", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
             g_highlightSpeechWaveforms = (val != 0);
+        size = sizeof(val); val = 0;
+        if (RegQueryValueExW(hKey, L"MergeAudioByDefault", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
+            g_mergeAudioByDefault = (val != 0);
         size = sizeof(val); val = 0;
         if (RegQueryValueExW(hKey, L"ExportMasterGainDb", nullptr, nullptr, (LPBYTE)&val, &size) == ERROR_SUCCESS)
             g_exportMasterGainDb = std::clamp(static_cast<int32_t>(val), -12, 12);
@@ -187,6 +220,8 @@ void SaveSettings()
         RegSetValueExW(hKey, L"ShowAudioWaveform", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         val = g_highlightSpeechWaveforms ? 1 : 0;
         RegSetValueExW(hKey, L"HighlightSpeechWaveforms", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
+        val = g_mergeAudioByDefault ? 1 : 0;
+        RegSetValueExW(hKey, L"MergeAudioByDefault", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         val = static_cast<DWORD>(g_exportMasterGainDb);
         RegSetValueExW(hKey, L"ExportMasterGainDb", 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegSetValueExW(hKey, L"B2KeyId", 0, REG_SZ, (const BYTE*)g_b2KeyId.c_str(), (DWORD)((g_b2KeyId.size()+1)*sizeof(wchar_t)));
@@ -363,29 +398,8 @@ void ShowOptionsWindow(HWND parent)
                                   (HMENU)ID_CHECKBOX_IMPROVE_SEEK, hInst, nullptr);
     ApplyDarkTheme(hSeekPerf);
     SendMessage(hSeekPerf, BM_SETCHECK, g_improveSeekPerformance ? BST_CHECKED : BST_UNCHECKED, 0);
-
-    // Tooltip for seek performance
-    INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_WIN95_CLASSES };
-    InitCommonControlsEx(&icex);
-
-    // Parent to NULL (top-level popup) to avoid message swallowed by child panels
-    HWND hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr,
-                                   WS_POPUP | TTS_ALWAYSTIP | TTS_BALLOON,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-                                   nullptr, nullptr, hInst, nullptr);
-    
-    SendMessage(hTooltip, TTM_SETMAXTIPWIDTH, 0, 300);
-
-    TOOLINFO ti = { 0 };
-    ti.cbSize = sizeof(ti);
-    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-    ti.hwnd = g_hGeneralPanel;
-    ti.uId = (UINT_PTR)hSeekPerf;
-    ti.lpszText = (LPWSTR)L"Increase the ram consumption to ~1.3 gb but improves the speed of frame seeking using the buttons ',' and '.'";
-    
-    SendMessage(hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
-    SendMessage(hTooltip, TTM_ACTIVATE, TRUE, 0);
-    SendMessage(hTooltip, TTM_UPDATETIPTEXT, 0, (LPARAM)&ti);
+    AddControlTooltip(g_hGeneralPanel, hSeekPerf,
+                      L"Increase the ram consumption to ~1.3 gb but improves the speed of frame seeking using the buttons ',' and '.'", hInst);
 
     HWND hAudioWaveform = CreateWindow(L"BUTTON", L"Show audio waveform on timeline",
                                        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
@@ -436,34 +450,42 @@ void ShowOptionsWindow(HWND parent)
     ApplyDarkTheme(hHighlightSpeech);
     SendMessage(hHighlightSpeech, BM_SETCHECK,
                 g_highlightSpeechWaveforms ? BST_CHECKED : BST_UNCHECKED, 0);
-    CreateWindow(
-        L"STATIC",
-        L"Uses neural voice detection. Keep disabled for faster waveform loading.",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, 106, contentWidth - 20, 38, g_hAudioPanel, nullptr, hInst, nullptr);
+    AddControlTooltip(g_hAudioPanel, hHighlightSpeech,
+                      L"Uses neural voice detection. Keep disabled for faster waveform loading.", hInst);
 
     CreateWindow(L"STATIC", L"Export Audio", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 0, 160, contentWidth, 22, g_hAudioPanel, nullptr, hInst, nullptr);
+                 0, 118, contentWidth, 22, g_hAudioPanel, nullptr, hInst, nullptr);
     CreateWindow(L"STATIC", L"Export master gain:", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                 20, 190, 150, 22, g_hAudioPanel, nullptr, hInst, nullptr);
+                 20, 148, 150, 22, g_hAudioPanel, nullptr, hInst, nullptr);
     HWND hExportGain = CreateWindow(
         TRACKBAR_CLASSW, L"",
         WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS | TBS_HORZ,
-        20, 216, 340, 36, g_hAudioPanel,
+        20, 174, 340, 36, g_hAudioPanel,
         (HMENU)ID_SLIDER_EXPORT_MASTER_GAIN, hInst, nullptr);
     SendMessage(hExportGain, TBM_SETRANGE, TRUE, MAKELPARAM(-12, 12));
     SendMessage(hExportGain, TBM_SETTICFREQ, 1, 0);
     SendMessage(hExportGain, TBM_SETPOS, TRUE, g_exportMasterGainDb);
     g_hExportMasterGainLabel = CreateWindow(
         L"STATIC", L"0 dB", WS_CHILD | WS_VISIBLE | SS_CENTER,
-        370, 220, 70, 22, g_hAudioPanel,
+        370, 178, 70, 22, g_hAudioPanel,
         (HMENU)ID_LABEL_EXPORT_MASTER_GAIN, hInst, nullptr);
     UpdateExportMasterGainLabel(g_exportMasterGainDb);
     CreateWindow(
         L"STATIC",
         L"Added to every exported audio track. 0 dB keeps the original level.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, 260, contentWidth - 20, 38, g_hAudioPanel, nullptr, hInst, nullptr);
+        20, 218, contentWidth - 20, 36, g_hAudioPanel, nullptr, hInst, nullptr);
+
+    HWND hDefaultMergeAudio = CreateWindow(
+        L"BUTTON", L"Merge audios by default",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        20, 264, 300, 22, g_hAudioPanel,
+        (HMENU)ID_CHECKBOX_DEFAULT_MERGE_AUDIO, hInst, nullptr);
+    ApplyDarkTheme(hDefaultMergeAudio);
+    SendMessage(hDefaultMergeAudio, BM_SETCHECK,
+                g_mergeAudioByDefault ? BST_CHECKED : BST_UNCHECKED, 0);
+    AddControlTooltip(g_hAudioPanel, hDefaultMergeAudio,
+                      L"Automatically check \"Merge Audios\" when importing a video with multiple tracks.", hInst);
 
     // ===== ENCODING PANEL =====
     g_hEncodingPanel = CreateWindowEx(0, L"OptionsPanelClass", nullptr,
@@ -715,6 +737,7 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hAudioWaveform = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUDIO_WAVEFORM);
             HWND hHighlightSpeech = GetDlgItem(g_hAudioPanel, ID_CHECKBOX_HIGHLIGHT_SPEECH);
             HWND hExportGain = GetDlgItem(g_hAudioPanel, ID_SLIDER_EXPORT_MASTER_GAIN);
+            HWND hDefaultMergeAudio = GetDlgItem(g_hAudioPanel, ID_CHECKBOX_DEFAULT_MERGE_AUDIO);
             HWND hAutoUpload = GetDlgItem(g_hUploadPanel, ID_CHECKBOX_AUTO_UPLOAD);
             const bool previousShowAudioWaveform = g_showAudioWaveform;
             const bool previousHighlightSpeech = g_highlightSpeechWaveforms;
@@ -725,6 +748,7 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (hMultiClip) g_enableMultiClipEditing = SendMessage(hMultiClip, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hAudioWaveform) g_showAudioWaveform = SendMessage(hAudioWaveform, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hHighlightSpeech) g_highlightSpeechWaveforms = SendMessage(hHighlightSpeech, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hDefaultMergeAudio) g_mergeAudioByDefault = SendMessage(hDefaultMergeAudio, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hExportGain) g_exportMasterGainDb = std::clamp(
                 static_cast<int>(SendMessage(hExportGain, TBM_GETPOS, 0, 0)),
                 -12, 12);
@@ -755,6 +779,14 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND owner = GetWindow(hwnd, GW_OWNER);
             DestroyWindow(hwnd);
             if (owner) {
+                extern HWND g_hCheckboxMergeAudio;
+                if (g_hCheckboxMergeAudio) {
+                    extern VideoPlayer* g_videoPlayer;
+                    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
+                    if (!g_videoPlayer || !g_videoPlayer->IsLoaded() || canMerge) {
+                        SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, g_mergeAudioByDefault ? BST_CHECKED : BST_UNCHECKED, 0);
+                    }
+                }
                 RepositionControls(owner);
                 UpdateCutInfoLabel(owner);
                 InvalidateRect(owner, nullptr, TRUE);
@@ -798,6 +830,7 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND hAudioWaveform = GetDlgItem(g_hGeneralPanel, ID_CHECKBOX_AUDIO_WAVEFORM);
             HWND hHighlightSpeech = GetDlgItem(g_hAudioPanel, ID_CHECKBOX_HIGHLIGHT_SPEECH);
             HWND hExportGain = GetDlgItem(g_hAudioPanel, ID_SLIDER_EXPORT_MASTER_GAIN);
+            HWND hDefaultMergeAudio = GetDlgItem(g_hAudioPanel, ID_CHECKBOX_DEFAULT_MERGE_AUDIO);
             const bool previousShowAudioWaveform = g_showAudioWaveform;
             const bool previousHighlightSpeech = g_highlightSpeechWaveforms;
             g_logToFile = SendMessage(hLog, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -807,6 +840,7 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (hMultiClip) g_enableMultiClipEditing = SendMessage(hMultiClip, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hAudioWaveform) g_showAudioWaveform = SendMessage(hAudioWaveform, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hHighlightSpeech) g_highlightSpeechWaveforms = SendMessage(hHighlightSpeech, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (hDefaultMergeAudio) g_mergeAudioByDefault = SendMessage(hDefaultMergeAudio, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (hExportGain) g_exportMasterGainDb = std::clamp(
                 static_cast<int>(SendMessage(hExportGain, TBM_GETPOS, 0, 0)),
                 -12, 12);
@@ -836,6 +870,14 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             HWND owner = GetWindow(hwnd, GW_OWNER);
             DestroyWindow(hwnd);
             if (owner) {
+                extern HWND g_hCheckboxMergeAudio;
+                if (g_hCheckboxMergeAudio) {
+                    extern VideoPlayer* g_videoPlayer;
+                    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
+                    if (!g_videoPlayer || !g_videoPlayer->IsLoaded() || canMerge) {
+                        SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, g_mergeAudioByDefault ? BST_CHECKED : BST_UNCHECKED, 0);
+                    }
+                }
                 RepositionControls(owner);
                 UpdateCutInfoLabel(owner);
                 InvalidateRect(owner, nullptr, TRUE);
@@ -843,6 +885,12 @@ LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_DESTROY:
+        for (HWND hTip : g_tooltipWindows) {
+            if (hTip && IsWindow(hTip)) {
+                DestroyWindow(hTip);
+            }
+        }
+        g_tooltipWindows.clear();
         g_hOptionsWnd = nullptr;
         g_hGeneralPanel = nullptr;
         g_hAudioPanel = nullptr;

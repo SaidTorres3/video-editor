@@ -649,4 +649,39 @@ void RegisterAudioTests(TestSuite& suite) {
             TEST_ASSERT(original[i].samples == reference[i].samples,
                         "parallel seek must not affect original decoding");
     });
+
+    suite.addTest("AudioSettings_MergeAudioByDefault", []() {
+        bool originalSetting = g_mergeAudioByDefault;
+
+        g_mergeAudioByDefault = true;
+        SaveSettings();
+        g_mergeAudioByDefault = false;
+        LoadSettings();
+        TEST_ASSERT_EQ(g_mergeAudioByDefault, true, "MergeAudioByDefault should persist in registry when enabled");
+
+        g_mergeAudioByDefault = false;
+        SaveSettings();
+        g_mergeAudioByDefault = true;
+        LoadSettings();
+        TEST_ASSERT_EQ(g_mergeAudioByDefault, false, "MergeAudioByDefault should persist in registry when disabled");
+
+        // Verify checkbox update logic based on canMerge
+        HWND hChk = CreateWindow(L"BUTTON", L"Merge Audios", WS_CHILD | BS_AUTOCHECKBOX, 0, 0, 10, 10, g_testHwnd, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hChk != nullptr, "Checkbox should be created");
+
+        g_mergeAudioByDefault = true;
+        bool canMerge = true;
+        SendMessage(hChk, BM_SETCHECK, (g_mergeAudioByDefault && canMerge) ? BST_CHECKED : BST_UNCHECKED, 0);
+        TEST_ASSERT_EQ(SendMessage(hChk, BM_GETCHECK, 0, 0), BST_CHECKED, "Checkbox should be checked when canMerge is true and setting is enabled");
+
+        canMerge = false;
+        SendMessage(hChk, BM_SETCHECK, (g_mergeAudioByDefault && canMerge) ? BST_CHECKED : BST_UNCHECKED, 0);
+        TEST_ASSERT_EQ(SendMessage(hChk, BM_GETCHECK, 0, 0), BST_UNCHECKED, "Checkbox should be unchecked when canMerge is false even if setting is enabled");
+
+        DestroyWindow(hChk);
+
+        // Restore default disabled setting
+        g_mergeAudioByDefault = false;
+        SaveSettings();
+    });
 }

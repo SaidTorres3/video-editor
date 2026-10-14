@@ -442,7 +442,7 @@ void CreateControls(HWND hwnd)
        340, 485, 200, 25, // Placeholder
        hwnd, (HMENU)ID_CHECKBOX_MERGE_AUDIO,
        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-   SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, BST_UNCHECKED, 0);
+   SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, g_mergeAudioByDefault ? BST_CHECKED : BST_UNCHECKED, 0);
    ApplyDarkTheme(g_hCheckboxMergeAudio);
 
     g_hRadioH264 = CreateWindow(

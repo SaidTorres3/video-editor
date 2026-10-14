@@ -29,6 +29,7 @@
 #define ID_CHECKBOX_HIGHLIGHT_SPEECH 1053
 #define ID_SLIDER_EXPORT_MASTER_GAIN 1054
 #define ID_LABEL_EXPORT_MASTER_GAIN  1055
+#define ID_CHECKBOX_DEFAULT_MERGE_AUDIO 1056
 
 // B2 config control identifiers
 #define ID_EDIT_B2_KEY_ID       2001
@@ -64,6 +65,7 @@ extern bool g_improveSeekPerformance;
 extern bool g_enableMultiClipEditing;
 extern bool g_showAudioWaveform;
 extern bool g_highlightSpeechWaveforms;
+extern bool g_mergeAudioByDefault;
 extern int g_exportMasterGainDb;
 extern std::wstring g_qualityPreset;
 

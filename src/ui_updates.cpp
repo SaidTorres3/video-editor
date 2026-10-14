@@ -113,6 +113,9 @@ void UpdateControls()
 
    bool canMerge = g_videoPlayer && g_videoPlayer->GetAudioTrackCount() > 1;
    EnableWindow(g_hCheckboxMergeAudio, isLoaded && canMerge);
+   if (isLoaded && !canMerge) {
+       SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, BST_UNCHECKED, 0);
+   }
 
    bool anyCrop = g_videoPlayer && g_videoPlayer->HasAnyCrop();
    bool hasCrop = g_videoPlayer && g_videoPlayer->hasCrop;
