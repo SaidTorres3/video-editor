@@ -8,6 +8,7 @@
 #include "editing.h"
 #include "upload_dialog.h"
 #include "utils.h"
+#include "theme.h"
 #include <windowsx.h>
 #include <cmath>
 #include <cstdlib>
@@ -58,7 +59,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     switch (uMsg)
     {
     case WM_CREATE:
-        // Initialize dark theme resources
+        // Dark theme resources shared with the secondary dialogs
         g_hbrBackground = CreateSolidBrush(RGB(45, 45, 48));
         g_hFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
@@ -185,6 +186,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
             break;
         }
+
+        if (HIWORD(wParam) == EN_SETFOCUS || HIWORD(wParam) == EN_KILLFOCUS)
+            ui::InvalidateField((HWND)lParam);
 
         if ((HWND)lParam == g_hEditPlaybackSpeed && HIWORD(wParam) == EN_KILLFOCUS)
         {
@@ -372,22 +376,60 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORBTN:
     case WM_CTLCOLORLISTBOX:
+        return (INT_PTR)ui::HandleCtlColor(uMsg, (HDC)wParam, (HWND)lParam);
+
+    case WM_NOTIFY:
     {
-        HDC hdc = (HDC)wParam;
-        SetTextColor(hdc, g_textColor);
-        SetBkColor(hdc, RGB(45,45,48));
-        return (INT_PTR)g_hbrBackground;
+        LRESULT result = 0;
+        if (ui::HandleNotify(lParam, result))
+            return result;
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
-    break;
+
+    case WM_DRAWITEM:
+        if (ui::HandleDrawItem(lParam))
+            return TRUE;
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
+
+    case WM_MEASUREITEM:
+        if (ui::HandleMeasureItem(lParam))
+            return TRUE;
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
 
     case WM_ERASEBKGND:
+        // WM_PAINT draws the whole background from an off-screen buffer.
+        return 1;
+
+    case WM_PAINT:
     {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        FillRect((HDC)wParam, &rc, g_hbrBackground);
-        return 1;
+        if (rc.right > 0 && rc.bottom > 0)
+        {
+            HDC buffer = CreateCompatibleDC(hdc);
+            HBITMAP bitmap = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+            HGDIOBJ oldBitmap = SelectObject(buffer, bitmap);
+            PaintMainWindow(hwnd, buffer);
+            BitBlt(hdc, ps.rcPaint.left, ps.rcPaint.top,
+                   ps.rcPaint.right - ps.rcPaint.left, ps.rcPaint.bottom - ps.rcPaint.top,
+                   buffer, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
+            SelectObject(buffer, oldBitmap);
+            DeleteObject(bitmap);
+            DeleteDC(buffer);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
     }
-    break;
+
+    case WM_GETMINMAXINFO:
+    {
+        auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+        info->ptMinTrackSize.x = 860;
+        info->ptMinTrackSize.y = 600;
+        return 0;
+    }
 
     case WM_SIZE:
     {

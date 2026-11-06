@@ -155,6 +155,7 @@ add_executable(VideoEditor WIN32
     src/timeline.cpp
     src/editing.cpp
     src/utils.cpp
+    src/theme.cpp
     src/video_decoder.cpp
     src/audio_player.cpp
     src/pitch_preserving_stretcher.cpp
@@ -221,7 +222,7 @@ endif()
 # ==== WINDOWS PLATFORM LIBS ====
 set(PLATFORM_LIBS
     user32 gdi32 d2d1 dwrite comctl32 comdlg32 ole32 winmm
-    dwmapi uxtheme shell32 ws2_32 bcrypt secur32 mfplat
+    dwmapi uxtheme gdiplus shell32 ws2_32 bcrypt secur32 mfplat
     mf mfuuid strmiids crypt32 advapi32 iphlpapi wldap32
     normaliz
 )
@@ -286,6 +287,7 @@ if(BUILD_TESTS)
         src/timeline.cpp
         src/editing.cpp
         src/utils.cpp
+        src/theme.cpp
         src/video_decoder.cpp
         src/audio_player.cpp
         src/pitch_preserving_stretcher.cpp

@@ -9,6 +9,7 @@
 #include "editing.h"
 #include "ten_vad_embedded.h"
 #include "audio_waveform_cache.h"
+#include "theme.h"
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
@@ -102,20 +103,12 @@ LRESULT CALLBACK TimelineResizeBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        HBRUSH background = CreateSolidBrush(RGB(45, 45, 48));
-        FillRect(hdc, &rc, background);
-        DeleteObject(background);
+        ui::FillSolid(hdc, rc, ui::kBgApp);
 
         const int centerY = rc.bottom / 2;
         const int centerX = static_cast<int>(rc.right) / 2;
-        const int gripLeft = (std::max)(0, centerX - 28);
-        const int gripRight = (std::min)(static_cast<int>(rc.right), centerX + 28);
-        HPEN linePen = CreatePen(PS_SOLID, 1, RGB(92, 92, 96));
-        HGDIOBJ oldPen = SelectObject(hdc, linePen);
-        MoveToEx(hdc, gripLeft, centerY, nullptr);
-        LineTo(hdc, gripRight, centerY);
-        SelectObject(hdc, oldPen);
-        DeleteObject(linePen);
+        RECT grip{ centerX - 20, centerY - 2, centerX + 20, centerY + 2 };
+        ui::FillRound(hdc, grip, 2.0f, g_isTimelineHeightDragging ? ui::kAccent : ui::kBorderStrong);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -1916,9 +1909,7 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HBITMAP bufferBitmap = CreateCompatibleBitmap(paintDC, rc.right, rc.bottom);
         HGDIOBJ oldBitmap = SelectObject(hdc, bufferBitmap);
 
-        HBRUSH bg = CreateSolidBrush(RGB(70,70,70));
-        FillRect(hdc, &rc, bg);
-        DeleteObject(bg);
+        ui::FillSolid(hdc, rc, RGB(24, 25, 30));
         
         // Draw scroll arrows if zoomed in
         const int ARROW_WIDTH = 20;
@@ -1931,12 +1922,12 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 hasLeftArrow = true;
                 RECT leftArrowRect = { 0, 0, ARROW_WIDTH, rc.bottom };
-                HBRUSH arrowBrush = CreateSolidBrush(RGB(150, 150, 150));
+                HBRUSH arrowBrush = CreateSolidBrush(ui::kButton);
                 FillRect(hdc, &leftArrowRect, arrowBrush);
                 DeleteObject(arrowBrush);
                 
                 // Draw "<" character
-                SetTextColor(hdc, RGB(0, 0, 0));
+                SetTextColor(hdc, ui::kText);
                 SetBkMode(hdc, TRANSPARENT);
                 HFONT font = CreateFont(14, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
                 HGDIOBJ oldFont = SelectObject(hdc, font);
@@ -1953,12 +1944,12 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     hasRightArrow = true;
                     RECT rightArrowRect = { rc.right - ARROW_WIDTH, 0, rc.right, rc.bottom };
-                    HBRUSH arrowBrush = CreateSolidBrush(RGB(150, 150, 150));
+                    HBRUSH arrowBrush = CreateSolidBrush(ui::kButton);
                     FillRect(hdc, &rightArrowRect, arrowBrush);
                     DeleteObject(arrowBrush);
                     
                     // Draw ">" character
-                    SetTextColor(hdc, RGB(0, 0, 0));
+                    SetTextColor(hdc, ui::kText);
                     SetBkMode(hdc, TRANSPARENT);
                     HFONT font = CreateFont(14, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, L"Arial");
                     HGDIOBJ oldFont = SelectObject(hdc, font);
@@ -2023,6 +2014,18 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
                     SelectObject(hdc, oldPen);
                     DeleteObject(borderPen);
+                }
+            }
+
+            // Tint the draft range between the start and end markers.
+            if (g_cutStartTime >= 0 && g_cutEndTime > g_cutStartTime && dur > 0.0)
+            {
+                const int rangeLeft = std::max(viewLeft, TimeToPixel(g_cutStartTime, rc, dur));
+                const int rangeRight = std::min(viewRight, TimeToPixel(g_cutEndTime, rc, dur));
+                if (rangeRight > rangeLeft)
+                {
+                    RECT range{ rangeLeft, 0, rangeRight, rc.bottom };
+                    ui::FillSolid(hdc, range, RGB(30, 40, 60));
                 }
             }
 
@@ -2120,32 +2123,29 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             double cur = (g_previewSeekTime >= 0.0) ? g_previewSeekTime : g_videoPlayer->GetCurrentTime();
             int x = TimeToPixel(cur, rc, dur);
-            HPEN pen = CreatePen(PS_SOLID, 2, RGB(200,0,0));
-            HGDIOBJ old = SelectObject(hdc, pen);
-            MoveToEx(hdc, x, 0, NULL);
-            LineTo(hdc, x, rc.bottom);
-            SelectObject(hdc, old);
-            DeleteObject(pen);
-
             if (g_cutStartTime >= 0)
             {
                 int sx = TimeToPixel(g_cutStartTime, rc, dur);
-                pen = CreatePen(PS_SOLID, 1, RGB(0,200,0));
-                old = SelectObject(hdc, pen);
-                MoveToEx(hdc, sx, 0, NULL);
-                LineTo(hdc, sx, rc.bottom);
-                SelectObject(hdc, old);
-                DeleteObject(pen);
+                RECT line{ sx - 1, 0, sx + 1, rc.bottom };
+                ui::FillSolid(hdc, line, ui::kSuccess);
+                RECT flag{ sx - 1, 0, sx + 7, 7 };
+                ui::FillSolid(hdc, flag, ui::kSuccess);
             }
             if (g_cutEndTime >= 0)
             {
                 int ex = TimeToPixel(g_cutEndTime, rc, dur);
-                pen = CreatePen(PS_SOLID, 1, RGB(0,0,200));
-                old = SelectObject(hdc, pen);
-                MoveToEx(hdc, ex, 0, NULL);
-                LineTo(hdc, ex, rc.bottom);
-                SelectObject(hdc, old);
-                DeleteObject(pen);
+                RECT line{ ex - 1, 0, ex + 1, rc.bottom };
+                ui::FillSolid(hdc, line, ui::kWarning);
+                RECT flag{ ex - 7, 0, ex + 1, 7 };
+                ui::FillSolid(hdc, flag, ui::kWarning);
+            }
+
+            // Playhead: thin bright line with a rounded head.
+            {
+                RECT line{ x - 1, 0, x + 1, rc.bottom };
+                ui::FillSolid(hdc, line, RGB(240, 242, 248));
+                RECT head{ x - 5, -4, x + 5, 6 };
+                ui::FillRound(hdc, head, 3.0f, RGB(240, 242, 248));
             }
 
             auto cropKeys = g_videoPlayer->GetCropKeyframes();
@@ -2196,6 +2196,8 @@ LRESULT CALLBACK TimelineProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 DeleteObject(disabledPen);
             }
         }
+
+        FrameRect(hdc, &rc, ui::Brush(ui::kBorder));
 
         BitBlt(paintDC, 0, 0, rc.right, rc.bottom, hdc, 0, 0, SRCCOPY);
         SelectObject(hdc, oldBitmap);

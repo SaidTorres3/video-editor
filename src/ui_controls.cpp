@@ -4,10 +4,12 @@
 #include "options_window.h"
 #include "timeline.h"
 #include "ui_updates.h"
+#include "theme.h"
 #include <commctrl.h>
 #include <windowsx.h>
 #include <uxtheme.h>
 #include <algorithm>
+#include <vector>
 
 // Forward declarations
 void ApplyDarkTheme(HWND hwnd);
@@ -138,383 +140,199 @@ static LRESULT CALLBACK VolumeSliderSubclassProc(HWND hwnd, UINT message, WPARAM
     return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
+namespace
+{
+constexpr int kToolbarHeight = 56;
+constexpr int kStatusHeight = 30;
+constexpr int kSidebarWidth = 300;
+constexpr int kPadding = 12;
+
+struct MainLayout
+{
+    RECT toolbar{};
+    RECT sidebar{};
+    bool panelVisible = false;
+    int sidebarX = 0;
+    int sidebarInnerWidth = 0;
+    std::vector<int> dividers;
+    int footerTop = 0;
+    RECT masterIcon{};
+};
+
+MainLayout g_layout;
+HWND g_hLabelExport = nullptr;
+
+HINSTANCE InstanceOf(HWND hwnd)
+{
+    return reinterpret_cast<HINSTANCE>(GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
+}
+
+HWND MakeButton(HWND parent, const wchar_t* text, int id, DWORD extraStyle,
+                ui::ButtonStyle style, wchar_t glyph, COLORREF background, bool iconOnly = false)
+{
+    HWND button = CreateWindowW(L"BUTTON", text, WS_VISIBLE | WS_CHILD | extraStyle,
+                                0, 0, 10, 10, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                                InstanceOf(parent), nullptr);
+    SetWindowTheme(button, L"DarkMode_Explorer", nullptr);
+    ui::StyleButton(button, style, glyph, background, iconOnly);
+    return button;
+}
+
+HWND MakeEdit(HWND parent, const wchar_t* text, int id, DWORD extraStyle)
+{
+    HWND edit = CreateWindowW(L"EDIT", text, WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL | extraStyle,
+                              0, 0, 10, 10, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                              InstanceOf(parent), nullptr);
+    SetWindowTheme(edit, L"DarkMode_Explorer", nullptr);
+    ui::SetFont(edit, ui::FontRole::Body);
+    SendMessage(edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
+    return edit;
+}
+
+HWND MakeListBox(HWND parent, int id, ui::ListKind kind, const wchar_t* emptyText)
+{
+    HWND list = CreateWindowW(L"LISTBOX", nullptr,
+                              WS_VISIBLE | WS_CHILD | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED |
+                                  LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
+                              0, 0, 10, 10, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                              InstanceOf(parent), nullptr);
+    SetWindowTheme(list, L"DarkMode_Explorer", nullptr);
+    ui::StyleListBox(list, kind, emptyText);
+    return list;
+}
+
+HWND MakeVolumeSlider(HWND parent, int id, const wchar_t* name)
+{
+    HWND slider = CreateWindowW(TRACKBAR_CLASS, name,
+                                WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_NOTICKS | TBS_FIXEDLENGTH,
+                                0, 0, 10, 10, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                                InstanceOf(parent), nullptr);
+    SendMessage(slider, TBM_SETRANGE, TRUE, MAKELONG(0, 1001)); // 0=mute, 1..1001 => -50dB..+50dB
+    SendMessage(slider, TBM_SETPOS, TRUE, 501);                 // Default 0dB
+    SetWindowSubclass(slider, VolumeSliderSubclassProc, 1, 0);
+    ui::StyleSlider(slider, 501);
+    return slider;
+}
+
+void AddTooltip(HWND tooltip, HWND owner, HWND control, const wchar_t* text)
+{
+    TOOLINFOW info{};
+    info.cbSize = sizeof(info);
+    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    info.hwnd = owner;
+    info.uId = reinterpret_cast<UINT_PTR>(control);
+    info.lpszText = const_cast<LPWSTR>(text);
+    SendMessageW(tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
+}
+
+void Place(HWND hwnd, int x, int y, int w, int h)
+{
+    // Skip the bit copy: moved controls would otherwise keep stale pixels from
+    // what was drawn at their previous position.
+    SetWindowPos(hwnd, nullptr, x, y, (std::max)(0, w), (std::max)(0, h),
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+}
+} // namespace
+
 void CreateControls(HWND hwnd)
 {
-    InitCommonControls();
+    INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES };
+    InitCommonControlsEx(&icc);
 
-    // Open button
-    g_hButtonOpen = CreateWindow(
-        L"BUTTON", L"\U0001F4C2",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        10, 10, 100, 30,
-        hwnd, (HMENU)ID_BUTTON_OPEN,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonOpen);
+    using ui::ButtonStyle;
+    namespace glyph = ui::glyph;
+    const COLORREF bar = ui::kSurface;
+    const COLORREF field = ui::kField;
 
-    // Play button
-    g_hButtonPlay = CreateWindow(
-        L"BUTTON", L"\x25B6",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        120, 10, 60, 30,
-        hwnd, (HMENU)ID_BUTTON_PLAY,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonPlay);
-
-    // Pause button
-    g_hButtonPause = CreateWindow(
-        L"BUTTON", L"\x23F8",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        190, 10, 60, 30,
-        hwnd, (HMENU)ID_BUTTON_PAUSE,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonPause);
-
-    // Stop button
-    g_hButtonStop = CreateWindow(
-        L"BUTTON", L"\x23F9",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        260, 10, 60, 30,
-        hwnd, (HMENU)ID_BUTTON_STOP,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonStop);
-
-    g_hButtonSpeedDown = CreateWindow(
-        L"BUTTON", L"-",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        330, 10, 40, 30,
-        hwnd, (HMENU)ID_BUTTON_SPEED_DOWN,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonSpeedDown);
-
-    g_hButtonSpeedUp = CreateWindow(
-        L"BUTTON", L"+",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        375, 10, 40, 30,
-        hwnd, (HMENU)ID_BUTTON_SPEED_UP,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonSpeedUp);
-
-    g_hEditPlaybackSpeed = CreateWindow(
-        L"EDIT", L"1x",
-        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_CENTER | ES_AUTOHSCROLL,
-        375, 10, 64, 30,
-        hwnd, (HMENU)ID_EDIT_PLAYBACK_SPEED,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hEditPlaybackSpeed);
-
-    g_hButtonOptions = CreateWindow(
-        L"BUTTON", L"\u2699 Options",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        330, 10, 80, 30,
-        hwnd, (HMENU)ID_BUTTON_OPTIONS,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonOptions);
-
-    g_hButtonTogglePanel = CreateWindow(
-        L"BUTTON", L"\u25C4 Panel",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        420, 10, 80, 30,
-        hwnd, (HMENU)ID_BUTTON_TOGGLE_PANEL,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonTogglePanel);
+    // Toolbar
+    g_hButtonOpen = MakeButton(hwnd, L"Open", ID_BUTTON_OPEN, BS_PUSHBUTTON, ButtonStyle::Default, glyph::Open, bar);
+    g_hButtonStop = MakeButton(hwnd, L"Stop", ID_BUTTON_STOP, BS_PUSHBUTTON, ButtonStyle::Default, glyph::Stop, bar, true);
+    g_hButtonPlay = MakeButton(hwnd, L"Play", ID_BUTTON_PLAY, BS_PUSHBUTTON, ButtonStyle::Primary, glyph::Play, bar, true);
+    g_hButtonPause = MakeButton(hwnd, L"Pause", ID_BUTTON_PAUSE, BS_PUSHBUTTON, ButtonStyle::Primary, glyph::Pause, bar, true);
+    ShowWindow(g_hButtonPause, SW_HIDE);
+    g_hButtonSpeedDown = MakeButton(hwnd, L"-", ID_BUTTON_SPEED_DOWN, BS_PUSHBUTTON, ButtonStyle::Ghost, glyph::Minus, field, true);
+    g_hButtonSpeedUp = MakeButton(hwnd, L"+", ID_BUTTON_SPEED_UP, BS_PUSHBUTTON, ButtonStyle::Ghost, glyph::Plus, field, true);
+    g_hEditPlaybackSpeed = MakeEdit(hwnd, L"1x", ID_EDIT_PLAYBACK_SPEED, ES_CENTER);
+    ui::SetFont(g_hEditPlaybackSpeed, ui::FontRole::Semibold);
+    g_hButtonOptions = MakeButton(hwnd, L"Options", ID_BUTTON_OPTIONS, BS_PUSHBUTTON, ButtonStyle::Ghost, glyph::Settings, bar);
+    g_hButtonTogglePanel = MakeButton(hwnd, L"Panel", ID_BUTTON_TOGGLE_PANEL, BS_PUSHBUTTON, ButtonStyle::Ghost, glyph::ClosePane, bar, true);
 
     // Dedicated resize bar above the timeline. Keeping this separate prevents
     // resize gestures from colliding with waveform and marker interactions.
     g_hTimelineResizeBar = CreateWindow(
-        L"TimelineResizeBarClass", nullptr,
-        WS_CHILD | WS_VISIBLE,
-        10, 360, 600, 10, // Placeholder position
-        hwnd, (HMENU)ID_TIMELINE_RESIZE_BAR,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+        L"TimelineResizeBarClass", nullptr, WS_CHILD | WS_VISIBLE,
+        10, 360, 600, 10, hwnd, (HMENU)ID_TIMELINE_RESIZE_BAR, InstanceOf(hwnd), nullptr);
 
-    // Timeline
     g_hTimeline = CreateWindow(
-        L"TimelineClass", nullptr,
-        WS_CHILD | WS_VISIBLE,
-        10, 370, 600, 30, // Placeholder position
-        hwnd, (HMENU)ID_TIMELINE,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
+        L"TimelineClass", nullptr, WS_CHILD | WS_VISIBLE,
+        10, 370, 600, 30, hwnd, (HMENU)ID_TIMELINE, InstanceOf(hwnd), nullptr);
     ApplyDarkTheme(g_hTimeline);
 
-    // Status text
-    g_hStatusText = CreateWindow(
-        L"STATIC", L"No video loaded",
-        WS_VISIBLE | WS_CHILD | SS_LEFT,
-        10, 410, 600, 20, // Placeholder position
-        hwnd, nullptr,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hStatusText);
+    g_hStatusText = ui::CreateStatusBar(hwnd);
 
-    // Audio controls section
-    // Audio tracks label
-    g_hLabelAudioTracks = CreateWindow(
-        L"STATIC", L"Audio Tracks:",
-        WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 50, 100, 20, // Placeholder position
-        hwnd, nullptr,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hLabelAudioTracks);
+    // Audio section
+    g_hLabelAudioTracks = ui::CreateLabel(hwnd, L"Audio", ui::LabelKind::Header, bar);
+    g_hListBoxAudioTracks = MakeListBox(hwnd, ID_LISTBOX_AUDIO_TRACKS, ui::ListKind::AudioTracks, L"No audio tracks");
+    g_hLabelTrackVolume = ui::CreateLabel(hwnd, L"Track Volume: 0.0 dB", ui::LabelKind::ValueSplit, bar);
+    g_hButtonMuteTrack = MakeButton(hwnd, L"Mute", ID_BUTTON_MUTE_TRACK, BS_PUSHBUTTON, ButtonStyle::Default, glyph::Volume, bar, true);
+    ui::SetButtonAlternate(g_hButtonMuteTrack, L"Unmute", glyph::Mute, true);
+    g_hSliderTrackVolume = MakeVolumeSlider(hwnd, ID_SLIDER_TRACK_VOLUME, L"Track Volume");
+    g_hLabelMasterVolume = ui::CreateLabel(hwnd, L"Master Volume: 0.0 dB", ui::LabelKind::ValueSplit, bar);
+    g_hSliderMasterVolume = MakeVolumeSlider(hwnd, ID_SLIDER_MASTER_VOLUME, L"Master Volume");
 
-    // Audio tracks listbox
-    g_hListBoxAudioTracks = CreateWindow(
-        L"LISTBOX", nullptr,
-        WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-        340, 75, 200, 100, // Placeholder position
-        hwnd, (HMENU)ID_LISTBOX_AUDIO_TRACKS,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hListBoxAudioTracks);
+    // Trim section
+    g_hLabelEditing = ui::CreateLabel(hwnd, L"Trim", ui::LabelKind::Header, bar);
+    g_hLabelCutInfo = ui::CreateLabel(hwnd, L"Cut points not set.", ui::LabelKind::Meta, bar);
+    g_hButtonSetStart = MakeButton(hwnd, L"Set start", ID_BUTTON_SET_START, BS_PUSHBUTTON, ButtonStyle::Default, 0, bar);
+    g_hButtonSetEnd = MakeButton(hwnd, L"Set end", ID_BUTTON_SET_END, BS_PUSHBUTTON, ButtonStyle::Default, 0, bar);
+    g_hEditStartTime = MakeEdit(hwnd, L"", ID_EDIT_START_TIME, 0);
+    g_hEditEndTime = MakeEdit(hwnd, L"", ID_EDIT_END_TIME, 0);
+    g_hButtonPlayClip = MakeButton(hwnd, L"Play from start", ID_BUTTON_PLAY_CLIP, BS_PUSHBUTTON, ButtonStyle::Ghost, glyph::Play, field, true);
+    g_hButtonPlayEnd = MakeButton(hwnd, L"Play end", ID_BUTTON_PLAY_END, BS_PUSHBUTTON, ButtonStyle::Ghost, glyph::Play, field, true);
+    g_hListBoxCutSegments = MakeListBox(hwnd, ID_LISTBOX_CUT_SEGMENTS, ui::ListKind::Clips, L"Set start and end, then Add");
+    g_hButtonAddClip = MakeButton(hwnd, L"Add", ID_BUTTON_ADD_CLIP, BS_PUSHBUTTON, ButtonStyle::Default, 0, bar);
+    g_hButtonUpdateClip = MakeButton(hwnd, L"Update", ID_BUTTON_UPDATE_CLIP, BS_PUSHBUTTON, ButtonStyle::Default, 0, bar);
+    g_hButtonRemoveClip = MakeButton(hwnd, L"Remove", ID_BUTTON_REMOVE_CLIP, BS_PUSHBUTTON, ButtonStyle::Default, 0, bar);
+    g_hButtonClearClips = MakeButton(hwnd, L"Clear", ID_BUTTON_CLEAR_CLIPS, BS_PUSHBUTTON, ButtonStyle::Default, 0, bar);
+    g_hButtonPlayAllClips = MakeButton(hwnd, L"Play all", ID_BUTTON_PLAY_ALL_CLIPS, BS_PUSHBUTTON, ButtonStyle::Default, glyph::Play, bar);
 
-    // Mute track button
-    g_hButtonMuteTrack = CreateWindow(
-        L"BUTTON", L"Mute/Unmute",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        340, 185, 100, 25, // Placeholder position
-        hwnd, (HMENU)ID_BUTTON_MUTE_TRACK,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonMuteTrack);
-
-    // Track volume label
-    g_hLabelTrackVolume = CreateWindow(
-        L"STATIC", L"Track Volume:",
-        WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 220, 100, 20, // Placeholder position
-        hwnd, nullptr,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hLabelTrackVolume);
-
-    // Track volume slider
-    g_hSliderTrackVolume = CreateWindow(
-        TRACKBAR_CLASS, L"Track Volume",
-        WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        340, 245, 245, 30, // Placeholder position
-        hwnd, (HMENU)ID_SLIDER_TRACK_VOLUME,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderTrackVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 1001)); // 0=mute, 1..1001 => -50dB..+50dB
-    SendMessage(g_hSliderTrackVolume, TBM_SETPOS, TRUE, 501); // Default 0dB
-    SetWindowSubclass(g_hSliderTrackVolume, VolumeSliderSubclassProc, 1, 0);
-    ApplyDarkTheme(g_hSliderTrackVolume);
-
-    // Master volume label
-    g_hLabelMasterVolume = CreateWindow(
-        L"STATIC", L"Master Volume:",
-        WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 285, 100, 20, // Placeholder position
-        hwnd, nullptr,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hLabelMasterVolume);
-
-    // Master volume slider
-    g_hSliderMasterVolume = CreateWindow(
-        TRACKBAR_CLASS, L"Master Volume",
-        WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_BOTH,
-        340, 310, 245, 30, // Placeholder position
-        hwnd, (HMENU)ID_SLIDER_MASTER_VOLUME,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    SendMessage(g_hSliderMasterVolume, TBM_SETRANGE, TRUE, MAKELONG(0, 1001)); // 0=mute, 1..1001 => -50dB..+50dB
-    SendMessage(g_hSliderMasterVolume, TBM_SETPOS, TRUE, 501); // Default 0dB
-    SetWindowSubclass(g_hSliderMasterVolume, VolumeSliderSubclassProc, 1, 0);
-    ApplyDarkTheme(g_hSliderMasterVolume);
-
-    // Editing controls section
-    g_hLabelEditing = CreateWindow(
-        L"STATIC", L"Editing:",
-        WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 350, 100, 20, // Placeholder
-        hwnd, nullptr,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hLabelEditing);
-
-    g_hButtonSetStart = CreateWindow(
-        L"BUTTON", L"Set Start",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        340, 375, 95, 25, // Placeholder
-        hwnd, (HMENU)ID_BUTTON_SET_START,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonSetStart);
-
-    g_hButtonSetEnd = CreateWindow(
-        L"BUTTON", L"Set End",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        445, 375, 95, 25, // Placeholder
-        hwnd, (HMENU)ID_BUTTON_SET_END,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonSetEnd);
-
-    g_hEditStartTime = CreateWindow(
-        L"EDIT", L"",
-        WS_VISIBLE | WS_CHILD | WS_BORDER,
-        340, 405, 95, 20,
-        hwnd, (HMENU)ID_EDIT_START_TIME,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hEditStartTime);
-
-    g_hEditEndTime = CreateWindow(
-        L"EDIT", L"",
-        WS_VISIBLE | WS_CHILD | WS_BORDER,
-        445, 405, 95, 20,
-        hwnd, (HMENU)ID_EDIT_END_TIME,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hEditEndTime);
-
-    g_hButtonPlayClip = CreateWindow(
-        L"BUTTON", L"\x25B6",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        550, 405, 30, 20,
-        hwnd, (HMENU)ID_BUTTON_PLAY_CLIP,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonPlayClip);
-
-    g_hButtonPlayEnd = CreateWindow(
-        L"BUTTON", L"\x25B6",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        585, 405, 30, 20,
-        hwnd, (HMENU)ID_BUTTON_PLAY_END,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonPlayEnd);
-
-    g_hListBoxCutSegments = CreateWindow(
-        L"LISTBOX", nullptr,
-        WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-        340, 430, 200, 55,
-        hwnd, (HMENU)ID_LISTBOX_CUT_SEGMENTS,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hListBoxCutSegments);
-
-    g_hButtonPlayAllClips = CreateWindow(
-        L"BUTTON", L"Play\nAll",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | BS_MULTILINE,
-        545, 430, 45, 55,
-        hwnd, (HMENU)ID_BUTTON_PLAY_ALL_CLIPS,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonPlayAllClips);
-
-    g_hButtonAddClip = CreateWindow(
-        L"BUTTON", L"Add",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        340, 430, 95, 25,
-        hwnd, (HMENU)ID_BUTTON_ADD_CLIP,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonAddClip);
-
-    g_hButtonUpdateClip = CreateWindow(
-        L"BUTTON", L"Update",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        400, 490, 60, 25,
-        hwnd, (HMENU)ID_BUTTON_UPDATE_CLIP,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonUpdateClip);
-
-    g_hButtonRemoveClip = CreateWindow(
-        L"BUTTON", L"Remove",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        465, 490, 60, 25,
-        hwnd, (HMENU)ID_BUTTON_REMOVE_CLIP,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonRemoveClip);
-
-    g_hButtonClearClips = CreateWindow(
-        L"BUTTON", L"Clear",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        445, 430, 95, 25,
-        hwnd, (HMENU)ID_BUTTON_CLEAR_CLIPS,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonClearClips);
-
-    g_hLabelCutInfo = CreateWindow(
-        L"STATIC", L"Cut points not set.",
-        WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 430, 200, 40, // Placeholder
-        hwnd, nullptr,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hLabelCutInfo);
-
-    g_hButtonCut = CreateWindow(
-        L"BUTTON", L"Export Video",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        340, 450, 200, 30, // Placeholder
-        hwnd, (HMENU)ID_BUTTON_CUT,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hButtonCut);
-
-   g_hCheckboxMergeAudio = CreateWindow(
-       L"BUTTON", L"Merge Audios",
-       WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
-       340, 485, 200, 25, // Placeholder
-       hwnd, (HMENU)ID_CHECKBOX_MERGE_AUDIO,
-       (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-   SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, g_mergeAudioByDefault ? BST_CHECKED : BST_UNCHECKED, 0);
-   ApplyDarkTheme(g_hCheckboxMergeAudio);
-
-    g_hRadioH264 = CreateWindow(
-        L"BUTTON", L"Convert to H264",
-        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
-        340, 515, 100, 20,
-        hwnd, (HMENU)ID_RADIO_H264,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hRadioH264);
-    SetWindowTheme(g_hRadioH264, L"", L"");
+    // Export section
+    g_hLabelExport = ui::CreateLabel(hwnd, L"Export", ui::LabelKind::Header, bar);
+    g_hCheckboxMergeAudio = MakeButton(hwnd, L"Merge audio tracks", ID_CHECKBOX_MERGE_AUDIO, BS_AUTOCHECKBOX, ButtonStyle::Check, 0, bar);
+    SendMessage(g_hCheckboxMergeAudio, BM_SETCHECK, g_mergeAudioByDefault ? BST_CHECKED : BST_UNCHECKED, 0);
+    g_hRadioH264 = MakeButton(hwnd, L"Encode H.264", ID_RADIO_H264, BS_AUTORADIOBUTTON | WS_GROUP, ButtonStyle::Segment, 0, field);
     SendMessage(g_hRadioH264, BM_SETCHECK, BST_CHECKED, 0);
-
-    g_hRadioCopyCodec = CreateWindow(
-        L"BUTTON", L"Copy Codec",
-        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
-        445, 515, 100, 20,
-        hwnd, (HMENU)ID_RADIO_COPY_CODEC,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hRadioCopyCodec);
-    SetWindowTheme(g_hRadioCopyCodec, L"", L"");
-
-    g_hRadioUseBitrate = CreateWindow(
-        L"BUTTON", L"Specify Bitrate",
-        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
-        340, 540, 100, 20,
-        hwnd, (HMENU)ID_RADIO_USE_BITRATE,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hRadioUseBitrate);
-    SetWindowTheme(g_hRadioUseBitrate, L"", L"");
+    g_hRadioCopyCodec = MakeButton(hwnd, L"Copy codec", ID_RADIO_COPY_CODEC, BS_AUTORADIOBUTTON, ButtonStyle::Segment, 0, field);
+    g_hRadioUseBitrate = MakeButton(hwnd, L"Bitrate", ID_RADIO_USE_BITRATE, BS_AUTORADIOBUTTON | WS_GROUP, ButtonStyle::Segment, 0, field);
     SendMessage(g_hRadioUseBitrate, BM_SETCHECK, BST_CHECKED, 0);
+    g_hRadioUseSize = MakeButton(hwnd, L"Size", ID_RADIO_USE_SIZE, BS_AUTORADIOBUTTON, ButtonStyle::Segment, 0, field);
+    g_hEditBitrate = MakeEdit(hwnd, L"0", ID_EDIT_BITRATE, ES_NUMBER);
+    g_hLabelBitrate = ui::CreateLabel(hwnd, L"kbps", ui::LabelKind::Unit, field);
+    g_hEditTargetSize = MakeEdit(hwnd, L"0", ID_EDIT_TARGETSIZE, ES_NUMBER);
+    g_hLabelTargetSize = ui::CreateLabel(hwnd, L"MB", ui::LabelKind::Unit, field);
+    g_hButtonCut = MakeButton(hwnd, L"Export Video", ID_BUTTON_CUT, BS_PUSHBUTTON, ButtonStyle::Primary, glyph::Save, bar);
+    ui::SetButtonAlternate(g_hButtonCut, L"Cut Video", glyph::Cut, false);
 
-    g_hRadioUseSize = CreateWindow(
-        L"BUTTON", L"Target Size",
-        WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
-        445, 540, 100, 20,
-        hwnd, (HMENU)ID_RADIO_USE_SIZE,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hRadioUseSize);
-    SetWindowTheme(g_hRadioUseSize, L"", L"");
-
-    g_hLabelBitrate = CreateWindow(
-        L"STATIC", L"Bitrate KBPS",
-        WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 565, 200, 20,
-        hwnd, (HMENU)ID_LABEL_BITRATE,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hLabelBitrate);
-
-    g_hEditBitrate = CreateWindow(
-        L"EDIT", L"0",
-        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
-        340, 585, 200, 20,
-        hwnd, (HMENU)ID_EDIT_BITRATE,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hEditBitrate);
-
-    g_hLabelTargetSize = CreateWindow(
-        L"STATIC", L"Target Size MB",
-        WS_VISIBLE | WS_CHILD | SS_LEFT,
-        340, 565, 200, 20,
-        hwnd, (HMENU)ID_LABEL_TARGETSIZE,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hLabelTargetSize);
-
-    g_hEditTargetSize = CreateWindow(
-        L"EDIT", L"0",
-        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
-        340, 585, 200, 20,
-        hwnd, (HMENU)ID_EDIT_TARGETSIZE,
-        (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), nullptr);
-    ApplyDarkTheme(g_hEditTargetSize);
-
+    // Tooltips for icon-only buttons
+    HWND tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                                   WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                                   hwnd, nullptr, InstanceOf(hwnd), nullptr);
+    if (tooltip)
+    {
+        SetWindowTheme(tooltip, L"DarkMode_Explorer", nullptr);
+        AddTooltip(tooltip, hwnd, g_hButtonOpen, L"Open a video file");
+        AddTooltip(tooltip, hwnd, g_hButtonPlay, L"Play");
+        AddTooltip(tooltip, hwnd, g_hButtonPause, L"Pause");
+        AddTooltip(tooltip, hwnd, g_hButtonStop, L"Stop");
+        AddTooltip(tooltip, hwnd, g_hButtonSpeedDown, L"Slower");
+        AddTooltip(tooltip, hwnd, g_hButtonSpeedUp, L"Faster");
+        AddTooltip(tooltip, hwnd, g_hEditPlaybackSpeed, L"Playback speed");
+        AddTooltip(tooltip, hwnd, g_hButtonTogglePanel, L"Show or hide the side panel");
+        AddTooltip(tooltip, hwnd, g_hButtonMuteTrack, L"Mute or unmute the selected track");
+        AddTooltip(tooltip, hwnd, g_hButtonPlayClip, L"Play from start point");
+        AddTooltip(tooltip, hwnd, g_hButtonPlayEnd, L"Play the last seconds before the end point");
+    }
 
     // Disable controls until video is loaded
     EnableWindow(g_hButtonPlay, FALSE);
@@ -563,110 +381,202 @@ void RepositionControls(HWND hwnd)
 
     RECT clientRect;
     GetClientRect(hwnd, &clientRect);
+    const int width = clientRect.right;
+    const int height = clientRect.bottom;
+    const int statusTop = height - kStatusHeight;
+    const int sidebarLeft = g_isPanelVisible ? width - kSidebarWidth : width;
 
-    // Main controls
-    int mainControlsY = 10;
-    int mainControlsHeight = 30;
-    MoveWindow(g_hButtonOpen, 10, mainControlsY, 100, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonPlay, 120, mainControlsY, 60, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonPause, 190, mainControlsY, 60, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonStop, 260, mainControlsY, 60, mainControlsHeight, TRUE);
-    int optionsWidth = 80;
-    int toggleWidth = 80;
-    int optionsX = clientRect.right - optionsWidth - 10;
-    int toggleX = optionsX - toggleWidth - 5;
-    int speedButtonWidth = 36;
-    int speedEditWidth = 64;
-    int speedGap = 4;
-    int speedGroupWidth = speedButtonWidth * 2 + speedEditWidth + speedGap * 2;
-    int speedDownX = toggleX - speedGroupWidth - 8;
-    MoveWindow(g_hButtonSpeedDown, speedDownX, mainControlsY, speedButtonWidth, mainControlsHeight, TRUE);
-    MoveWindow(g_hEditPlaybackSpeed, speedDownX + speedButtonWidth + speedGap,
-               mainControlsY, speedEditWidth, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonSpeedUp, speedDownX + speedButtonWidth + speedGap + speedEditWidth + speedGap,
-               mainControlsY, speedButtonWidth, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonOptions, optionsX, mainControlsY, optionsWidth, mainControlsHeight, TRUE);
-    MoveWindow(g_hButtonTogglePanel, toggleX, mainControlsY, toggleWidth, mainControlsHeight, TRUE);
-    SetWindowTextW(g_hButtonTogglePanel, g_isPanelVisible ? L"\u25BA Panel" : L"\u25C4 Panel");
+    g_layout.toolbar = { 0, 0, width, kToolbarHeight };
+    g_layout.sidebar = { sidebarLeft, kToolbarHeight, width, statusTop };
+    g_layout.panelVisible = g_isPanelVisible;
+    g_layout.dividers.clear();
 
-    // Audio controls (aligned to the right)
-    int audioControlsWidth = 250;
-    int audioControlsX = clientRect.right - audioControlsWidth - 10;
-    int audioControlsY = 50;
+    // ---- Toolbar ----
+    const int buttonY = 10;
+    const int buttonHeight = 36;
+    const int openWidth = 92;
+    Place(g_hButtonOpen, kPadding, buttonY, openWidth, buttonHeight);
 
-    int nCmdShow = g_isPanelVisible ? SW_SHOW : SW_HIDE;
-    int multiClipCmdShow = (g_isPanelVisible && g_enableMultiClipEditing) ? SW_SHOW : SW_HIDE;
-    ShowWindow(g_hLabelAudioTracks, nCmdShow);
-    ShowWindow(g_hListBoxAudioTracks, nCmdShow);
-    ShowWindow(g_hButtonMuteTrack, nCmdShow);
-    ShowWindow(g_hLabelTrackVolume, nCmdShow);
-    ShowWindow(g_hSliderTrackVolume, nCmdShow);
-    ShowWindow(g_hLabelMasterVolume, nCmdShow);
-    ShowWindow(g_hSliderMasterVolume, nCmdShow);
-    ShowWindow(g_hLabelEditing, nCmdShow);
-    ShowWindow(g_hButtonSetStart, nCmdShow);
-    ShowWindow(g_hButtonSetEnd, nCmdShow);
-    ShowWindow(g_hEditStartTime, nCmdShow);
-    ShowWindow(g_hEditEndTime, nCmdShow);
-    ShowWindow(g_hButtonPlayClip, nCmdShow);
-    ShowWindow(g_hButtonPlayEnd, nCmdShow);
-    ShowWindow(g_hButtonAddClip, multiClipCmdShow);
-    ShowWindow(g_hButtonClearClips, multiClipCmdShow);
-    ShowWindow(g_hListBoxCutSegments, multiClipCmdShow);
-    ShowWindow(g_hButtonUpdateClip, multiClipCmdShow);
-    ShowWindow(g_hButtonRemoveClip, multiClipCmdShow);
-    ShowWindow(g_hButtonPlayAllClips, multiClipCmdShow);
-    ShowWindow(g_hLabelCutInfo, nCmdShow);
-    ShowWindow(g_hButtonCut, nCmdShow);
-    ShowWindow(g_hCheckboxMergeAudio, nCmdShow);
-    ShowWindow(g_hRadioH264, nCmdShow);
-    ShowWindow(g_hRadioCopyCodec, nCmdShow);
+    const int optionsWidth = 108;
+    const int toggleWidth = 36;
+    const int optionsX = width - kPadding - optionsWidth;
+    const int toggleX = optionsX - 4 - toggleWidth;
+    Place(g_hButtonOptions, optionsX, buttonY, optionsWidth, buttonHeight);
+    Place(g_hButtonTogglePanel, toggleX, buttonY, toggleWidth, buttonHeight);
+    ui::SetButtonGlyph(g_hButtonTogglePanel,
+                       g_isPanelVisible ? ui::glyph::ClosePane : ui::glyph::OpenPane);
+
+    // Transport centered over the video, followed by the speed control.
+    const int stopWidth = 36;
+    const int playWidth = 44;
+    const int speedWidth = 124;
+    const int transportGap = 6;
+    const int groupWidth = stopWidth + transportGap + playWidth + 16 + speedWidth;
+    const int minimumGroupX = kPadding + openWidth + 16;
+    const int maximumGroupX = toggleX - 16 - groupWidth;
+    int groupX = sidebarLeft / 2 - (stopWidth + transportGap + playWidth / 2);
+    groupX = (std::min)(groupX, maximumGroupX);
+    groupX = (std::max)(groupX, minimumGroupX);
+    Place(g_hButtonStop, groupX, buttonY, stopWidth, buttonHeight);
+    Place(g_hButtonPlay, groupX + stopWidth + transportGap, buttonY, playWidth, buttonHeight);
+    Place(g_hButtonPause, groupX + stopWidth + transportGap, buttonY, playWidth, buttonHeight);
+
+    const int speedX = groupX + stopWidth + transportGap + playWidth + 16;
+    ui::SetFieldRect(g_hEditPlaybackSpeed, RECT{ speedX, buttonY, speedX + speedWidth, buttonY + buttonHeight });
+    Place(g_hButtonSpeedDown, speedX + 4, buttonY + 4, 30, buttonHeight - 8);
+    Place(g_hEditPlaybackSpeed, speedX + 38, buttonY + (buttonHeight - 20) / 2, speedWidth - 76, 20);
+    Place(g_hButtonSpeedUp, speedX + speedWidth - 34, buttonY + 4, 30, buttonHeight - 8);
+
+    // ---- Side panel ----
+    const int panelCmdShow = g_isPanelVisible ? SW_SHOW : SW_HIDE;
+    const int multiClipCmdShow = (g_isPanelVisible && g_enableMultiClipEditing) ? SW_SHOW : SW_HIDE;
+    for (HWND control : { g_hLabelAudioTracks, g_hListBoxAudioTracks, g_hButtonMuteTrack,
+                          g_hLabelTrackVolume, g_hSliderTrackVolume, g_hLabelMasterVolume,
+                          g_hSliderMasterVolume, g_hLabelEditing, g_hButtonSetStart,
+                          g_hButtonSetEnd, g_hEditStartTime, g_hEditEndTime, g_hButtonPlayClip,
+                          g_hButtonPlayEnd, g_hLabelCutInfo, g_hButtonCut, g_hCheckboxMergeAudio,
+                          g_hRadioH264, g_hRadioCopyCodec, g_hLabelExport })
+        ShowWindow(control, panelCmdShow);
+    for (HWND control : { g_hButtonAddClip, g_hButtonClearClips, g_hListBoxCutSegments,
+                          g_hButtonUpdateClip, g_hButtonRemoveClip, g_hButtonPlayAllClips })
+        ShowWindow(control, multiClipCmdShow);
 
     if (g_isPanelVisible)
     {
-        MoveWindow(g_hLabelAudioTracks, audioControlsX, audioControlsY, 200, 20, TRUE);
-        MoveWindow(g_hListBoxAudioTracks, audioControlsX, audioControlsY + 25, 200, 70, TRUE);
-        MoveWindow(g_hButtonMuteTrack, audioControlsX, audioControlsY + 100, 100, 25, TRUE);
+        const int x0 = sidebarLeft + 18;
+        const int innerWidth = kSidebarWidth - 36;
+        g_layout.sidebarX = x0;
+        g_layout.sidebarInnerWidth = innerWidth;
 
-        MoveWindow(g_hLabelTrackVolume, audioControlsX, audioControlsY + 135, 200, 20, TRUE);
-        MoveWindow(g_hSliderTrackVolume, audioControlsX, audioControlsY + 155, 245, 30, TRUE);
+        const int exportHeight = 38;
+        const int pinnedExportY = statusTop - 12 - exportHeight;
 
-        MoveWindow(g_hLabelMasterVolume, audioControlsX, audioControlsY + 190, 200, 20, TRUE);
-        MoveWindow(g_hSliderMasterVolume, audioControlsX, audioControlsY + 210, 245, 30, TRUE);
+        // Lays out the panel top to bottom. The clip list absorbs spare height,
+        // so this runs once to measure and once to place.
+        auto layoutPanel = [&](int clipListHeight, bool apply) -> int {
+            auto place = [apply](HWND control, int x, int y, int w, int h) {
+                if (apply)
+                    Place(control, x, y, w, h);
+            };
+            auto setField = [apply](HWND key, RECT box) {
+                if (apply)
+                    ui::SetFieldRect(key, box);
+            };
+            auto divider = [&](int& y) {
+                y += 10;
+                if (apply)
+                    g_layout.dividers.push_back(y);
+                y += 11;
+            };
 
-        // Editing controls (below audio)
-        int editingControlsY = audioControlsY + 245;
-        MoveWindow(g_hLabelEditing, audioControlsX, editingControlsY, 200, 20, TRUE);
-        MoveWindow(g_hButtonSetStart, audioControlsX, editingControlsY + 25, 95, 25, TRUE);
-        MoveWindow(g_hButtonSetEnd, audioControlsX + 105, editingControlsY + 25, 95, 25, TRUE);
-        MoveWindow(g_hEditStartTime, audioControlsX, editingControlsY + 55, 95, 20, TRUE);
-        MoveWindow(g_hEditEndTime, audioControlsX + 105, editingControlsY + 55, 95, 20, TRUE);
-        MoveWindow(g_hButtonPlayClip, audioControlsX + 200, editingControlsY + 55, 20, 20, TRUE);
-        MoveWindow(g_hButtonPlayEnd, audioControlsX + 225, editingControlsY + 55, 20, 20, TRUE);
-        int exportControlsY;
-        if (g_enableMultiClipEditing) {
-            MoveWindow(g_hListBoxCutSegments, audioControlsX, editingControlsY + 80, 200, 55, TRUE);
-            MoveWindow(g_hButtonPlayAllClips, audioControlsX + 205, editingControlsY + 80, 40, 55, TRUE);
-            MoveWindow(g_hButtonAddClip, audioControlsX, editingControlsY + 140, 55, 25, TRUE);
-            MoveWindow(g_hButtonUpdateClip, audioControlsX + 60, editingControlsY + 140, 60, 25, TRUE);
-            MoveWindow(g_hButtonRemoveClip, audioControlsX + 125, editingControlsY + 140, 60, 25, TRUE);
-            MoveWindow(g_hButtonClearClips, audioControlsX + 190, editingControlsY + 140, 55, 25, TRUE);
-            MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 170, 240, 25, TRUE);
-            exportControlsY = editingControlsY + 195;
-        } else {
-            MoveWindow(g_hLabelCutInfo, audioControlsX, editingControlsY + 80, 240, 40, TRUE);
-            exportControlsY = editingControlsY + 125;
-        }
-        MoveWindow(g_hButtonCut, audioControlsX, exportControlsY, 200, 30, TRUE);
-        MoveWindow(g_hCheckboxMergeAudio, audioControlsX, exportControlsY + 35, 200, 25, TRUE);
-        MoveWindow(g_hRadioH264, audioControlsX, exportControlsY + 65, 120, 20, TRUE);
-        MoveWindow(g_hRadioCopyCodec, audioControlsX + 120, exportControlsY + 65, 100, 20, TRUE);
-        MoveWindow(g_hRadioUseBitrate, audioControlsX, exportControlsY + 90, 100, 20, TRUE);
-        MoveWindow(g_hRadioUseSize, audioControlsX + 105, exportControlsY + 90, 100, 20, TRUE);
-        MoveWindow(g_hLabelBitrate, audioControlsX, exportControlsY + 115, 200, 20, TRUE);
-        MoveWindow(g_hEditBitrate, audioControlsX, exportControlsY + 135, 200, 20, TRUE);
-        MoveWindow(g_hLabelTargetSize, audioControlsX, exportControlsY + 115, 200, 20, TRUE);
-        MoveWindow(g_hEditTargetSize, audioControlsX, exportControlsY + 135, 200, 20, TRUE);
+            int y = kToolbarHeight + 16;
+
+            // Audio
+            place(g_hLabelAudioTracks, x0, y, innerWidth, 16);
+            y += 24;
+            setField(g_hListBoxAudioTracks, RECT{ x0, y, x0 + innerWidth, y + 64 });
+            place(g_hListBoxAudioTracks, x0 + 2, y + 2, innerWidth - 4, 60);
+            y += 64 + 12;
+            place(g_hLabelTrackVolume, x0, y, innerWidth, 18);
+            y += 22;
+            place(g_hButtonMuteTrack, x0, y, 32, 28);
+            place(g_hSliderTrackVolume, x0 + 38, y, innerWidth - 38, 28);
+            y += 28 + 8;
+            place(g_hLabelMasterVolume, x0, y, innerWidth, 18);
+            y += 22;
+            if (apply)
+                g_layout.masterIcon = RECT{ x0, y, x0 + 32, y + 28 };
+            place(g_hSliderMasterVolume, x0 + 38, y, innerWidth - 38, 28);
+            y += 28;
+            divider(y);
+
+            // Trim
+            place(g_hLabelEditing, x0, y, 80, 16);
+            if (apply)
+                ui::SetLabelKind(g_hLabelCutInfo, g_enableMultiClipEditing ? ui::LabelKind::Caption
+                                                                           : ui::LabelKind::Meta);
+            if (!g_enableMultiClipEditing)
+                place(g_hLabelCutInfo, x0 + 60, y, innerWidth - 60, 16);
+            y += 24;
+            const int half = (innerWidth - 8) / 2;
+            const int rightX = x0 + innerWidth - half;
+            place(g_hButtonSetStart, x0, y, half, 30);
+            place(g_hButtonSetEnd, rightX, y, half, 30);
+            y += 38;
+            setField(g_hEditStartTime, RECT{ x0, y, x0 + half, y + 30 });
+            place(g_hEditStartTime, x0 + 10, y + 5, half - 40, 20);
+            place(g_hButtonPlayClip, x0 + half - 29, y + 3, 26, 24);
+            setField(g_hEditEndTime, RECT{ rightX, y, rightX + half, y + 30 });
+            place(g_hEditEndTime, rightX + 10, y + 5, half - 40, 20);
+            place(g_hButtonPlayEnd, rightX + half - 29, y + 3, 26, 24);
+            y += 30;
+
+            if (g_enableMultiClipEditing)
+            {
+                y += 8;
+                const int gap = 5;
+                const int each = (innerWidth - gap * 3) / 4;
+                int x = x0;
+                HWND clipButtons[] = { g_hButtonAddClip, g_hButtonUpdateClip,
+                                       g_hButtonRemoveClip, g_hButtonClearClips };
+                for (HWND button : clipButtons)
+                {
+                    const int w = (button == g_hButtonClearClips) ? x0 + innerWidth - x : each;
+                    place(button, x, y, w, 30);
+                    x += each + gap;
+                }
+                y += 38;
+                setField(g_hListBoxCutSegments, RECT{ x0, y, x0 + innerWidth, y + clipListHeight });
+                place(g_hListBoxCutSegments, x0 + 2, y + 2, innerWidth - 4, clipListHeight - 4);
+                y += clipListHeight + 8;
+                const int playAllWidth = 100;
+                place(g_hLabelCutInfo, x0, y, innerWidth - playAllWidth - 8, 28);
+                place(g_hButtonPlayAllClips, x0 + innerWidth - playAllWidth, y, playAllWidth, 28);
+                y += 28;
+            }
+            divider(y);
+
+            // Export
+            place(g_hLabelExport, x0, y, innerWidth, 16);
+            y += 24;
+            place(g_hCheckboxMergeAudio, x0, y, innerWidth, 22);
+            y += 30;
+            const int segmentInner = innerWidth - 6;
+            setField(g_hRadioH264, RECT{ x0, y, x0 + innerWidth, y + 34 });
+            place(g_hRadioH264, x0 + 3, y + 3, segmentInner / 2, 28);
+            place(g_hRadioCopyCodec, x0 + 3 + segmentInner / 2, y + 3, segmentInner - segmentInner / 2, 28);
+            y += 34;
+
+            // Rate controls only take space when re-encoding.
+            if (SendMessage(g_hRadioH264, BM_GETCHECK, 0, 0) != BST_CHECKED)
+                return y;
+            y += 8;
+            const int rateWidth = 140;
+            setField(g_hRadioUseBitrate, RECT{ x0, y, x0 + rateWidth, y + 34 });
+            place(g_hRadioUseBitrate, x0 + 3, y + 3, (rateWidth - 6) / 2, 28);
+            place(g_hRadioUseSize, x0 + 3 + (rateWidth - 6) / 2, y + 3, (rateWidth - 6) - (rateWidth - 6) / 2, 28);
+            const int valueX = x0 + rateWidth + 8;
+            const int valueWidth = innerWidth - rateWidth - 8;
+            const RECT valueBox{ valueX, y, valueX + valueWidth, y + 34 };
+            setField(g_hEditBitrate, valueBox);
+            setField(g_hEditTargetSize, valueBox);
+            place(g_hEditBitrate, valueX + 10, y + 7, valueWidth - 56, 20);
+            place(g_hLabelBitrate, valueX + valueWidth - 46, y + 1, 36, 32);
+            place(g_hEditTargetSize, valueX + 10, y + 7, valueWidth - 56, 20);
+            place(g_hLabelTargetSize, valueX + valueWidth - 46, y + 1, 36, 32);
+            y += 34;
+            return y;
+        };
+
+        const int preferredClipList = 84;
+        const int measuredEnd = layoutPanel(preferredClipList, false);
+        const int spare = pinnedExportY - 24 - measuredEnd;
+        const int clipListHeight = std::clamp(preferredClipList + spare, 40, 200);
+        const int flowEnd = layoutPanel(clipListHeight, true);
+
+        const int exportY = (std::max)(pinnedExportY, flowEnd + 24);
+        g_layout.footerTop = exportY - 12;
+        Place(g_hButtonCut, x0, exportY, innerWidth, exportHeight);
     }
 
     RepositionTimelineArea(hwnd);
@@ -683,17 +593,14 @@ void RepositionTimelineArea(HWND hwnd)
     RECT clientRect;
     GetClientRect(hwnd, &clientRect);
 
-    // Video area (takes up remaining space)
-    const int mainControlsY = 10;
-    const int mainControlsHeight = 30;
-    const int audioControlsWidth = 250;
-    int panelReserved = g_isPanelVisible ? (audioControlsWidth + 30) : 10;
-    int videoSectionWidth = (std::max)(
-        0, static_cast<int>(clientRect.right) - panelReserved - 10);
-    const int videoTop = mainControlsY + mainControlsHeight + 10;
-    const int statusY = clientRect.bottom - 50;
-    const int timelineBottom = statusY - 10;
-    const int resizeBarHeight = 10;
+    const int contentRight = g_isPanelVisible
+        ? static_cast<int>(clientRect.right) - kSidebarWidth
+        : static_cast<int>(clientRect.right);
+    const int videoSectionWidth = (std::max)(0, contentRight - kPadding * 2);
+    const int videoTop = kToolbarHeight + kPadding;
+    const int statusY = clientRect.bottom - kStatusHeight;
+    const int timelineBottom = statusY - kPadding;
+    const int resizeBarHeight = 12;
     const int minimumVideoHeight = 100;
     const int maximumTimelineHeight = (std::max)(
         30, timelineBottom - videoTop - resizeBarHeight - minimumVideoHeight);
@@ -703,17 +610,45 @@ void RepositionTimelineArea(HWND hwnd)
     const int resizeBarY = timelineY - resizeBarHeight;
 
     g_videoPlayer->SetPosition(
-        10,
+        kPadding,
         videoTop,
         videoSectionWidth,
         (std::max)(0, resizeBarY - videoTop)
     );
 
-    MoveWindow(
-        g_hTimelineResizeBar,
-        10, resizeBarY, videoSectionWidth, resizeBarHeight, TRUE);
-    MoveWindow(g_hTimeline, 10, timelineY, videoSectionWidth, timelineHeight, TRUE);
-    MoveWindow(g_hStatusText, 10, statusY, videoSectionWidth, 20, TRUE);
+    MoveWindow(g_hTimelineResizeBar, kPadding, resizeBarY, videoSectionWidth, resizeBarHeight, TRUE);
+    MoveWindow(g_hTimeline, kPadding, timelineY, videoSectionWidth, timelineHeight, TRUE);
+    MoveWindow(g_hStatusText, 0, statusY, clientRect.right, kStatusHeight, TRUE);
     UpdateWindow(g_hTimelineResizeBar);
     UpdateWindow(g_hTimeline);
+}
+
+void PaintMainWindow(HWND hwnd, HDC hdc)
+{
+    RECT client;
+    GetClientRect(hwnd, &client);
+    ui::FillSolid(hdc, client, ui::kBgApp);
+
+    // Toolbar
+    ui::FillSolid(hdc, g_layout.toolbar, ui::kSurface);
+    RECT toolbarLine{ 0, g_layout.toolbar.bottom - 1, client.right, g_layout.toolbar.bottom };
+    ui::FillSolid(hdc, toolbarLine, ui::kBorder);
+
+    if (g_layout.panelVisible)
+    {
+        ui::FillSolid(hdc, g_layout.sidebar, ui::kSurface);
+        RECT edge{ g_layout.sidebar.left, g_layout.sidebar.top, g_layout.sidebar.left + 1, g_layout.sidebar.bottom };
+        ui::FillSolid(hdc, edge, ui::kBorder);
+        for (int y : g_layout.dividers)
+        {
+            RECT line{ g_layout.sidebarX, y, g_layout.sidebarX + g_layout.sidebarInnerWidth, y + 1 };
+            ui::FillSolid(hdc, line, ui::kBorder);
+        }
+        RECT footer{ g_layout.sidebar.left + 1, g_layout.footerTop, g_layout.sidebar.right, g_layout.footerTop + 1 };
+        ui::FillSolid(hdc, footer, ui::kBorder);
+        ui::DrawGlyph(hdc, ui::glyph::Volume, g_layout.masterIcon,
+                      IsWindowEnabled(g_hSliderMasterVolume) ? ui::kTextMuted : ui::kTextDisabled);
+    }
+
+    ui::PaintFields(hdc);
 }

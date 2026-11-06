@@ -27,6 +27,7 @@
 #include "ui_updates.h"
 #include "clip_segment.h"
 #include "ten_vad_embedded.h"
+#include "theme.h"
 
 #include <string>
 #include <cstdlib>
@@ -81,6 +82,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     LoadSettings();
+    ui::Init(hInstance);
     curl_global_init(CURL_GLOBAL_DEFAULT);
     const wchar_t CLASS_NAME[] = L"VideoEditorClass";
     WNDCLASS wc = {};
@@ -88,7 +90,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    wc.hbrBackground = nullptr; // WM_PAINT draws the themed background
 
     RegisterClass(&wc);
 
@@ -166,8 +168,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 
     HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"Video Editor - Preview",
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1000, 700,
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1280, 880,
         nullptr, nullptr, hInstance, nullptr);
 
     if (!hwnd)
@@ -452,6 +454,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         DispatchMessage(&msg);
     }
     ShutdownEmbeddedTenVadRuntime();
+    ui::Shutdown();
     curl_global_cleanup();
     CoUninitialize();
     return 0;

@@ -15,6 +15,7 @@ public:
     void SetPosition(int x, int y, int width, int height);
     void Render();
     void OnVideoWindowPaint();
+    void PaintEmptyState(HDC target);
 
 public:
     bool CreateRenderTarget();

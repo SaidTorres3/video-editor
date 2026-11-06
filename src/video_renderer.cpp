@@ -1,6 +1,7 @@
 #include "video_renderer.h"
 #include "video_player.h"
 #include "video_decoder.h"
+#include "theme.h"
 #include <algorithm>
 #include <cmath>
 #include <cwchar>
@@ -223,13 +224,49 @@ void VideoRenderer::Render() {
         m_player->m_decoder->DecodeNextFrame(true);
 }
 
+void VideoRenderer::PaintEmptyState(HDC target) {
+    RECT rc{};
+    GetClientRect(m_player->videoWindow, &rc);
+    if (rc.right <= 0 || rc.bottom <= 0)
+        return;
+
+    HDC hdc = CreateCompatibleDC(target);
+    HBITMAP bitmap = CreateCompatibleBitmap(target, rc.right, rc.bottom);
+    HGDIOBJ oldBitmap = SelectObject(hdc, bitmap);
+    SetBkMode(hdc, TRANSPARENT);
+
+    ui::FillSolid(hdc, rc, ui::kBgApp);
+    RECT panel = rc;
+    ui::FillRound(hdc, panel, 12.0f, RGB(20, 21, 25));
+    ui::StrokeRound(hdc, panel, 12.0f, ui::kBorder);
+
+    const int cy = rc.bottom / 2;
+    RECT icon{ 0, cy - 74, rc.right, cy - 14 };
+    ui::DrawGlyph(hdc, ui::glyph::Video, icon, ui::kTextDisabled, ui::FontRole::IconLarge);
+
+    auto drawLine = [&](const wchar_t* text, int top, int height, COLORREF color, ui::FontRole role) {
+        RECT line{ 16, top, rc.right - 16, top + height };
+        HGDIOBJ oldFont = SelectObject(hdc, ui::Font(role));
+        SetTextColor(hdc, color);
+        DrawTextW(hdc, text, -1, &line, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(hdc, oldFont);
+    };
+    drawLine(L"Drop a video here", cy - 2, 26, ui::kText, ui::FontRole::Title);
+    drawLine(L"or click Open to browse your files", cy + 26, 20, ui::kTextMuted, ui::FontRole::Body);
+
+    BitBlt(target, 0, 0, rc.right, rc.bottom, hdc, 0, 0, SRCCOPY);
+    SelectObject(hdc, oldBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(hdc);
+}
+
 void VideoRenderer::OnVideoWindowPaint() {
     PAINTSTRUCT ps;
     BeginPaint(m_player->videoWindow, &ps);
     if (m_player->isLoaded)
         UpdateDisplay(false);
     else
-        FillRect(ps.hdc, &ps.rcPaint, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        PaintEmptyState(ps.hdc);
     EndPaint(m_player->videoWindow, &ps);
 }
 

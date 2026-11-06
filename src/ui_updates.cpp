@@ -4,6 +4,7 @@
 #include "editing.h"
 #include "options_window.h"
 #include "timeline.h"
+#include "ui_controls.h"
 #include <string>
 #include <commctrl.h>
 #include <cmath>
@@ -59,6 +60,12 @@ void UpdateControls()
     EnableWindow(g_hButtonOpen, !g_isExporting);
     EnableWindow(g_hButtonPlay, isLoaded && !isPlaying);
     EnableWindow(g_hButtonPause, isLoaded && isPlaying);
+    // Play and Pause share one toolbar slot; show whichever applies.
+    if (IsWindowVisible(g_hButtonPlay) == static_cast<BOOL>(isPlaying))
+    {
+        ShowWindow(g_hButtonPlay, isPlaying ? SW_HIDE : SW_SHOW);
+        ShowWindow(g_hButtonPause, isPlaying ? SW_SHOW : SW_HIDE);
+    }
     EnableWindow(g_hButtonStop, isLoaded);
     EnableWindow(g_hButtonSpeedDown, isLoaded);
     EnableWindow(g_hButtonSpeedUp, isLoaded);
@@ -146,6 +153,18 @@ void UpdateControls()
    ShowWindow(g_hLabelTargetSize, (convertH264 && !useBitrate && g_isPanelVisible) ? SW_SHOW : SW_HIDE);
    ShowWindow(g_hEditTargetSize, (convertH264 && !useBitrate && g_isPanelVisible) ? SW_SHOW : SW_HIDE);
 
+   // The rounded boxes behind these inputs are painted by the main window,
+   // so repaint it when the set of visible inputs changes.
+   static int previousExportMode = -1;
+   const int exportMode = (convertH264 ? 1 : 0) | (useBitrate ? 2 : 0) | (g_isPanelVisible ? 4 : 0);
+   if (exportMode != previousExportMode)
+   {
+       previousExportMode = exportMode;
+       // The panel layout reserves the bitrate row only while re-encoding.
+       if (HWND mainWindow = GetParent(g_hRadioUseBitrate))
+           RepositionControls(mainWindow);
+   }
+
 
     if (isLoaded)
     {
@@ -174,7 +193,7 @@ void UpdateControls()
         if (waveformProgress >= 0 && waveformProgress <= 100)
         {
             swprintf_s(statusText, _countof(statusText),
-                       L"Time: %s / %s | Frame: %lld / %lld | %s | Waveforms: %d%%",
+                       L"%s / %s | Frame %lld / %lld | %s | Waveforms %d%%",
                        currentTimeStr.c_str(), durationStr.c_str(),
                        currentFrame, g_videoPlayer->GetTotalFrames(),
                        isPlaying ? L"Playing" : L"Paused",
@@ -183,7 +202,7 @@ void UpdateControls()
         else
         {
             swprintf_s(statusText, _countof(statusText),
-                       L"Time: %s / %s | Frame: %lld / %lld | %s",
+                       L"%s / %s | Frame %lld / %lld | %s",
                        currentTimeStr.c_str(), durationStr.c_str(),
                        currentFrame, g_videoPlayer->GetTotalFrames(),
                        isPlaying ? L"Playing" : L"Paused");
