@@ -580,6 +580,24 @@ void VideoPlayer::CancelPendingSeekRefinement()
     BeginSeekOperation();
 }
 
+// Seek catch-up discards non-reference frames while far from the target and
+// decodes everything once close to it. skip_frame is applied to a packet when
+// it is submitted, and a frame-threaded decoder has already accepted roughly
+// thread_count packets beyond the frame it just returned, so the full-decode
+// window must also cover that pipeline delay. Otherwise B-frames right before
+// the target are dropped and an exact seek lands on the next reference frame.
+static double SeekFullDecodeWindow(const AVCodecContext* cc, double frameDuration)
+{
+    int frames = 5;
+    if (cc)
+    {
+        frames += std::max(0, cc->has_b_frames);
+        if (cc->active_thread_type & FF_THREAD_FRAME)
+            frames += std::max(1, cc->thread_count);
+    }
+    return std::max(0.2, frameDuration * frames);
+}
+
 void VideoPlayer::SeekRefinementThreadFunction()
 {
     while (true)
@@ -617,7 +635,7 @@ void VideoPlayer::SeekRefinementThreadFunction()
                 break;
 
             double delta = target - currentPts;
-            bool closeToTarget = delta < 0.2 || delta < (frameDuration * 5.0);
+            bool closeToTarget = delta < SeekFullDecodeWindow(codecContext, frameDuration);
             
             if (!closeToTarget)
                 codecContext->skip_frame = AVDISCARD_NONREF;
@@ -1588,7 +1606,7 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
             break;
 
         double delta = seconds - currentPts;
-        bool closeToTarget = delta < 0.2 || delta < (frameDuration * 5.0);
+        bool closeToTarget = delta < SeekFullDecodeWindow(codecContext, frameDuration);
         bool isLastFastFrame = !exactMode && (decoded + 1 >= maxSyncFrames);
         
         if (!exactMode)

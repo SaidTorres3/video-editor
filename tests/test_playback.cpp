@@ -1665,6 +1665,53 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Pause();
     });
 
+    suite.addTest("SeekToTimeExact_LandsOnRequestedBFrame", []() {
+        // The long fixture is 30 fps H.264 with two B-frames between
+        // references. The seek catch-up discards non-reference frames while
+        // far from the target; a frame-threaded decoder classifies packets
+        // when they are submitted, so the full-decode window must open early
+        // enough to cover the decoder's frame delay or the seek lands on the
+        // next reference frame instead of the requested B-frame.
+        constexpr double fps = 30.0;
+        constexpr double tolerance = 0.0005;
+        const auto expectExact = [&](VideoPlayer& player, double target,
+                                     const char* what) {
+            player.SeekToTimeExact(target);
+            const std::string detail = std::string(what) + " (target " +
+                std::to_string(target) + ", landed " +
+                std::to_string(player.GetDisplayedFramePts()) + ")";
+            TEST_ASSERT_NEAR(player.GetDisplayedFramePts(), target, tolerance,
+                             detail.c_str());
+            TEST_ASSERT_NEAR(player.GetCurrentTime(), target, tolerance,
+                             detail.c_str());
+        };
+
+        // Fresh player, forward seek without a demuxer seek ("smart seek").
+        // Covering a run of consecutive frames guarantees B-frames are hit
+        // regardless of the encoder's adaptive B-frame placement.
+        for (int frame = 20; frame <= 34; ++frame)
+        {
+            VideoPlayer player(g_testHwnd);
+            TEST_ASSERT(player.LoadVideo(g_testLongVideoPath),
+                        "B-frame exact seek source must load");
+            expectExact(player, frame / fps,
+                        "fresh forward exact seek must land on the requested frame");
+        }
+
+        // One player: demuxer seeks into the middle of distant GOPs, short
+        // forward hops, and backward seeks.
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testLongVideoPath),
+                    "B-frame exact seek source must load");
+        const int frames[] = { 326, 325, 340, 341, 343, 356, 359, 1522, 1523,
+                               1549, 1550, 1551, 913, 26, 25, 1, 2 };
+        for (int frame : frames)
+        {
+            expectExact(player, frame / fps,
+                        "exact seek must land on the requested frame");
+        }
+    });
+
     wchar_t* externalMediaValue = nullptr;
     size_t externalMediaLength = 0;
     _wdupenv_s(&externalMediaValue, &externalMediaLength,
