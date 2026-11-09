@@ -819,12 +819,30 @@ void RegisterPlaybackTests(TestSuite& suite) {
             TEST_ASSERT(player.Play(), "high-speed playback must unpause from frame zero");
             const uint64_t resumeTarget = resumeStart +
                 static_cast<uint64_t>(player.GetPlaybackBufferCapacity()) + 12;
+            // The wait ends early if playback stops or the decoder reaches
+            // EOF, so a dead producer still fails at once. The deadline only
+            // has to outlast a slow shared CI runner, not measure throughput.
+            const auto resumeStarted = std::chrono::steady_clock::now();
             const bool resumedBeyondInitialQueue = WaitForPresentedFrames(
-                player, resumeTarget, std::chrono::seconds(2));
+                player, resumeTarget, std::chrono::seconds(6));
+            const auto resumeWaitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - resumeStarted).count();
+            const std::string resumeState =
+                "; speed=" + std::to_string(speed) +
+                ", presented=" + std::to_string(
+                    player.GetPresentedPlaybackFrameCount() - resumeStart) +
+                "/" + std::to_string(resumeTarget - resumeStart) +
+                ", waitedMs=" + std::to_string(resumeWaitMs) +
+                ", position=" + std::to_string(player.GetCurrentTime()) +
+                ", buffered=" + std::to_string(player.GetBufferedPlaybackFrameCount()) +
+                ", playing=" + std::to_string(player.IsPlaying()) +
+                ", eof=" + std::to_string(player.HasPlaybackDecoderEnded());
             TEST_ASSERT(!player.HasPlaybackDecoderEnded(),
-                        "unpausing at the beginning must not kill the decoder after three frames");
+                        "unpausing at the beginning must not kill the decoder after three frames" +
+                        resumeState);
             TEST_ASSERT(resumedBeyondInitialQueue,
-                        "unpaused playback must continue beyond the complete initial queue");
+                        "unpaused playback must continue beyond the complete initial queue" +
+                        resumeState);
             TEST_ASSERT(player.IsPlaying(),
                         "player must remain running after high-speed unpause");
             player.Pause();
