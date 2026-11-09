@@ -1521,6 +1521,39 @@ void RegisterPlaybackTests(TestSuite& suite) {
         player.Pause();
     });
 
+    suite.addTest("PlayingJSeek_LongGopLandsOnTargetInsteadOfPreSeekPosition", []() {
+        // The J/L keys issue a bounded preview seek while playing. On a long
+        // GOP that preview stops near the keyframe, seconds before the target.
+        // That is still a valid landing: it must be refined to the target, not
+        // rejected and "repaired" by seeking back to the pre-seek position.
+        VideoPlayer player(g_testHwnd);
+        TEST_ASSERT(player.LoadVideo(g_testSparseSeekVideoPath),
+                    "sparse-keyframe regression source must load");
+        player.SeekToTimeExact(18.0);
+        TEST_ASSERT(player.Play(), "sparse-keyframe source must start playing");
+        const uint64_t beforePlay = player.GetPresentedPlaybackFrameCount();
+        TEST_ASSERT(WaitForPresentedFrames(player, beforePlay + 3,
+                                           std::chrono::seconds(3)),
+                    "sparse-keyframe source must visibly advance before seeking");
+
+        const double targets[] = { 8.0, 3.0, 12.0 };
+        for (double target : targets)
+        {
+            const uint64_t beforeSeek = player.GetPresentedPlaybackFrameCount();
+            player.SeekWhilePlaying(target, false);
+            TEST_ASSERT(WaitForPresentedFrames(player, beforeSeek + 3,
+                                               std::chrono::seconds(5)),
+                        "J/L seek on a long GOP must keep presenting frames");
+            TEST_ASSERT(player.IsPlaying(),
+                        "J/L seek on a long GOP must not pause playback");
+            TEST_ASSERT_GE(player.GetDisplayedFramePts(), target - 0.05,
+                           "J/L seek on a long GOP must reach the requested time");
+            TEST_ASSERT_LT(player.GetDisplayedFramePts(), target + 1.0,
+                           "J/L seek on a long GOP must not return to the pre-seek position");
+        }
+        player.Pause();
+    });
+
     suite.addTest("SeekWhilePlaying_CoalescesRapidRequests", []() {
         VideoPlayer player(g_testHwnd);
         player.LoadVideo(g_testVideoPath);
@@ -1723,6 +1756,38 @@ void RegisterPlaybackTests(TestSuite& suite) {
     if (!externalMediaPath.empty() &&
         std::filesystem::exists(externalMediaPath))
     {
+        suite.addTest("ExternalMedia_PlayingJSeek_LandsOnTarget",
+                      [externalMediaPath]() {
+            VideoPlayer player(g_testHwnd);
+            TEST_ASSERT(player.LoadVideo(externalMediaPath),
+                        "external J-seek regression source must load");
+            const double duration = player.GetDuration();
+            player.SeekToTimeExact(duration * 0.8);
+            TEST_ASSERT(player.Play(), "external media must start playing");
+            const uint64_t beforePlay = player.GetPresentedPlaybackFrameCount();
+            TEST_ASSERT(WaitForPresentedFrames(player, beforePlay + 3,
+                                               std::chrono::seconds(8)),
+                        "external media must visibly advance before seeking");
+
+            // Step back repeatedly so targets fall at varied distances from
+            // their preceding keyframes.
+            double target = duration * 0.8;
+            for (int press = 0; press < 6 && target > 12.0; ++press)
+            {
+                target -= 10.7;
+                const uint64_t beforeSeek = player.GetPresentedPlaybackFrameCount();
+                player.SeekWhilePlaying(target, false);
+                TEST_ASSERT(WaitForPresentedFrames(player, beforeSeek + 3,
+                                                   std::chrono::seconds(10)),
+                            "external J seek must keep presenting frames");
+                TEST_ASSERT_GE(player.GetDisplayedFramePts(), target - 0.05,
+                               "external J seek must reach the requested time");
+                TEST_ASSERT_LT(player.GetDisplayedFramePts(), target + 1.5,
+                               "external J seek must not return to the pre-seek position");
+            }
+            player.Pause();
+        });
+
         suite.addTest("ExternalMedia_PausedTimelineSeek_UnpauseKeepsPlaying",
                       [externalMediaPath]() {
             VideoPlayer player(g_testHwnd);

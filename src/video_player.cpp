@@ -1514,6 +1514,11 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
 
     const double frameDuration = (frameRate > 0.0) ? (1.0 / frameRate) : 0.033;
     bool smartSeek = false;
+    // Presentation time of the keyframe the demuxer seek lands on, when the
+    // container index knows it (looked up after the seek so lazily loaded
+    // indexes such as Matroska cues are available).
+    double seekKeyframePts = 0.0;
+    bool seekKeyframeKnown = false;
 
     {
         std::lock_guard<std::mutex> lock(decodeMutex);
@@ -1535,6 +1540,13 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
         {
             m_decoderOutOfSync = true;
             return false;
+        }
+
+        if (const AVIndexEntry *landed = avformat_index_get_entry_from_timestamp(
+                vs, ts, AVSEEK_FLAG_BACKWARD))
+        {
+            seekKeyframePts = landed->timestamp * av_q2d(vs->time_base) - startTimeOffset;
+            seekKeyframeKnown = true;
         }
 
         m_decoder->ResetBufferedDecodeState();
@@ -1646,8 +1658,15 @@ bool VideoPlayer::SeekToTimeInternal(double seconds, int decodeCount, bool allow
     const bool decodedAfterDemuxSeek =
         (smartSeek || !needAtLeastOneFrame) &&
         (decodedTimestampedFrame || decodedPacketNearTarget);
+    // A bounded (non-exact) seek stops a few frames after the keyframe it
+    // landed on. With a long GOP that keyframe can be many seconds before the
+    // target, yet the demuxer did move correctly, so the valid region starts
+    // at that keyframe rather than at a fixed distance from the target.
+    double validRegionStart = seconds - validSeekLag;
+    if (seekKeyframeKnown && seekKeyframePts <= seconds)
+        validRegionStart = std::min(validRegionStart, seekKeyframePts - frameDuration);
     const bool decodedInTargetRegion = decodedAfterDemuxSeek &&
-                                       currentPts >= seconds - validSeekLag &&
+                                       currentPts >= validRegionStart &&
                                        currentPts <= seconds + std::max(0.25, frameDuration * 3.0);
     if (seekPositionValid)
         *seekPositionValid = decodedInTargetRegion;
@@ -2783,6 +2802,21 @@ void VideoPlayer::PlaybackDecodeThreadFunction()
                     SeekToTimeInternal(
                         target, exact ? INT_MAX : 12, false, exact,
                         true, true, exact, true, &seekPositionValid);
+                }
+
+                // A bounded preview seek on a long GOP is valid but stops near
+                // the keyframe, possibly seconds before the target. Keep
+                // decoding to the requested time; a newer request aborts this,
+                // so held J/L keys still coalesce to the latest target.
+                if (!exact && seekPositionValid &&
+                    !m_playbackSeekPending.load(std::memory_order_acquire))
+                {
+                    const double frameDur = frameRate > 0.0 ? 1.0 / frameRate : 0.033;
+                    if (currentPts < target - frameDur * 0.5)
+                    {
+                        SeekToTimeInternal(target, INT_MAX, false, true,
+                                           false, true, true);
+                    }
                 }
 
                 // If neither seek API can reach the target, retain the last
