@@ -21,6 +21,11 @@ public:
     bool DecodeNextFrame(bool presentFrame, bool scheduleDisplay = true, bool generateImage = true);
     BufferedDecodeResult DecodeNextBufferedFrame(AVFrame* outputFrame, double& pts,
                                                   int64_t& frameNumber);
+    // Converts a decoded frame into the display buffer (frameRGB). This is
+    // the only path that produces displayed pixels from a decoded frame, at
+    // every playback speed and for paused seeks, so they can never differ in
+    // resolution or color. The caller must hold renderMutex.
+    bool ConvertFrameForDisplay(const AVFrame* source);
 #ifdef VIDEO_EDITOR_TESTING
     void ForceBufferedSendEagainAfterPacketsForTesting(int acceptedPackets);
     uint64_t GetInjectedBufferedSendEagainCountForTesting() const;

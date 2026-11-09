@@ -33,9 +33,7 @@ VideoPlayer::VideoPlayer(HWND parent)
       frame(nullptr), frameRGB(nullptr), hwFrame(nullptr), hwDeviceCtx(nullptr),
       hwPixelFormat(AV_PIX_FMT_NONE), useHwAccel(false), packet(nullptr), swsContext(nullptr),
       swsSourceFormat(AV_PIX_FMT_NONE),
-      buffer(nullptr), rgbBufferSize(0), playbackSwsContext(nullptr),
-      playbackSwsSourceFormat(AV_PIX_FMT_NONE), playbackRgbWidth(0), playbackRgbHeight(0),
-      playbackRgbStride(0), displayUsesPlaybackBuffer(false), videoStreamIndex(-1),
+      buffer(nullptr), rgbBufferSize(0), videoStreamIndex(-1),
       frameWidth(0), frameHeight(0),
       isLoaded(false), isPlaying(false), frameRate(0), currentFrame(0),
       totalFrames(0), currentPts(0.0), duration(0.0), startTimeOffset(0.0),
@@ -268,6 +266,8 @@ void VideoPlayer::UnloadVideo()
         std::lock_guard<std::mutex> lock(decodeMutex);
     }
     m_audioPlayer->CleanupTracks();
+    // Queued frames may be GPU surfaces owned by the decoder's pool.
+    ClearPlaybackBuffer();
     m_decoder->Cleanup();
     if (d2dBitmap)
     {
@@ -385,14 +385,18 @@ bool VideoPlayer::Play()
     // memory usage (4 bytes/pixel is a conservative estimate for CPU frames).
     const size_t desiredFrames = static_cast<size_t>(std::clamp(
         static_cast<int>(std::ceil(frameRate * 0.35)), 3, 24));
-    const size_t bytesPerFrame = std::max<size_t>(
-        1, static_cast<size_t>(frameWidth) * static_cast<size_t>(frameHeight) * 4);
-    const size_t memoryLimitedFrames = std::max<size_t>(3, (128ull * 1024ull * 1024ull) / bytesPerFrame);
-    playbackBufferCapacity = std::min(desiredFrames, memoryLimitedFrames);
+    playbackBufferCapacity = std::min(
+        desiredFrames, MaxPlaybackBufferFrames(frameWidth, frameHeight));
 #ifdef VIDEO_EDITOR_TESTING
     if (m_testPlaybackBufferCapacity > 0)
         playbackBufferCapacity = m_testPlaybackBufferCapacity;
 #endif
+    // Queued hardware frames are GPU surfaces taken from the decoder's fixed
+    // pool. Never hold more than the pool was enlarged for, or the decoder
+    // runs out of surfaces to decode into.
+    if (useHwAccel)
+        playbackBufferCapacity = std::max<size_t>(
+            1, std::min(playbackBufferCapacity, hwPlaybackFrameReserve));
     playbackPrebufferFrames = std::min(
         playbackBufferCapacity,
         std::max<size_t>(2, playbackBufferCapacity / 2));
@@ -481,14 +485,10 @@ void VideoPlayer::Pause()
         // ownership before any paused seek or frame-step uses the decoder.
         m_decoder->ResetBufferedDecodeState();
 
-        // High-speed playback temporarily enables decoder discard options.
-        // Restore full-quality decoding before paused seeks/frame stepping.
+        // High-speed playback thins the stream by skipping whole frames.
+        // Decode every frame again for paused seeks/frame stepping.
         if (codecContext)
-        {
             codecContext->skip_frame = AVDISCARD_DEFAULT;
-            codecContext->skip_idct = AVDISCARD_DEFAULT;
-            codecContext->skip_loop_filter = AVDISCARD_DEFAULT;
-        }
 
         // Keep the decoded-ahead queue and the decoder position as one
         // continuous stream. Re-seeking on every unpause is both unnecessary
@@ -1081,7 +1081,7 @@ bool VideoPlayer::ConsumeBwdPrefetch(int64_t frame, bool waitForFrame)
                     dst += 4;
                     src += 3;
                 }
-                displayUsesPlaybackBuffer = false;
+                m_displayedFramePts.store(it->second.pts, std::memory_order_release);
             }
             currentFrame = frame;
             currentPts   = it->second.pts;
@@ -2860,73 +2860,42 @@ bool VideoPlayer::PresentBufferedFrame(BufferedPlaybackFrame&& bufferedFrame)
     currentFrame = bufferedFrame.frameNumber;
     const bool cropChanged = UpdateCropForTime(currentPts);
 
+    // Hardware frames arrive here still on the GPU. Copying a surface back to
+    // system memory is the most expensive step of hardware playback (and it
+    // stalls the decoder while it runs), so it is done only now, for a frame
+    // that is definitely being shown, and never on the decode thread.
+    const AVFrame* displaySource = bufferedFrame.frame;
+    if (useHwAccel && bufferedFrame.frame->format == hwPixelFormat)
     {
+        if (!displayTransferFrame)
+            return false;
+        // Reuse the previous readback buffers; reallocate only if the
+        // surface layout changed.
+        int transferResult = av_hwframe_transfer_data(
+            displayTransferFrame, bufferedFrame.frame, 0);
+        if (transferResult < 0 && displayTransferFrame->buf[0])
+        {
+            av_frame_unref(displayTransferFrame);
+            transferResult = av_hwframe_transfer_data(
+                displayTransferFrame, bufferedFrame.frame, 0);
+        }
+        if (transferResult < 0)
+        {
+            av_frame_unref(displayTransferFrame);
+            return false;
+        }
+        displaySource = displayTransferFrame;
+    }
+
+    {
+        // One full-resolution converter serves every playback speed and every
+        // paused seek. The picture at 1000x is therefore produced by exactly
+        // the code that produces it at 1x: speed only decides which frames
+        // reach this point, never how a frame is rendered.
         std::lock_guard<std::mutex> renderLock(renderMutex);
-        const AVPixelFormat actualFormat = static_cast<AVPixelFormat>(bufferedFrame.frame->format);
-        // Preserve full source quality (including the original color
-        // conversion path) through 3.9x. Preview-sized conversion is reserved
-        // for the established high-speed mode at 4x and above.
-        const bool usePreviewBuffer = GetPlaybackTimingSpeed() >= 4.0 ||
-                                      IsContinuousFrameStepping();
-        if (usePreviewBuffer)
-        {
-            RECT clientRect{};
-            GetClientRect(videoWindow, &clientRect);
-            const int clientWidth = std::max(1L, clientRect.right - clientRect.left);
-            const int clientHeight = std::max(1L, clientRect.bottom - clientRect.top);
-            const double scale = std::min({
-                1.0,
-                clientWidth / static_cast<double>(std::max(1, frameWidth)),
-                clientHeight / static_cast<double>(std::max(1, frameHeight))});
-            const int previewWidth = std::max(2, static_cast<int>(std::lround(frameWidth * scale)));
-            const int previewHeight = std::max(2, static_cast<int>(std::lround(frameHeight * scale)));
-
-            if (actualFormat != playbackSwsSourceFormat ||
-                previewWidth != playbackRgbWidth || previewHeight != playbackRgbHeight)
-            {
-                sws_freeContext(playbackSwsContext);
-                playbackSwsSourceFormat = actualFormat;
-                playbackRgbWidth = previewWidth;
-                playbackRgbHeight = previewHeight;
-                playbackRgbStride = previewWidth * 4;
-                playbackRgbBuffer.resize(
-                    static_cast<size_t>(playbackRgbStride) * playbackRgbHeight);
-                playbackSwsContext = sws_getContext(
-                    frameWidth, frameHeight, actualFormat,
-                    playbackRgbWidth, playbackRgbHeight, AV_PIX_FMT_BGRA,
-                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-            }
-            if (!playbackSwsContext || playbackRgbBuffer.empty())
-                return false;
-
-            uint8_t* destinationData[4] = { playbackRgbBuffer.data(), nullptr, nullptr, nullptr };
-            int destinationStride[4] = { playbackRgbStride, 0, 0, 0 };
-            sws_scale(playbackSwsContext,
-                      const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
-                      bufferedFrame.frame->linesize, 0, frameHeight,
-                      destinationData, destinationStride);
-            displayUsesPlaybackBuffer = true;
-        }
-        else
-        {
-            if (actualFormat != swsSourceFormat && actualFormat != AV_PIX_FMT_NONE)
-            {
-                sws_freeContext(swsContext);
-                swsSourceFormat = actualFormat;
-                swsContext = sws_getContext(
-                    frameWidth, frameHeight, actualFormat,
-                    frameWidth, frameHeight, AV_PIX_FMT_BGRA,
-                    SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-            }
-            if (!swsContext)
-                return false;
-
-            sws_scale(swsContext,
-                      const_cast<const uint8_t* const*>(bufferedFrame.frame->data),
-                      bufferedFrame.frame->linesize, 0, frameHeight,
-                      frameRGB->data, frameRGB->linesize);
-            displayUsesPlaybackBuffer = false;
-        }
+        if (!m_decoder->ConvertFrameForDisplay(displaySource))
+            return false;
+        m_displayedFramePts.store(bufferedFrame.pts, std::memory_order_release);
     }
 
     m_presentedPlaybackFrameCount.fetch_add(1, std::memory_order_release);

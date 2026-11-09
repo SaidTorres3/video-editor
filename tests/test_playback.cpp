@@ -8,6 +8,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <iostream>
+#include <cstdio>
+#include <cstring>
+#include <vector>
 #include <filesystem>
 
 // ============================================================================
@@ -124,6 +128,176 @@ bool WaitForPresentedFrames(VideoPlayer& player, uint64_t target,
            std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     return player.GetPresentedPlaybackFrameCount() >= target;
+}
+
+struct DisplayedFrame {
+    double pts = -1.0;
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> pixels; // tightly packed BGRA rows
+};
+
+// Copies the pixels the renderer uploads together with the timestamp of the
+// frame they belong to. Both are published under renderMutex.
+DisplayedFrame CaptureDisplayedFrame(VideoPlayer& player) {
+    DisplayedFrame captured;
+    std::lock_guard<std::mutex> lock(player.renderMutex);
+    if (!player.frameRGB || !player.frameRGB->data[0])
+        return captured;
+    captured.pts = player.GetDisplayedFramePts();
+    captured.width = player.frameWidth;
+    captured.height = player.frameHeight;
+    const size_t rowBytes = static_cast<size_t>(captured.width) * 4;
+    captured.pixels.resize(rowBytes * captured.height);
+    for (int y = 0; y < captured.height; ++y)
+        std::memcpy(captured.pixels.data() + rowBytes * y,
+                    player.frameRGB->data[0] +
+                        static_cast<size_t>(player.frameRGB->linesize[0]) * y,
+                    rowBytes);
+    return captured;
+}
+
+size_t CountDifferingBytes(const DisplayedFrame& a, const DisplayedFrame& b) {
+    if (a.pixels.size() != b.pixels.size())
+        return (std::max)(a.pixels.size(), b.pixels.size());
+    size_t differing = 0;
+    for (size_t i = 0; i < a.pixels.size(); ++i)
+        differing += a.pixels[i] != b.pixels[i] ? 1 : 0;
+    return differing;
+}
+
+// Ground truth for "what 1x shows": decodes the frame at `pts` with plain
+// FFmpeg calls (every frame, no decoder shortcuts) and converts it with the
+// classic single-threaded full-resolution swscale call. Nothing here is
+// shared with the player's playback pipeline. `displayFormat` is the pixel
+// format the player converts from; a hardware decoder hands over the same
+// samples in a different layout (NV12 instead of planar), and swscale has a
+// separate routine per layout.
+DisplayedFrame DecodeReferenceFrame(const std::wstring& path, double pts,
+                                    double startTimeOffset, double frameRate,
+                                    AVPixelFormat displayFormat) {
+    DisplayedFrame reference;
+    std::string utf8Path;
+    {
+        const int length = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1,
+                                               nullptr, 0, nullptr, nullptr);
+        utf8Path.resize(length > 0 ? length - 1 : 0);
+        if (length > 1)
+            WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, utf8Path.data(),
+                                length, nullptr, nullptr);
+    }
+
+    AVFormatContext* format = nullptr;
+    if (avformat_open_input(&format, utf8Path.c_str(), nullptr, nullptr) < 0)
+        return reference;
+    AVCodecContext* codecContext = nullptr;
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    AVFrame* repacked = nullptr;
+    do {
+        if (avformat_find_stream_info(format, nullptr) < 0)
+            break;
+        const int streamIndex = av_find_best_stream(
+            format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        if (streamIndex < 0)
+            break;
+        AVStream* stream = format->streams[streamIndex];
+        const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+        codecContext = codec ? avcodec_alloc_context3(codec) : nullptr;
+        if (!codecContext ||
+            avcodec_parameters_to_context(codecContext, stream->codecpar) < 0)
+            break;
+        codecContext->thread_count = 0;
+        codecContext->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+        if (avcodec_open2(codecContext, codec, nullptr) < 0)
+            break;
+
+        const double timeBase = av_q2d(stream->time_base);
+        const double frameDuration = frameRate > 0.0 ? 1.0 / frameRate : 1.0 / 30.0;
+        // Start one second early so a keyframe at the target itself is still
+        // reached through an ordinary backward seek.
+        const int64_t seekTimestamp = static_cast<int64_t>(
+            (std::max(0.0, pts - 1.0) + startTimeOffset) / timeBase);
+        av_seek_frame(format, streamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
+
+        bool demuxEnded = false;
+        bool found = false;
+        while (!found) {
+            const int received = avcodec_receive_frame(codecContext, frame);
+            if (received == 0) {
+                const int64_t timestamp =
+                    frame->best_effort_timestamp != AV_NOPTS_VALUE
+                        ? frame->best_effort_timestamp : frame->pts;
+                const double framePts = timestamp * timeBase - startTimeOffset;
+                if (framePts >= pts - frameDuration * 0.25) {
+                    reference.pts = (std::max)(0.0, framePts);
+                    found = true;
+                    break;
+                }
+                av_frame_unref(frame);
+                continue;
+            }
+            if (received != AVERROR(EAGAIN) || demuxEnded)
+                break;
+            if (av_read_frame(format, packet) < 0) {
+                demuxEnded = true;
+                avcodec_send_packet(codecContext, nullptr);
+                continue;
+            }
+            if (packet->stream_index == streamIndex)
+                avcodec_send_packet(codecContext, packet);
+            av_packet_unref(packet);
+        }
+        if (!found)
+            break;
+
+        // Repack (losslessly) into the layout the player's decoder delivers.
+        const AVFrame* source = frame;
+        if (displayFormat != AV_PIX_FMT_NONE && displayFormat != frame->format) {
+            repacked = av_frame_alloc();
+            if (!repacked)
+                break;
+            repacked->format = displayFormat;
+            repacked->width = frame->width;
+            repacked->height = frame->height;
+            SwsContext* repacker = av_frame_get_buffer(repacked, 0) >= 0
+                ? sws_getContext(frame->width, frame->height,
+                                 static_cast<AVPixelFormat>(frame->format),
+                                 frame->width, frame->height, displayFormat,
+                                 SWS_POINT, nullptr, nullptr, nullptr)
+                : nullptr;
+            if (!repacker)
+                break;
+            sws_scale(repacker, frame->data, frame->linesize, 0, frame->height,
+                      repacked->data, repacked->linesize);
+            sws_freeContext(repacker);
+            source = repacked;
+        }
+
+        reference.width = source->width;
+        reference.height = source->height;
+        reference.pixels.resize(static_cast<size_t>(source->width) * source->height * 4);
+        SwsContext* converter = sws_getContext(
+            source->width, source->height, static_cast<AVPixelFormat>(source->format),
+            source->width, source->height, AV_PIX_FMT_BGRA,
+            SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+        if (!converter) {
+            reference.pixels.clear();
+            break;
+        }
+        uint8_t* destination[4] = { reference.pixels.data(), nullptr, nullptr, nullptr };
+        int destinationStride[4] = { source->width * 4, 0, 0, 0 };
+        sws_scale(converter, source->data, source->linesize, 0, source->height,
+                  destination, destinationStride);
+        sws_freeContext(converter);
+    } while (false);
+
+    av_frame_free(&repacked);
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&codecContext);
+    avformat_close_input(&format);
+    return reference;
 }
 
 std::wstring GetOptionalAv1RegressionSource(const std::wstring& fallback) {
@@ -276,24 +450,84 @@ void RegisterPlaybackTests(TestSuite& suite) {
         }
     });
 
-    suite.addTest("PlaybackQuality_Below4xUsesFullResolutionConversion", []() {
-        VideoPlayer player(g_testHwnd);
-        TEST_ASSERT(player.LoadVideo(g_testVideoPath),
-                    "full-quality playback regression source must load");
-        player.SetPlaybackSpeed(3.9);
-        TEST_ASSERT(player.Play(), "full-quality playback must start at 3.9x");
+    suite.addTest("PlaybackQuality_EverySpeedShowsExactlyThePaused1xPicture", []() {
+        // Whatever frame playback shows at any speed must be pixel-for-pixel
+        // the frame an independent full-quality decode of the same timestamp
+        // produces. This pins down both halves of "looks like 1x": the
+        // decoder may skip frames but never degrade one, and there is one
+        // full-resolution color conversion for every speed.
+        struct Case { const std::wstring* path; double speed; };
+        const Case cases[] = {
+            { &g_testLongVideoPath, 1.0 },
+            { &g_testLongVideoPath, 3.9 },
+            { &g_testLongVideoPath, 4.0 },
+            { &g_testLongVideoPath, 10.0 },
+            { &g_testLongVideoPath, 64.0 },
+            { &g_testLongVideoPath, 100.0 },
+            { &g_testLongVideoPath, 1000.0 },
+            { &g_testVideoPath, 4.0 },
+            { &g_testHeavyVideoPath, 5.0 },
+            { &g_testHeavyVideoPath, 100.0 },
+        };
+        for (const Case& testCase : cases) {
+            const std::string label = "speed=" + std::to_string(testCase.speed);
+            DisplayedFrame played;
+            double startTimeOffset = 0.0;
+            double frameRate = 0.0;
+            AVPixelFormat displayFormat = AV_PIX_FMT_NONE;
+            {
+                VideoPlayer player(g_testHwnd);
+                TEST_ASSERT(player.LoadVideo(*testCase.path),
+                            "picture-equality source must load; " + label);
+                player.SetPlaybackSpeed(testCase.speed);
+                const uint64_t presentedBefore = player.GetPresentedPlaybackFrameCount();
+                TEST_ASSERT(player.Play(), "picture-equality playback must start; " + label);
+                const auto deadline = std::chrono::steady_clock::now() +
+                                      std::chrono::seconds(5);
+                while (player.GetPresentedPlaybackFrameCount() < presentedBefore + 3 &&
+                       player.IsPlaying() &&
+                       std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                TEST_ASSERT_GT(player.GetPresentedPlaybackFrameCount(), presentedBefore,
+                               "playback must present a frame to compare; " + label);
+                if (testCase.speed >= 4.0 && player.IsPlaying()) {
+                    TEST_ASSERT_EQ(static_cast<int>(player.codecContext->skip_loop_filter),
+                                   static_cast<int>(AVDISCARD_DEFAULT),
+                                   "high speed must not skip the decoder loop filter; " + label);
+                    TEST_ASSERT_EQ(static_cast<int>(player.codecContext->skip_idct),
+                                   static_cast<int>(AVDISCARD_DEFAULT),
+                                   "high speed must not skip the inverse transform; " + label);
+                }
+                played = CaptureDisplayedFrame(player);
+                startTimeOffset = player.startTimeOffset;
+                frameRate = player.frameRate;
+                player.Pause();
+                displayFormat = player.swsSourceFormat;
+                player.ForceRedraw();
+                TEST_ASSERT(player.d2dBitmap != nullptr,
+                            "the displayed frame must upload to Direct2D; " + label);
+                const D2D1_SIZE_U uploadedSize = player.d2dBitmap->GetPixelSize();
+                TEST_ASSERT_EQ(uploadedSize.width, static_cast<UINT32>(player.frameWidth),
+                               "every speed must display at full source width; " + label);
+                TEST_ASSERT_EQ(uploadedSize.height, static_cast<UINT32>(player.frameHeight),
+                               "every speed must display at full source height; " + label);
+            }
+            TEST_ASSERT_GE(played.pts, 0.0,
+                           "the displayed frame must carry its timestamp; " + label);
 
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::seconds(2);
-        while (player.GetPresentedPlaybackFrameCount() < 3 &&
-               std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        player.Pause();
-
-        TEST_ASSERT_EQ(player.playbackRgbWidth, 0,
-                       "speeds below 4x must not use the reduced-quality preview buffer");
-        TEST_ASSERT(!player.displayUsesPlaybackBuffer,
-                    "3.9x playback must retain the full-resolution color path");
+            const DisplayedFrame expected = DecodeReferenceFrame(
+                *testCase.path, played.pts, startTimeOffset, frameRate, displayFormat);
+            TEST_ASSERT_LT(std::fabs(expected.pts - played.pts), 0.0005,
+                           "the reference decode must land on the same frame; " + label +
+                               ", played=" + std::to_string(played.pts) +
+                               ", reference=" + std::to_string(expected.pts));
+            TEST_ASSERT_EQ(expected.pixels.size(), played.pixels.size(),
+                           "the displayed picture must keep the source resolution; " + label);
+            const size_t differingBytes = CountDifferingBytes(expected, played);
+            TEST_ASSERT_EQ(differingBytes, static_cast<size_t>(0),
+                           "playback must show the same pixels as a full-quality 1x decode; " +
+                               label + ", pts=" + std::to_string(played.pts));
+        }
     });
 
     suite.addTest("PlaybackUi_CurrentTimeUpdatesContinuouslyAfterSpeedChange", []() {
@@ -693,35 +927,6 @@ void RegisterPlaybackTests(TestSuite& suite) {
                        "heavy-source 5x playback must continue delivering fluid updates");
         TEST_ASSERT_LT(measurement.longestStallMs, maximumStallMs,
                        "heavy-source 5x playback must not freeze and jump forward");
-    });
-
-    suite.addTest("PlaybackSpeed_HighSpeedConversionMatchesPreviewSize", []() {
-        VideoPlayer player(g_testHwnd);
-        player.LoadVideo(g_testHeavyVideoPath);
-        player.SetPlaybackSpeed(5.0);
-        player.Play();
-
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::seconds(3);
-        while (player.playbackRgbWidth == 0 &&
-               std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        player.Pause();
-        player.ForceRedraw();
-
-        TEST_ASSERT_GT(player.playbackRgbWidth, 0,
-                       "high-speed playback must create a preview conversion buffer");
-        TEST_ASSERT_LT(player.playbackRgbWidth, player.frameWidth,
-                       "high-speed playback must not convert every frame at full source width");
-        TEST_ASSERT_LT(player.playbackRgbHeight, player.frameHeight,
-                       "high-speed playback must not convert every frame at full source height");
-        TEST_ASSERT(player.d2dBitmap != nullptr,
-                    "preview-sized playback frame must upload to Direct2D");
-        const D2D1_SIZE_U uploadedSize = player.d2dBitmap->GetPixelSize();
-        TEST_ASSERT_EQ(uploadedSize.width, static_cast<UINT32>(player.playbackRgbWidth),
-                       "Direct2D bitmap width must match the preview conversion buffer");
-        TEST_ASSERT_EQ(uploadedSize.height, static_cast<UINT32>(player.playbackRgbHeight),
-                       "Direct2D bitmap height must match the preview conversion buffer");
     });
 
     suite.addTest("PlaybackSpeed_10xPresentsContinuously", []() {
@@ -1494,6 +1699,63 @@ void RegisterPlaybackTests(TestSuite& suite) {
             TEST_ASSERT_GT(player.GetCurrentTime(), seekTarget + 0.2,
                            "external media must advance after unpause");
             player.Pause();
+        });
+
+        // Opt-in report for a real recording: every speed up to 1000x must
+        // follow the wall clock while presenting full-resolution frames. Set
+        // VIDEO_EDITOR_TEST_HWACCEL=1 as well to measure the hardware decoder
+        // the shipped application uses.
+        suite.addTest("ExternalMedia_HighSpeedPlaybackTracksClockAtFullQuality",
+                      [externalMediaPath]() {
+            std::cout << "\n      speed    rate   frames/s  longest-stall  decoder\n";
+            for (const double speed : {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 250.0, 1000.0}) {
+                VideoPlayer player(g_testHwnd);
+                TEST_ASSERT(player.LoadVideo(externalMediaPath),
+                            "external high-speed source must load");
+                const double mediaDuration = player.GetDuration();
+                player.SetPlaybackSpeed(speed);
+                TEST_ASSERT(player.Play(), "external high-speed playback must start");
+                TEST_ASSERT(WaitForPresentedFrames(player, 1, std::chrono::seconds(5)),
+                            "external high-speed playback must present its first frame");
+
+                // Stay clear of EOF so the rate is not capped by the source.
+                const double wallBudget = (std::min)(1.5, mediaDuration * 0.6 / speed);
+                const TimedPlaybackMeasurement measurement = MeasureTimedPlayback(
+                    player,
+                    std::chrono::milliseconds(static_cast<int>(wallBudget * 1000.0)),
+                    false);
+                const DisplayedFrame shown = CaptureDisplayedFrame(player);
+                const bool hardwareDecoder = player.useHwAccel;
+                const int sourceWidth = player.frameWidth;
+                const int sourceHeight = player.frameHeight;
+                const int skipLoopFilter = player.codecContext->skip_loop_filter;
+                player.Pause();
+
+                const double framesPerSecond = measurement.wallSeconds > 0.0
+                    ? measurement.presentedFrames / measurement.wallSeconds : 0.0;
+                char line[160];
+                std::snprintf(line, sizeof(line),
+                              "    %7.0fx %7.1fx %8.1f %10lld ms  %s\n",
+                              speed, measurement.rate, framesPerSecond,
+                              static_cast<long long>(measurement.longestStallMs),
+                              hardwareDecoder ? "hardware" : "software");
+                std::cout << line;
+
+                const std::string label = "speed=" + std::to_string(speed);
+                TEST_ASSERT(measurement.started, "external playback must be running; " + label);
+                TEST_ASSERT_EQ(shown.width, sourceWidth,
+                               "external playback must display full source width; " + label);
+                TEST_ASSERT_EQ(shown.height, sourceHeight,
+                               "external playback must display full source height; " + label);
+                TEST_ASSERT_EQ(skipLoopFilter, static_cast<int>(AVDISCARD_DEFAULT),
+                               "external playback must not degrade decoding; " + label);
+                TEST_ASSERT_GT(measurement.rate, speed * 0.8,
+                               "external playback must sustain the requested rate; " + label);
+                TEST_ASSERT_LT(measurement.rate, speed * 1.2,
+                               "external playback must not outrun its clock; " + label);
+                TEST_ASSERT_LT(measurement.longestStallMs, static_cast<int64_t>(400),
+                               "external playback must not freeze; " + label);
+            }
         });
     }
 

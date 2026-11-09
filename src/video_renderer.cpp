@@ -79,14 +79,12 @@ void VideoRenderer::UpdateDisplay(bool waitForFrame) {
         return;
     }
 
-    const bool usePreview = m_player->displayUsesPlaybackBuffer &&
-                            !m_player->playbackRgbBuffer.empty();
-    const uint8_t* displayData = usePreview
-        ? m_player->playbackRgbBuffer.data()
-        : m_player->frameRGB->data[0];
-    const int bitmapWidth = usePreview ? m_player->playbackRgbWidth : m_player->frameWidth;
-    const int bitmapHeight = usePreview ? m_player->playbackRgbHeight : m_player->frameHeight;
-    const int bitmapStride = usePreview ? m_player->playbackRgbStride : m_player->frameRGB->linesize[0];
+    // There is exactly one display buffer, always at source resolution, so
+    // the picture is identical at every playback speed.
+    const uint8_t* displayData = m_player->frameRGB->data[0];
+    const int bitmapWidth = m_player->frameWidth;
+    const int bitmapHeight = m_player->frameHeight;
+    const int bitmapStride = m_player->frameRGB->linesize[0];
 
     if (m_player->d2dBitmap)
     {
@@ -121,17 +119,15 @@ void VideoRenderer::UpdateDisplay(bool waitForFrame) {
     D2D1_SIZE_F size = m_player->d2dRenderTarget->GetSize();
     int srcW = m_player->frameWidth;
     int srcH = m_player->frameHeight;
-    const float sourceScaleX = bitmapWidth / static_cast<float>(m_player->frameWidth);
-    const float sourceScaleY = bitmapHeight / static_cast<float>(m_player->frameHeight);
     D2D1_RECT_F srcRect = {};
     if (m_player->hasCrop) {
         srcW = m_player->cropRect.right - m_player->cropRect.left;
         srcH = m_player->cropRect.bottom - m_player->cropRect.top;
         srcRect = D2D1::RectF(
-            static_cast<FLOAT>(m_player->cropRect.left) * sourceScaleX,
-            static_cast<FLOAT>(m_player->cropRect.top) * sourceScaleY,
-            static_cast<FLOAT>(m_player->cropRect.right) * sourceScaleX,
-            static_cast<FLOAT>(m_player->cropRect.bottom) * sourceScaleY);
+            static_cast<FLOAT>(m_player->cropRect.left),
+            static_cast<FLOAT>(m_player->cropRect.top),
+            static_cast<FLOAT>(m_player->cropRect.right),
+            static_cast<FLOAT>(m_player->cropRect.bottom));
     }
     float targetAspect = size.width / size.height;
     float videoAspect = static_cast<float>(srcW) / srcH;

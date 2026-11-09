@@ -95,6 +95,12 @@ public:
     AVFrame *frame;
     AVFrame *frameRGB;
     AVFrame *hwFrame; // Frame for hardware decoding
+    // Hardware playback queues GPU surfaces and reads back only the frames
+    // that are actually presented. This is the presentation thread's reusable
+    // readback target; hwPlaybackFrameReserve is how many surfaces the decoder
+    // pool was enlarged by so the queue can hold them.
+    AVFrame *displayTransferFrame = nullptr;
+    size_t hwPlaybackFrameReserve = 0;
     AVBufferRef *hwDeviceCtx;
     AVPixelFormat hwPixelFormat;
     bool useHwAccel;
@@ -103,13 +109,6 @@ public:
     AVPixelFormat swsSourceFormat;
     uint8_t *buffer;
     int rgbBufferSize;
-    struct SwsContext *playbackSwsContext;
-    AVPixelFormat playbackSwsSourceFormat;
-    std::vector<uint8_t> playbackRgbBuffer;
-    int playbackRgbWidth;
-    int playbackRgbHeight;
-    int playbackRgbStride;
-    bool displayUsesPlaybackBuffer;
     int videoStreamIndex;
     int frameWidth, frameHeight;
     bool isLoaded;
@@ -212,7 +211,9 @@ public:
     std::mutex audioMutex;
     std::condition_variable audioCondition;
     std::mutex decodeMutex; // protects decoder during seek
-    std::mutex renderMutex; // protects frameRGB pixel buffer during sws_scale / D2D copy
+    // Protects the frameRGB pixel buffer and the display converter that fills
+    // it (VideoDecoder::ConvertFrameForDisplay) against the D2D copy.
+    std::mutex renderMutex;
     
     // Audio settings
     int audioSampleRate;
@@ -264,6 +265,9 @@ private:
     std::atomic<double> m_playbackClockStartPts;
     std::atomic<int64_t> m_playbackClockStartNs;
     std::atomic<uint64_t> m_presentedPlaybackFrameCount;
+    // Timestamp of the frame whose pixels are in frameRGB. Written together
+    // with those pixels while holding renderMutex.
+    std::atomic<double> m_displayedFramePts{-1.0};
     int64_t m_lastHighSpeedFrameDeliveryNs;
 #ifdef VIDEO_EDITOR_TESTING
     size_t m_testPlaybackBufferCapacity = 0;
@@ -389,6 +393,10 @@ public:
     uint64_t GetPresentedPlaybackFrameCount() const {
         return m_presentedPlaybackFrameCount.load(std::memory_order_acquire);
     }
+    // Pairs with the frameRGB pixels only while the caller holds renderMutex.
+    double GetDisplayedFramePts() const {
+        return m_displayedFramePts.load(std::memory_order_acquire);
+    }
     size_t GetBufferedPlaybackFrameCount() const;
     bool HasPlaybackDecoderEnded() const;
 #ifdef VIDEO_EDITOR_TESTING
@@ -413,6 +421,15 @@ public:
     int GetAudioSampleRateForTesting() const { return audioSampleRate; }
 #endif
     size_t GetPlaybackBufferCapacity() const { return playbackBufferCapacity; }
+    // Upper bound of the decoded-ahead queue for a given frame size: at most
+    // 24 frames and roughly 128 MB (4 bytes/pixel is a conservative estimate).
+    static size_t MaxPlaybackBufferFrames(int width, int height) {
+        const size_t bytesPerFrame = std::max<size_t>(
+            1, static_cast<size_t>(std::max(0, width)) *
+                   static_cast<size_t>(std::max(0, height)) * 4);
+        return std::min<size_t>(
+            24, std::max<size_t>(3, (128ull * 1024ull * 1024ull) / bytesPerFrame));
+    }
 
     // Crop timeline helpers
     bool AddCropKeyframe(double time, RECT rect, double* actualTime = nullptr);

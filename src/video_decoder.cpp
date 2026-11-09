@@ -7,6 +7,40 @@
 #include <cstdlib>
 #include <libavutil/pixdesc.h>
 
+namespace {
+// frameRGB's pixels live in VideoPlayer::buffer, which Cleanup() frees. The
+// AVBufferRef that wraps it only exists so swscale can treat the frame as
+// reference-counted, and must not release the memory itself.
+void KeepDisplayBuffer(void*, uint8_t*) {}
+
+// Builds the converter that turns decoded frames into display pixels.
+// Slice threading divides the work between cores without changing a single
+// output value, which is what makes full-resolution conversion affordable at
+// every playback speed (NV12 2560x1440: ~8 ms on one thread, ~1.5 ms here).
+SwsContext* CreateDisplayConverter(int width, int height, AVPixelFormat sourceFormat) {
+    const int threads = std::clamp(
+        static_cast<int>(std::thread::hardware_concurrency()), 1, 8);
+    SwsContext* context = sws_alloc_context();
+    if (context)
+    {
+        av_opt_set_int(context, "srcw", width, 0);
+        av_opt_set_int(context, "srch", height, 0);
+        av_opt_set_int(context, "src_format", sourceFormat, 0);
+        av_opt_set_int(context, "dstw", width, 0);
+        av_opt_set_int(context, "dsth", height, 0);
+        av_opt_set_int(context, "dst_format", AV_PIX_FMT_BGRA, 0);
+        av_opt_set_int(context, "sws_flags", SWS_FAST_BILINEAR, 0);
+        av_opt_set_int(context, "threads", threads, 0);
+        if (sws_init_context(context, nullptr, nullptr) >= 0)
+            return context;
+        sws_freeContext(context);
+    }
+    return sws_getContext(width, height, sourceFormat,
+                          width, height, AV_PIX_FMT_BGRA,
+                          SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+}
+}
+
 VideoDecoder::VideoDecoder(VideoPlayer* player) : m_player(player) {}
 
 VideoDecoder::~VideoDecoder() {
@@ -74,13 +108,20 @@ bool VideoDecoder::Initialize() {
     // Windows runner exposes. CircleCI can create a DXVA2 device but cannot
     // allocate decode surfaces, which leaves the codec on a one-thread failed
     // hardware path and turns playback assertions into VM-driver benchmarks.
-#ifndef VIDEO_EDITOR_TESTING
+    // VIDEO_EDITOR_TEST_HWACCEL opts a local run into the shipped behavior so
+    // the hardware path can be measured on a real GPU.
+#ifdef VIDEO_EDITOR_TESTING
+    const bool allowHardwareDecode =
+        GetEnvironmentVariableW(L"VIDEO_EDITOR_TEST_HWACCEL", nullptr, 0) > 0;
+#else
+    const bool allowHardwareDecode = true;
+#endif
     // Try hardware acceleration only when both the codec and source pixel
     // format have a compatible device path: D3D11VA first, then DXVA2.
     AVHWDeviceType hwTypes[] = { AV_HWDEVICE_TYPE_D3D11VA, AV_HWDEVICE_TYPE_DXVA2 };
     for (auto hwType : hwTypes)
     {
-        if (!hardwareCompatibleFormat)
+        if (!hardwareCompatibleFormat || !allowHardwareDecode)
             break;
         bool codecSupportsDevice = false;
         for (int configIndex = 0;; ++configIndex)
@@ -104,7 +145,6 @@ bool VideoDecoder::Initialize() {
             break;
         }
     }
-#endif
 
     // Configure threading.
     if (m_player->useHwAccel)
@@ -112,6 +152,15 @@ bool VideoDecoder::Initialize() {
         // Hardware decoders can freeze when frame-threaded; use a single slice thread.
         m_player->codecContext->thread_count = 1;
         m_player->codecContext->thread_type  = FF_THREAD_SLICE;
+
+        // Playback queues decoded GPU surfaces and reads back only the ones
+        // it presents. D3D11VA/DXVA2 decode into a fixed-size surface pool,
+        // so reserve room for everything playback can hold at once: the
+        // queue, the frame being presented, and the one being handed over.
+        m_player->hwPlaybackFrameReserve = VideoPlayer::MaxPlaybackBufferFrames(
+            m_player->codecContext->width, m_player->codecContext->height);
+        m_player->codecContext->extra_hw_frames =
+            static_cast<int>(m_player->hwPlaybackFrameReserve) + 4;
     }
     else
     {
@@ -136,8 +185,10 @@ bool VideoDecoder::Initialize() {
     m_player->frame = av_frame_alloc();
     m_player->frameRGB = av_frame_alloc();
     m_player->hwFrame = av_frame_alloc();
+    m_player->displayTransferFrame = av_frame_alloc();
     m_player->packet = av_packet_alloc();
-    if (!m_player->frame || !m_player->frameRGB || !m_player->hwFrame || !m_player->packet)
+    if (!m_player->frame || !m_player->frameRGB || !m_player->hwFrame ||
+        !m_player->displayTransferFrame || !m_player->packet)
     {
         Cleanup();
         return false;
@@ -146,18 +197,31 @@ bool VideoDecoder::Initialize() {
     int numBytes = av_image_get_buffer_size(AV_PIX_FMT_BGRA, m_player->frameWidth, m_player->frameHeight, 32);
     m_player->rgbBufferSize = numBytes;
     m_player->buffer = (uint8_t *)av_malloc(numBytes);
+    if (!m_player->buffer)
+    {
+        Cleanup();
+        return false;
+    }
     av_image_fill_arrays(m_player->frameRGB->data, m_player->frameRGB->linesize, m_player->buffer,
                          AV_PIX_FMT_BGRA, m_player->frameWidth, m_player->frameHeight, 32);
+    m_player->frameRGB->format = AV_PIX_FMT_BGRA;
+    m_player->frameRGB->width = m_player->frameWidth;
+    m_player->frameRGB->height = m_player->frameHeight;
+    m_player->frameRGB->buf[0] = av_buffer_create(
+        m_player->buffer, static_cast<size_t>(numBytes), KeepDisplayBuffer, nullptr, 0);
+    if (!m_player->frameRGB->buf[0])
+    {
+        Cleanup();
+        return false;
+    }
 
-    // Determine the software pixel format for sws_scale.
+    // Determine the software pixel format for the display converter.
     // With hw accel, sw_pix_fmt is set after avcodec_open2; without it, use pix_fmt.
     enum AVPixelFormat swFmt = m_player->codecContext->sw_pix_fmt != AV_PIX_FMT_NONE ?
                               m_player->codecContext->sw_pix_fmt : m_player->codecContext->pix_fmt;
     m_player->swsSourceFormat = swFmt;
-    m_player->swsContext = sws_getContext(
-        m_player->frameWidth, m_player->frameHeight, swFmt,
-        m_player->frameWidth, m_player->frameHeight, AV_PIX_FMT_BGRA,
-        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+    m_player->swsContext = CreateDisplayConverter(
+        m_player->frameWidth, m_player->frameHeight, swFmt);
     if (!m_player->swsContext)
     {
         Cleanup();
@@ -169,14 +233,6 @@ bool VideoDecoder::Initialize() {
 
 void VideoDecoder::Cleanup() {
     ResetBufferedDecodeState();
-    if (m_player->playbackSwsContext)
-        sws_freeContext(m_player->playbackSwsContext), m_player->playbackSwsContext = nullptr;
-    m_player->playbackSwsSourceFormat = AV_PIX_FMT_NONE;
-    m_player->playbackRgbBuffer.clear();
-    m_player->playbackRgbWidth = 0;
-    m_player->playbackRgbHeight = 0;
-    m_player->playbackRgbStride = 0;
-    m_player->displayUsesPlaybackBuffer = false;
     if (m_player->swsContext)
         sws_freeContext(m_player->swsContext), m_player->swsContext = nullptr;
     if (m_player->buffer)
@@ -188,6 +244,9 @@ void VideoDecoder::Cleanup() {
         av_frame_free(&m_player->frameRGB), m_player->frameRGB = nullptr;
     if (m_player->hwFrame)
         av_frame_free(&m_player->hwFrame), m_player->hwFrame = nullptr;
+    if (m_player->displayTransferFrame)
+        av_frame_free(&m_player->displayTransferFrame), m_player->displayTransferFrame = nullptr;
+    m_player->hwPlaybackFrameReserve = 0;
     if (m_player->frame)
         av_frame_free(&m_player->frame), m_player->frame = nullptr;
     if (m_player->codecContext)
@@ -195,6 +254,37 @@ void VideoDecoder::Cleanup() {
     if (m_player->hwDeviceCtx)
         av_buffer_unref(&m_player->hwDeviceCtx), m_player->hwDeviceCtx = nullptr;
     m_player->useHwAccel = false;
+}
+
+bool VideoDecoder::ConvertFrameForDisplay(const AVFrame* source) {
+    if (!source || !source->data[0] || !m_player->frameRGB ||
+        !m_player->frameRGB->data[0])
+        return false;
+
+    // Recreate the converter if the source pixel format changed (e.g. hw
+    // accel negotiated a different software transfer format).
+    const AVPixelFormat actualFormat = static_cast<AVPixelFormat>(source->format);
+    if (actualFormat == AV_PIX_FMT_NONE)
+        return false;
+    if (!m_player->swsContext || actualFormat != m_player->swsSourceFormat)
+    {
+        sws_freeContext(m_player->swsContext);
+        m_player->swsSourceFormat = actualFormat;
+        m_player->swsContext = CreateDisplayConverter(
+            m_player->frameWidth, m_player->frameHeight, actualFormat);
+    }
+    if (!m_player->swsContext)
+        return false;
+
+    // sws_scale_frame is the entry point that runs the slice threads. Frames
+    // it cannot take (e.g. not reference-counted) still convert through the
+    // classic call, with identical output.
+    if (sws_scale_frame(m_player->swsContext, m_player->frameRGB, source) >= 0)
+        return true;
+    return sws_scale(m_player->swsContext,
+                     static_cast<const uint8_t* const*>(source->data),
+                     source->linesize, 0, m_player->frameHeight,
+                     m_player->frameRGB->data, m_player->frameRGB->linesize) > 0;
 }
 
 void VideoDecoder::ResetBufferedDecodeState() {
@@ -402,28 +492,11 @@ bool VideoDecoder::DecodeNextFrame(bool presentFrame, bool scheduleDisplay, bool
                 
                 if (generateImage)
                 {
-                    // Recreate sws context if the source pixel format changed
-                    // (e.g. hw accel negotiated a different sw transfer format).
-                    AVPixelFormat actualFmt = (AVPixelFormat)swFrame->format;
-                    if (actualFmt != m_player->swsSourceFormat && actualFmt != AV_PIX_FMT_NONE)
-                    {
-                        sws_freeContext(m_player->swsContext);
-                        m_player->swsSourceFormat = actualFmt;
-                        m_player->swsContext = sws_getContext(
-                            m_player->frameWidth, m_player->frameHeight, actualFmt,
-                            m_player->frameWidth, m_player->frameHeight, AV_PIX_FMT_BGRA,
-                            SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-                    }
-
-                    {
-                        std::lock_guard<std::mutex> renderLock(m_player->renderMutex);
-                        sws_scale(
-                            m_player->swsContext,
-                            (uint8_t const *const *)swFrame->data, swFrame->linesize,
-                            0, m_player->frameHeight,
-                            m_player->frameRGB->data, m_player->frameRGB->linesize);
-                        m_player->displayUsesPlaybackBuffer = false;
-                    }
+                    std::lock_guard<std::mutex> renderLock(m_player->renderMutex);
+                    if (ConvertFrameForDisplay(swFrame))
+                        m_player->m_displayedFramePts.store(
+                            m_player->currentPts.load(std::memory_order_acquire),
+                            std::memory_order_release);
                 }
 
                 av_frame_unref(m_player->hwFrame);
@@ -517,17 +590,12 @@ VideoDecoder::BufferedReceiveResult VideoDecoder::ReceiveBufferedFrame(
         }
     }
 
-    if (m_player->useHwAccel &&
-        m_player->hwFrame->format == m_player->hwPixelFormat)
-    {
-        if (av_hwframe_transfer_data(outputFrame, m_player->hwFrame, 0) < 0)
-        {
-            av_frame_unref(m_player->hwFrame);
-            return BufferedReceiveResult::RecoverableError;
-        }
-        av_frame_copy_props(outputFrame, m_player->hwFrame);
-    }
-    else if (av_frame_ref(outputFrame, m_player->hwFrame) < 0)
+    // Hand the frame over by reference. A hardware frame stays a GPU surface
+    // here: reading it back costs several milliseconds and blocks the decoder
+    // while it runs, so the presentation thread does that only for the frames
+    // it really shows (VideoPlayer::PresentBufferedFrame). The decoder can
+    // then run ahead at its full rate at any playback speed.
+    if (av_frame_ref(outputFrame, m_player->hwFrame) < 0)
     {
         av_frame_unref(m_player->hwFrame);
         return BufferedReceiveResult::RecoverableError;
@@ -584,20 +652,22 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
         // FFmpeg's AV1 decoder can classify almost an entire inter-frame GOP
         // as discardable here, yielding only keyframe-scale output (roughly
         // five seconds apart in common screen recordings). AV1 still benefits
-        // from loop-filter skipping and the clock-based frame dropping below.
+        // from the clock-based frame dropping below.
+        //
+        // Skipping whole frames is the only thinning high speed may use: no
+        // surviving frame depends on a skipped one, so each frame that is
+        // shown is bit-identical to the same frame at 1x. Options that
+        // shortcut the decoding of a frame itself (skip_loop_filter,
+        // skip_idct) must stay untouched; they visibly degrade the picture
+        // and the error accumulates along the GOP.
         m_player->codecContext->skip_frame = canDiscardInterFrames
             ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
-        m_player->codecContext->skip_idct = canDiscardInterFrames
-            ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
-        m_player->codecContext->skip_loop_filter = AVDISCARD_ALL;
     }
     else
     {
         m_moderateLagStartNs = 0;
         m_lastHighSpeedFrameDeliveryPts = -1.0;
         m_player->codecContext->skip_frame = AVDISCARD_DEFAULT;
-        m_player->codecContext->skip_idct = AVDISCARD_DEFAULT;
-        m_player->codecContext->skip_loop_filter = AVDISCARD_DEFAULT;
     }
 
     while (m_player->playbackThreadRunning)
@@ -724,8 +794,6 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                     m_moderateLagStartNs = 0;
                     m_player->codecContext->skip_frame = canDiscardInterFrames
                         ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
-                    m_player->codecContext->skip_idct = canDiscardInterFrames
-                        ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
                 }
                 else if (m_moderateLagStartNs == 0)
                 {
@@ -739,13 +807,11 @@ VideoDecoder::BufferedDecodeResult VideoDecoder::DecodeNextBufferedFrame(
                     // real clock gap. Full cadence resumes once lag recovers.
                     m_player->codecContext->skip_frame = canDiscardInterFrames
                         ? AVDISCARD_BIDIR : AVDISCARD_DEFAULT;
-                    m_player->codecContext->skip_idct = canDiscardInterFrames
-                        ? AVDISCARD_BIDIR : AVDISCARD_DEFAULT;
                 }
 
-                // Preview-sized conversion removes the main transient cost,
-                // so give sequential reference decoding enough time to close
-                // short gaps on its own. The old 120 ms window repeatedly
+                // Display conversion is cheap (slice-threaded) and off this
+                // thread, so give sequential reference decoding enough time to
+                // close short gaps on its own. The old 120 ms window repeatedly
                 // forced a seek during harmless jitter, producing the visible
                 // play-pause-jump cycle at 5x. Severe lag still jumps at once.
                 const bool lagWasSustained = !smoothModerateSpeed ||
