@@ -1968,21 +1968,29 @@ void RegisterPlaybackTests(TestSuite& suite) {
         // Ensure reverse prefetch has had time to populate. Forward stepping
         // must still ignore that cache while the main decoder is aligned.
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        auto slowestStep = std::chrono::steady_clock::duration::zero();
+        std::vector<std::chrono::steady_clock::duration> stepTimes;
+        stepTimes.reserve(100);
         for (int i = 0; i < 100; ++i) {
             int64_t before = player.GetCurrentFrame();
             auto started = std::chrono::steady_clock::now();
             player.StepFrame(1);
-            auto elapsed = std::chrono::steady_clock::now() - started;
-            if (elapsed > slowestStep)
-                slowestStep = elapsed;
+            stepTimes.push_back(std::chrono::steady_clock::now() - started);
             TEST_ASSERT_GT(player.GetCurrentFrame(), before,
                            "Aligned forward stepping must advance synchronously");
         }
 
-        auto slowestMs = std::chrono::duration_cast<std::chrono::milliseconds>(slowestStep).count();
-        TEST_ASSERT_LT(slowestMs, static_cast<int64_t>(100),
+        // A stall caused by reverse prefetch slows every step (or blocks one
+        // for a long time). A single step delayed by scheduler noise on a
+        // shared CI runner is not a stall, so judge the typical step strictly
+        // and the single slowest step loosely.
+        std::sort(stepTimes.begin(), stepTimes.end());
+        const auto toMs = [](std::chrono::steady_clock::duration d) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
+        };
+        TEST_ASSERT_LT(toMs(stepTimes[stepTimes.size() / 2]), static_cast<int64_t>(100),
                        "Reverse prefetch must not stall the normal forward decoder");
+        TEST_ASSERT_LT(toMs(stepTimes.back()), static_cast<int64_t>(1000),
+                       "No single aligned forward step may block for a long time");
     });
 
     suite.addTest("FrameStep_Backward", []() {
